@@ -1,0 +1,182 @@
+/**
+ * configStore.ts — 配置状态管理
+ *
+ * 管理应用的全局配置，包括：
+ * - 主题（亮色/暗色）
+ * - 快捷键
+ * - 服务提供商（API Key、base_url）
+ * - 模型列表（启用/禁用、默认模型）
+ *
+ * 所有持久化操作通过 Tauri invoke 调用 Rust 后端的 get_config / save_config。
+ * 浏览器环境下使用 MOCK_CONFIG 回退，方便前端独立开发调试。
+ */
+
+import { create } from 'zustand';
+import type { AppConfig, Theme, ProviderConfig, ModelInfo } from '@/types';
+import { isBrowser, MOCK_CONFIG } from '@/utils/mock';
+
+/** ConfigStore 状态和操作定义 */
+interface ConfigState {
+  config: AppConfig | null;  // 当前配置，null 表示尚未加载
+  loading: boolean;           // 是否正在加载/保存中
+  error: string | null;       // 最近的错误信息
+
+  // ── 操作 ──
+  loadConfig: () => Promise<void>;                          // 加载配置
+  saveConfig: (config: AppConfig) => Promise<void>;         // 保存完整配置
+  updateTheme: (theme: Theme) => Promise<void>;             // 切换主题
+  addProvider: (provider: ProviderConfig) => Promise<void>; // 添加/更新提供商
+  addModels: (models: ModelInfo[]) => Promise<void>;        // 批量添加模型（去重）
+  toggleModel: (modelId: string) => Promise<void>;          // 切换模型启用状态
+  setDefaultModel: (modelId: string) => Promise<void>;      // 设置默认模型
+  removeProvider: (providerId: string) => Promise<void>;    // 删除提供商及其模型
+  updateHotkey: (hotkey: string) => Promise<void>;          // 更新快捷键
+}
+
+/**
+ * 后端调用包装器
+ * 浏览器模式下直接返回 undefined，Tauri 环境下动态导入 invoke 函数
+ * 使用动态导入避免浏览器环境下因 @tauri-apps/api 不可用而报错
+ */
+async function invokeBackend<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  if (isBrowser) {
+    // 浏览器 mock：不需要持久化，直接返回
+    return undefined as T;
+  }
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<T>(cmd, args);
+}
+
+export const useConfigStore = create<ConfigState>((set, get) => ({
+  config: null,
+  loading: false,
+  error: null,
+
+  /** 加载配置：优先从 Rust 后端读取，首次启动时自动填充 mock 预设 */
+  loadConfig: async () => {
+    set({ loading: true, error: null });
+    try {
+      if (isBrowser) {
+        // 浏览器模式：直接使用 mock 配置
+        set({ config: { ...MOCK_CONFIG }, loading: false });
+        return;
+      }
+      const { invoke } = await import('@tauri-apps/api/core');
+      let config = await invoke<AppConfig>('get_config');
+
+      // 首次启动：如果没有任何 provider，自动注入 mock 预设
+      // 确保用户首次打开应用时就能看到可用的模型
+      if (config.providers.length === 0) {
+        config = { ...MOCK_CONFIG };
+        await invoke('save_config', { config });
+      }
+
+      set({ config, loading: false });
+    } catch (e) {
+      set({ error: String(e), loading: false });
+    }
+  },
+
+  /** 保存完整配置到 Rust 后端 */
+  saveConfig: async (config: AppConfig) => {
+    set({ loading: true, error: null });
+    try {
+      await invokeBackend('save_config', { config });
+      set({ config, loading: false });
+    } catch (e) {
+      set({ error: String(e), loading: false });
+      if (!isBrowser) throw e; // Tauri 环境下向上抛出异常，让调用方处理
+    }
+  },
+
+  /** 切换主题并立即持久化 */
+  updateTheme: async (theme: Theme) => {
+    const { config } = get();
+    if (!config) return;
+    const updated = { ...config, theme };
+    await get().saveConfig(updated);
+  },
+
+  /**
+   * 添加或更新服务提供商
+   * 如果已存在同 id 的 provider，则先删除旧的再添加新的（实现编辑覆盖）
+   */
+  addProvider: async (provider: ProviderConfig) => {
+    const { config } = get();
+    if (!config) return;
+    // 过滤掉同 id 的旧 provider，实现 upsert
+    const providers = config.providers.filter((p) => p.id !== provider.id);
+    providers.push(provider);
+    const updated = { ...config, providers };
+    await get().saveConfig(updated);
+  },
+
+  /**
+   * 批量添加模型信息
+   * 自动去重：已存在的模型 ID 不会重复添加
+   */
+  addModels: async (models: ModelInfo[]) => {
+    const { config } = get();
+    if (!config) return;
+    // 使用 Set 快速去重
+    const existingIds = new Set(config.models.map((m) => m.id));
+    const newModels = models.filter((m) => !existingIds.has(m.id));
+    const updated = { ...config, models: [...config.models, ...newModels] };
+    await get().saveConfig(updated);
+  },
+
+  /** 切换指定模型的启用/禁用状态（通过 ProviderConfig.enabled_model_ids 管理） */
+  toggleModel: async (modelId: string) => {
+    const { config } = get();
+    if (!config) return;
+
+    // 1. 找到该模型所属的 provider
+    const model = config.models.find((m) => m.id === modelId);
+    if (!model) return;
+
+    // 2. 找到对应的 ProviderConfig
+    const providers = config.providers.map((p) => {
+      if (p.id !== model.provider_id) return p;
+      const enabled = p.enabled_model_ids.includes(modelId);
+      const enabled_model_ids = enabled
+        ? p.enabled_model_ids.filter((id) => id !== modelId)   // 已在列表中 → 移除（禁用）
+        : [...p.enabled_model_ids, modelId];                    // 不在列表中 → 添加（启用）
+      return { ...p, enabled_model_ids };
+    });
+
+    await get().saveConfig({ ...config, providers });
+  },
+
+  /** 设置当前选中的默认模型 */
+  setDefaultModel: async (modelId: string) => {
+    const { config } = get();
+    if (!config) return;
+    await get().saveConfig({ ...config, selected_model_id: modelId });
+  },
+
+  /**
+   * 删除指定提供商及其所有关联模型
+   * 如果当前选中的模型属于被删除的提供商，则清除选中状态
+   */
+  removeProvider: async (providerId: string) => {
+    const { config } = get();
+    if (!config) return;
+    // 过滤掉该 provider 及其模型
+    const providers = config.providers.filter((p) => p.id !== providerId);
+    const models = config.models.filter((m) => m.provider_id !== providerId);
+    // 如果当前选中的模型仍存在则保留，否则清空
+    const selected_model_id =
+      config.selected_model_id &&
+      models.find((m) => m.id === config.selected_model_id)
+        ? config.selected_model_id
+        : '';
+    await get().saveConfig({ ...config, providers, models, selected_model_id });
+  },
+
+  /** 更新全局快捷键 */
+  updateHotkey: async (hotkey: string) => {
+    const { config } = get();
+    if (!config) return;
+    await get().saveConfig({ ...config, hotkey });
+  },
+}));

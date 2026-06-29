@@ -1,0 +1,148 @@
+/**
+ * App.tsx — 应用根组件
+ *
+ * 职责：
+ * 1. 页面路由：根据 uiStore.currentPage 渲染对应页面组件
+ * 2. 主题切换：监听 config.theme 切换 dark/light 类名
+ * 3. Esc 快捷键：按下 Esc 隐藏窗口（不停止流式生成）
+ * 4. 选中文本接收：监听 Rust 后端发送的 selected-text 事件，
+ *    将选中文本填入聊天输入框
+ * 5. 应用入口动画：frameless 窗口的淡入缩放效果
+ */
+
+import { useEffect } from 'react';
+import { motion } from 'framer-motion';
+import { useConfigStore } from '@/stores/configStore';
+import { useUIStore } from '@/stores/uiStore';
+import { useChatStore } from '@/stores/chatStore';
+import { useStreaming } from '@/hooks/useStreaming';
+import { EmptyPage } from '@/pages/EmptyPage';
+import { NoApiKeyPage } from '@/pages/NoApiKeyPage';
+import { ConversationPage } from '@/pages/ConversationPage';
+import { StreamingPage } from '@/pages/StreamingPage';
+import { SettingsPage } from '@/pages/SettingsPage';
+
+/**
+ * 页面渲染器 — 根据 currentPage 状态返回对应页面组件
+ * 这是一个轻量级的页面路由器，避免引入 react-router 增加包体积
+ */
+function PageRenderer() {
+  const currentPage = useUIStore((s) => s.currentPage);
+
+  switch (currentPage) {
+    case 'empty':
+      return <EmptyPage />;
+    case 'noapikey':
+      return <NoApiKeyPage />;
+    case 'conversation':
+      return <ConversationPage />;
+    case 'streaming':
+      return <StreamingPage />;
+    case 'settings':
+      return <SettingsPage />;
+    default:
+      return (
+        <div className="flex h-full w-full flex-col items-center justify-center gap-3 text-center">
+          <p className="text-sm font-medium" style={{ color: 'var(--color-error)' }}>
+            出现错误
+          </p>
+          <p className="text-xs" style={{ color: 'var(--color-muted)' }}>
+            应用遇到了意外状态，请重启应用
+          </p>
+        </div>
+      );
+  }
+}
+
+/**
+ * App 根组件
+ * 负责初始化配置、绑定全局快捷键、注册流式事件监听、渲染页面
+ */
+function App() {
+  const { loadConfig, config } = useConfigStore();
+  const { loadMessages } = useChatStore();
+  const { setPage, setThemeReady } = useUIStore();
+
+  // 注册流式事件监听（stream-token / stream-done / stream-error / stream-cancelled）
+  useStreaming();
+
+  // 应用启动时加载配置和历史消息
+  useEffect(() => {
+    loadConfig().then(() => {
+      setThemeReady(true);
+    });
+    // 并行加载历史消息，恢复上次的对话状态
+    loadMessages();
+  }, []);
+
+  // 监听主题变更，切换 document 根元素的 dark 类名
+  useEffect(() => {
+    if (config?.theme) {
+      const isDark = config.theme === 'dark';
+      document.documentElement.classList.toggle('dark', isDark);
+    }
+  }, [config?.theme]);
+
+  // 根据配置决定入口页面
+  // 如果没有 provider 或未选择模型，停留在 empty 页面
+  useEffect(() => {
+    if (!config) return;
+    if (config.providers.length === 0 || !config.selected_model_id) {
+      setPage('empty');
+    }
+  }, [config?.providers.length, config?.selected_model_id]);
+
+  // ── Esc = 隐藏窗口（不停止流式生成）──
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        // 动态导入 Tauri API，浏览器环境下会 catch 忽略
+        import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
+          getCurrentWindow().hide();
+        }).catch(() => {});
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // ── 监听 Rust 后端发送的 selected-text 事件 ──
+  // 用户在其他应用中选中文本后按快捷键，Rust 会发送该事件
+  // 前端收到后将文本填入输入框草稿
+  useEffect(() => {
+    import('@tauri-apps/api/event').then(({ listen }) => {
+      listen<string>('selected-text', (event) => {
+        const text = event.payload.trim();
+        if (text) {
+          const uiPage = useUIStore.getState().currentPage;
+          // 仅在可以输入的状态下设置草稿文本
+          if (uiPage === 'empty' || uiPage === 'noapikey' || uiPage === 'conversation') {
+            useChatStore.getState().setDraftInput(text);
+          }
+        }
+      });
+    });
+  }, []);
+
+  return (
+    <motion.div
+      // 窗口出现时的弹性动画：从 95% 缩放淡入到 100%
+      initial={{ opacity: 0, scale: 0.95 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{
+        duration: 0.3,
+        ease: [0.34, 1.56, 0.64, 1], // 自定义贝塞尔曲线，带回弹效果
+      }}
+      style={{
+        width: '100vw',
+        height: '100vh',
+        overflow: 'hidden',
+        background: 'transparent', // 透明背景，配合毛玻璃效果
+      }}
+    >
+      <PageRenderer />
+    </motion.div>
+  );
+}
+
+export default App;

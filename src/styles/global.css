@@ -1,0 +1,312 @@
+/* ── Buddy Design Tokens ── */
+/* Source: docs/design/design-tokens.md */
+/* Single source of truth — NEVER hardcode colors/spacing/shadows */
+
+@import "tailwindcss";
+
+/* ── Brand ── */
+:root {
+  --buddy-primary: #5B5FE9;
+  --buddy-primary-50: #F1F1FE;
+  --buddy-primary-100: #E2E3FC;
+  --buddy-primary-200: #C6C7F8;
+  --buddy-primary-300: #A9ABF3;
+  --buddy-primary-400: #8D8FEE;
+  --buddy-primary-500: #5B5FE9;
+  --buddy-primary-600: #4A4ED4;
+  --buddy-primary-700: #3D40B0;
+  --buddy-primary-800: #2F328A;
+  --buddy-primary-900: #1F2160;
+
+  /* ── State Colors ── */
+  --state-success: #16A34A;
+  --state-warning: #D97706;
+  --state-error: #DC2626;
+  --state-info: #2563EB;
+
+  /* ── Neutral scale (cool-tinted) ── */
+  --neutral-0:   #FFFFFF;
+  --neutral-50:  #FAFAFB;
+  --neutral-100: #F4F4F6;
+  --neutral-200: #E8E8EC;
+  --neutral-300: #D4D4DC;
+  --neutral-400: #A1A1AD;
+  --neutral-500: #71717F;
+  --neutral-600: #52525E;
+  --neutral-700: #3F3F4A;
+  --neutral-800: #27272F;
+  --neutral-900: #18181F;
+  --neutral-1000: #0A0A0F;
+
+  /* ── Theme: Light ── */
+  --bg-canvas: #ECECEF;
+  --bg-surface: rgba(255, 255, 255, 0.72);
+  --bg-elevated: rgba(255, 255, 255, 0.92);
+  --bg-sunken: rgba(0, 0, 0, 0.03);
+  --bg-overlay: rgba(15, 15, 20, 0.42);
+  --text-primary: var(--neutral-1000);
+  --text-muted: var(--neutral-600);
+  --text-tertiary: var(--neutral-400);
+  --text-on-primary: #FFFFFF;
+  --border-subtle: rgba(0, 0, 0, 0.06);
+  --border-default: rgba(0, 0, 0, 0.10);
+  --border-strong: rgba(0, 0, 0, 0.16);
+  --primary-tint-soft: var(--buddy-primary-50);
+  --primary-tint-strong: var(--buddy-primary-100);
+
+  /* ── Typography ── */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Menlo', 'Consolas', monospace;
+
+  /* ── Spacing ── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* ── Border Radius ── */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* ── Shadows ── */
+  --shadow-static: 0 1px 2px rgba(15, 15, 30, 0.04);
+  --shadow-floating-sm: 0 4px 16px rgba(15, 15, 30, 0.08), 0 1px 2px rgba(15, 15, 30, 0.04);
+  --shadow-floating-md: 0 12px 40px rgba(15, 15, 30, 0.16), 0 2px 8px rgba(15, 15, 30, 0.06);
+
+  /* ── Motion ── */
+  --ease-standard: cubic-bezier(0.2, 0.0, 0, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --duration-fast: 120ms;
+  --duration-normal: 200ms;
+  --duration-slow: 320ms;
+
+  /* ── Blur ── */
+  --blur-surface: 24px;
+  --blur-strong: 40px;
+
+  /* ── Typography Tokens ── */
+  --font-size-xs: 11px;
+  --font-size-sm: 12px;
+  --font-size-base: 13px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 20px;
+  --font-size-2xl: 24px;
+  --line-height-tight: 1.25;
+  --line-height-base: 1.5;
+  --line-height-relaxed: 1.65;
+  --letter-spacing-tight: -0.01em;
+  --letter-spacing-base: 0;
+  --letter-spacing-wide: 0.02em;
+}
+
+/* ── Theme: Dark ── */
+html.dark {
+  --bg-canvas: #1E1E22;
+  --bg-surface: rgba(36, 36, 38, 0.78);
+  --bg-elevated: rgba(58, 58, 62, 0.88);
+  --bg-sunken: rgba(255, 255, 255, 0.06);
+  --bg-overlay: rgba(0, 0, 0, 0.55);
+  --text-primary: #F5F5F7;
+  --text-muted: #AEAEB2;
+  --text-tertiary: #6E6E73;
+  --text-on-primary: #FFFFFF;
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-default: rgba(255, 255, 255, 0.12);
+  --border-strong: rgba(255, 255, 255, 0.20);
+  --primary-tint-soft: rgba(112, 117, 255, 0.18);
+  --primary-tint-strong: rgba(112, 117, 255, 0.30);
+}
+
+/* ── Global Reset ── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  font-family: var(--font-sans);
+  color: var(--text-primary);
+  background: transparent;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  background: transparent !important;
+}
+
+/* ── Frosted Glass ── */
+.surface-glass {
+  background: var(--bg-surface);
+  backdrop-filter: blur(var(--blur-surface)) saturate(160%);
+  -webkit-backdrop-filter: blur(var(--blur-surface)) saturate(160%);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+}
+
+/* ── Typography Classes ── */
+.t-display { font: 600 var(--font-size-2xl)/var(--line-height-tight) var(--font-sans); letter-spacing: var(--letter-spacing-tight); }
+.t-title   { font: 600 var(--font-size-xl)/var(--line-height-tight) var(--font-sans); letter-spacing: var(--letter-spacing-tight); }
+.t-h3      { font: 600 var(--font-size-lg)/var(--line-height-tight) var(--font-sans); }
+.t-body    { font: 400 var(--font-size-md)/var(--line-height-base) var(--font-sans); }
+.t-body-sm { font: 400 var(--font-size-base)/var(--line-height-base) var(--font-sans); }
+.t-caption { font: 400 var(--font-size-sm)/var(--line-height-base) var(--font-sans); color: var(--text-muted); }
+.t-overline{ font: 500 var(--font-size-xs)/1 var(--font-sans); letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-tertiary); }
+.t-mono    { font-family: var(--font-mono); }
+
+/* ── Blinking Cursor ── */
+@keyframes buddy-blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+.buddy-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: var(--buddy-primary);
+  margin-left: 1px;
+  vertical-align: text-bottom;
+  animation: buddy-blink 1s step-end infinite;
+}
+
+/* ── Reduced Motion ── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── Scrollbar Styling ── */
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-default);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+}
+
+/* ── AI 消息 Markdown 内容样式 ── */
+
+.ai-message-content h1,
+.ai-message-content h2,
+.ai-message-content h3,
+.ai-message-content h4,
+.ai-message-content h5,
+.ai-message-content h6 {
+  margin: var(--space-3) 0 var(--space-2) 0;
+  font-weight: 600;
+  line-height: var(--line-height-tight);
+}
+
+.ai-message-content h1 { font-size: 1.25em; }
+.ai-message-content h2 { font-size: 1.15em; }
+.ai-message-content h3 { font-size: 1.05em; }
+
+.ai-message-content ul,
+.ai-message-content ol {
+  margin: var(--space-2) 0;
+  padding-left: var(--space-5);
+}
+
+.ai-message-content li {
+  margin-bottom: var(--space-1);
+}
+
+.ai-message-content li > ul,
+.ai-message-content li > ol {
+  margin-top: var(--space-1);
+}
+
+.ai-message-content blockquote {
+  margin: var(--space-2) 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--buddy-primary);
+  background: var(--bg-sunken);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  color: var(--text-muted);
+}
+
+.ai-message-content a {
+  color: var(--buddy-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.ai-message-content a:hover {
+  opacity: 0.8;
+}
+
+.ai-message-content table {
+  width: 100%;
+  margin: var(--space-3) 0;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.ai-message-content th,
+.ai-message-content td {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  text-align: left;
+}
+
+.ai-message-content th {
+  background: var(--bg-sunken);
+  font-weight: 600;
+}
+
+.ai-message-content hr {
+  margin: var(--space-4) 0;
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ai-message-content strong {
+  font-weight: 600;
+}
+
+.ai-message-content em {
+  font-style: italic;
+}
+
+.ai-message-content del {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+/* 确保 code/pre 不溢出消息气泡 */
+.ai-message-content pre {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: var(--space-2) 0;
+}

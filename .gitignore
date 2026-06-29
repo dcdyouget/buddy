@@ -1,0 +1,21 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+src-tauri/target/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Design & Docs (code only in git)
+docs/
+README.md
+CLAUDE.md
