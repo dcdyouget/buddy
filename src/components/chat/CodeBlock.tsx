@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import { Copy, Check } from 'lucide-react';
 import { Highlight, themes } from 'prism-react-renderer';
 
@@ -17,8 +17,10 @@ interface CodeBlockProps {
  * 在 AI 消息中渲染带语法高亮的代码块。包含顶部语言标签、复制按钮，
  * 以及使用 prism-react-renderer 进行 VS Code Dark 主题的语法高亮。
  * 复制功能优先使用 Clipboard API，并带有降级方案以兼容旧环境。
+ *
+ * 使用 React.memo 避免在流式输出其他文本时重复进行代码语法高亮解析。
  */
-export function CodeBlock({ language, source }: CodeBlockProps) {
+export const CodeBlock = memo(function CodeBlock({ language, source }: CodeBlockProps) {
   // 复制状态：true 时显示"已复制"反馈
   const [copied, setCopied] = useState(false);
 
@@ -142,4 +144,7 @@ export function CodeBlock({ language, source }: CodeBlockProps) {
       </div>
     </div>
   );
-}
+},
+(prevProps, nextProps) => {
+  return prevProps.language === nextProps.language && prevProps.source === nextProps.source;
+});

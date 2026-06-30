@@ -31,6 +31,8 @@ pub fn register(app: &tauri::AppHandle, shortcut: Shortcut) {
                         let _ = window.hide();
                     } else {
                         crate::get_selected_text(app);
+                        // 多屏适配：将窗口移到光标所在的显示器中心
+                        crate::reposition_to_cursor_monitor(&window);
                         let _ = window.show();
                         let _ = window.set_focus();
                     }

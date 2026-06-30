@@ -7,6 +7,7 @@ import { GlassPanel } from '@/components/shared/GlassPanel';
 import { FooterActions } from '@/components/shared/FooterActions';
 import { ProviderCard } from '@/components/settings/ProviderCard';
 import { SlideInPanel } from '@/components/shared/SlideInPanel';
+import { handleDragStart } from '@/utils/windowDrag';
 import { PROVIDER_PRESETS } from '@/types';
 import type { ModelInfo, ProviderConfig } from '@/types';
 
@@ -124,6 +125,7 @@ export function SettingsPage() {
 
   return (
     <div
+      onMouseDown={handleDragStart}
       style={{
         width: '100vw',
         height: '100vh',
@@ -145,14 +147,15 @@ export function SettingsPage() {
       >
         {/* Header：标题 + 关闭按钮，同时也是窗口拖拽区域 */}
         <div
+          onMouseDown={handleDragStart}
           style={{
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
-            padding: 'var(--space-4) var(--space-6)',
+            padding: 'var(--space-2) var(--space-4)',
+            minHeight: '36px',
             borderBottom: '1px solid var(--border-subtle)',
           }}
-          data-tauri-drag-region
         >
           <h2 className="t-title" style={{ color: 'var(--text-primary)' }}>
             设置
@@ -173,6 +176,7 @@ export function SettingsPage() {
 
         {/* Content：可滚动的设置区域 */}
         <div
+          className="no-scrollbar"
           style={{
             flex: 1,
             overflowY: 'auto',
@@ -586,6 +590,7 @@ function AddProviderPageContent({ onBack }: AddProviderPageProps) {
 
       {/* Content：可滚动的配置区域 */}
       <div
+        className="no-scrollbar"
         style={{
           flex: 1,
           overflowY: 'auto',

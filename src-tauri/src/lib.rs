@@ -69,6 +69,58 @@ pub(crate) fn get_selected_text(app: &tauri::AppHandle) {
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn get_selected_text(_app: &tauri::AppHandle) {}
 
+/// 将窗口重新定位到当前光标所在显示器的中心位置（多屏适配）
+///
+/// 多屏场景下用户按下快捷键时期望窗口出现在当前聚焦的屏幕上。
+/// 此函数获取光标位置 → 找到包含光标的显示器 → 将窗口居中到该显示器。
+pub(crate) fn reposition_to_cursor_monitor(window: &tauri::WebviewWindow) {
+    // 获取当前光标位置
+    let cursor_pos = match window.cursor_position() {
+        Ok(pos) => pos,
+        Err(_) => return,
+    };
+
+    // 遍历所有显示器，找到包含光标的那个
+    let monitors = match window.available_monitors() {
+        Ok(m) => m,
+        Err(_) => return,
+    };
+
+    let target_monitor = monitors.iter().find(|m| {
+        let m_pos = m.position();
+        let m_size = m.size();
+        cursor_pos.x >= m_pos.x as f64
+            && cursor_pos.x < (m_pos.x + m_size.width as i32) as f64
+            && cursor_pos.y >= m_pos.y as f64
+            && cursor_pos.y < (m_pos.y + m_size.height as i32) as f64
+    });
+
+    // 若找不到包含光标的显示器，回退到当前显示器或主显示器
+    let monitor = match target_monitor {
+        Some(m) => m.clone(),
+        None => match window.current_monitor() {
+            Ok(Some(m)) => m,
+            _ => match window.primary_monitor() {
+                Ok(Some(m)) => m,
+                _ => return,
+            },
+        },
+    };
+
+    // 计算居中位置
+    let m_pos = monitor.position();
+    let m_size = monitor.size();
+    let w_size = match window.outer_size() {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    let x = m_pos.x + ((m_size.width as i32 - w_size.width as i32) / 2).max(0);
+    let y = m_pos.y + ((m_size.height as i32 - w_size.height as i32) / 2).max(0);
+
+    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
 /// 应用主入口 run 函数：配置并启动整个 Tauri 应用
 ///
 /// 注册插件、设置快捷键、创建系统托盘、应用窗口视觉效果、绑定 IPC 命令处理器，
@@ -128,6 +180,7 @@ pub fn run() {
                     "设置" => {
                         // 点击「设置」→ 显示主窗口
                         if let Some(window) = app.get_webview_window("main") {
+                            reposition_to_cursor_monitor(&window);
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
@@ -149,6 +202,7 @@ pub fn run() {
                     {
                         let app = tray.app_handle();
                         if let Some(window) = app.get_webview_window("main") {
+                            reposition_to_cursor_monitor(&window);
                             let _ = window.show();
                             let _ = window.set_focus();
                         }

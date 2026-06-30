@@ -184,6 +184,9 @@ export function InputDock({
               resize: 'none',
               outline: 'none',
               maxHeight: '120px',
+              overflowY: 'auto',
+              overflowWrap: 'break-word',
+              wordBreak: 'break-word',
             }}
           />
 

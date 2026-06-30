@@ -79,6 +79,7 @@ export function ModelDropdown({
           WebkitBackdropFilter: 'blur(20px) saturate(160%)',
           zIndex: 200,
         }}
+        className="no-scrollbar"
       >
         {/* 顶部标题栏：显示"切换默认模型"及已启用模型数量 */}
         <div

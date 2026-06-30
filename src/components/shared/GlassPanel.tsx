@@ -21,7 +21,6 @@ export const GlassPanel = forwardRef<HTMLDivElement, GlassPanelProps>(
       <div
         ref={ref}
         className={`surface-glass ${className}`}
-        data-tauri-drag-region // 标记为 Tauri 窗口拖拽区域，用户可通过该区域拖动窗口
         style={{
           ...style, // 透传外部样式，允许调用方覆盖或扩展
         }}
