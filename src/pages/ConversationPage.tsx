@@ -9,6 +9,7 @@ import { IconButton } from '@/components/shared/IconButton';
 import { InputDock } from '@/components/chat/InputDock';
 import { MessageBubble } from '@/components/chat/MessageBubble';
 import { ModelDropdown } from '@/components/chat/ModelDropdown';
+import { handleDragStart } from '@/utils/windowDrag';
 import type { ModelInfo } from '@/types';
 
 /**
@@ -54,6 +55,7 @@ export function ConversationPage() {
 
   return (
     <div
+      onMouseDown={handleDragStart}
       style={{
         width: '100vw',
         height: '100vh',
@@ -71,23 +73,30 @@ export function ConversationPage() {
           overflow: 'hidden',
           margin: 0,
           borderRadius: 'var(--radius-xl)',
+          position: 'relative',
         }}
       >
-        {/* 顶部工具栏：设置按钮 + 拖拽区域 */}
+        {/* 顶部拖拽区域：绝对定位浮动在内容上方，不占布局空间 */}
         <div
+          onMouseDown={handleDragStart}
           style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            height: '24px',
             display: 'flex',
             justifyContent: 'flex-end',
-            padding: 'var(--space-2) var(--space-3)',
-            borderBottom: '1px solid var(--border-subtle)',
+            alignItems: 'center',
+            padding: '0 var(--space-2)',
+            zIndex: 10,
           }}
-          data-tauri-drag-region
         >
           <IconButton
             icon={Settings}
             onClick={goSettings}
-            size={28}
-            iconSize={16}
+            size={24}
+            iconSize={14}
             title="设置"
           />
         </div>
@@ -95,10 +104,11 @@ export function ConversationPage() {
         {/* 消息列表区域，支持滚动 */}
         <div
           ref={scrollRef}
+          className="no-scrollbar"
           style={{
             flex: 1,
             overflowY: 'auto',
-            padding: 'var(--space-4) 0',
+            padding: 'var(--space-6) 0 var(--space-4) 0',
           }}
         >
           {/* 无消息时显示空态提示 */}

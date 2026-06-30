@@ -1,7 +1,6 @@
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { memo } from 'react';
 import type { Message } from '@/types';
-import { CodeBlock } from './CodeBlock';
+import { StreamingMarkdown } from './StreamingMarkdown';
 
 /**
  * MessageBubble 组件的 Props
@@ -16,10 +15,18 @@ interface MessageBubbleProps {
 /**
  * 消息气泡组件
  * 根据消息角色（user/assistant）渲染不同样式的聊天气泡。
- * 用户消息右对齐，带品牌色背景；AI 消息左对齐，支持 Markdown 渲染和代码高亮。
+ * 用户消息右对齐，带品牌色背景；AI 消息左对齐，使用流式增量 Markdown 渲染。
  * AI 流式输出时会在末尾显示闪烁光标。
+ *
+ * 使用 React.memo + 自定义比较函数防止不必要的重渲染：
+ * - 流式输出期间，只有最后一条消息（内容在变化）需要重渲染
+ * - 其余消息完全不变，跳过渲染以保持主线程流畅
+ * - 流式消息内部通过 StreamingMarkdown 做增量 Markdown 解析，避免每 token 全量 AST 重解析
  */
-export function MessageBubble({ message, isStreaming = false }: MessageBubbleProps) {
+export const MessageBubble = memo(function MessageBubble({
+  message,
+  isStreaming = false,
+}: MessageBubbleProps) {
   // 判断是否为用户消息，决定对齐和样式方向
   const isUser = message.role === 'user';
 
@@ -45,6 +52,9 @@ export function MessageBubble({ message, isStreaming = false }: MessageBubblePro
                 color: 'var(--text-primary)',
                 fontSize: '14px',
                 lineHeight: 1.5,
+                overflowWrap: 'break-word',
+                wordBreak: 'break-word',
+                minWidth: 0,
               }
             : {
                 maxWidth: '85%',
@@ -52,6 +62,9 @@ export function MessageBubble({ message, isStreaming = false }: MessageBubblePro
                 color: 'var(--text-primary)',
                 fontSize: '14px',
                 lineHeight: 1.6,
+                overflowWrap: 'break-word',
+                wordBreak: 'break-word',
+                minWidth: 0,
               }
         }
       >
@@ -59,57 +72,22 @@ export function MessageBubble({ message, isStreaming = false }: MessageBubblePro
           // 用户消息：纯文本展示
           <span>{message.content}</span>
         ) : (
-          // AI 消息：Markdown 渲染，支持代码高亮
-          <div className="ai-message-content">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                // 自定义代码块渲染：区分行内代码和围栏代码块
-                code({ className, children, ...props }) {
-                  // 匹配 language-xxx 格式的 className，判断是否为围栏代码块
-                  const match = /language-(\w+)/.exec(className || '');
-                  const codeStr = String(children).replace(/\n$/, '');
-                  if (match) {
-                    // 围栏代码块：使用 CodeBlock 组件进行语法高亮
-                    return (
-                      <CodeBlock language={match[1]} source={codeStr} />
-                    );
-                  }
-                  // 行内代码：简单样式
-                  return (
-                    <code
-                      className={className}
-                      style={{
-                        fontFamily: 'var(--font-mono)',
-                        fontSize: '13px',
-                        background: 'var(--bg-sunken)',
-                        padding: '2px 4px',
-                        borderRadius: 'var(--radius-sm)',
-                      }}
-                      {...props}
-                    >
-                      {children}
-                    </code>
-                  );
-                },
-                // 自定义段落渲染，控制段落间距
-                p({ children }) {
-                  return (
-                    <p style={{ margin: '0 0 var(--space-2) 0' }}>
-                      {children}
-                    </p>
-                  );
-                },
-              }}
-            >
-              {/* 流式输出时空内容也保留一个空格，防止 ReactMarkdown 因空内容报错 */}
-              {message.content || (isStreaming ? ' ' : '')}
-            </ReactMarkdown>
-            {/* 流式输出时显示闪烁光标，模拟打字效果 */}
-            {isStreaming && <span className="buddy-cursor" />}
-          </div>
+          // AI 消息：流式增量 Markdown 渲染，支持代码高亮
+          <StreamingMarkdown
+            content={message.content}
+            isStreaming={isStreaming}
+          />
         )}
       </div>
     </div>
   );
-}
+},
+// 自定义比较函数：仅在 message 内容或 isStreaming 状态变化时才重渲染
+// 流式过程中，只有最后一条消息的内容在持续变化，其余消息保持不变
+(prevProps, nextProps) => {
+  return (
+    prevProps.message.id === nextProps.message.id &&
+    prevProps.message.content === nextProps.message.content &&
+    prevProps.isStreaming === nextProps.isStreaming
+  );
+});

@@ -7,11 +7,13 @@
 
 use crate::models::Message;
 use futures_util::StreamExt;
+use log::{error, info};
 use reqwest::Client;
 use serde_json::Value;
 use std::time::Duration;
 use tauri::Emitter;
 use tokio::sync::watch;
+use tokio::time::timeout;
 
 /// API 错误类型枚举
 ///
@@ -88,6 +90,7 @@ pub async fn stream_chat(
 
     // 拼接 chat/completions 端点 URL
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+    info!("[stream_chat] 开始请求: model={}, url={}", model, url);
 
     // 发送 POST 请求，区分各种错误类型
     let response = client
@@ -116,6 +119,7 @@ pub async fn stream_chat(
 
     // 二次检查 HTTP 状态码（部分代理可能返回 200 包装的错误）
     let status = response.status();
+    info!("[stream_chat] 收到响应: status={}", status.as_u16());
     if status == reqwest::StatusCode::UNAUTHORIZED {
         return Err(ApiError::Unauthorized);
     }
@@ -131,23 +135,59 @@ pub async fn stream_chat(
     let mut buffer = String::new(); // SSE 行缓冲区，处理不完整行
     let mut full_response = String::new(); // 累积完整 AI 回复，用于持久化
 
+    info!("[stream_chat] 开始接收流式数据...");
+    let mut chunk_count: u64 = 0;
+    let mut token_count: u64 = 0;
+
+    // 单次字节块读取超时时间：若服务端 30s 无数据，视为连接僵死
+    const CHUNK_TIMEOUT: Duration = Duration::from_secs(30);
+
     loop {
         // tokio::select! 同时监听取消信号和新数据到达
         let chunk = tokio::select! {
             _ = cancel_rx.changed() => {
-                // 检测到取消信号
+                // 检测到取消信号（首轮 changed() 会立即返回标记初始值，我们直接 continue 跳过）
                 if *cancel_rx.borrow() {
+                    info!(
+                        "[stream_chat] 被取消: {} chunks, {} tokens",
+                        chunk_count, token_count
+                    );
                     let _ = app.emit("stream-cancelled", ());
                     return Ok(full_response); // 返回已累积的部分回复
                 }
+                // 首轮空转：初始值已被标记为"已读"，后续 changed() 只在信号变化时触发
                 continue;
             }
-            chunk = byte_stream.next() => chunk,
+            result = timeout(CHUNK_TIMEOUT, byte_stream.next()) => {
+                match result {
+                    Ok(chunk) => chunk,
+                    Err(_elapsed) => {
+                        // 读取超时：服务端可能已断连但未正常关闭连接
+                        error!(
+                            "[stream_chat] 读取超时 (30s 无数据): {} chunks, {} tokens, {} chars",
+                            chunk_count, token_count, full_response.len()
+                        );
+                        let _ = app.emit("stream-error", "读取超时");
+                        return Ok(full_response);
+                    }
+                }
+            }
         };
 
         match chunk {
             Some(Ok(bytes)) => {
+                chunk_count += 1;
                 let text = String::from_utf8_lossy(&bytes);
+                // 前 3 个 chunk 打印原始内容（截断到 500 字符），方便排查 SSE 格式问题
+                if chunk_count <= 3 {
+                    let preview: String = text.chars().take(500).collect();
+                    info!(
+                        "[stream_chat] chunk#{}: {} bytes, raw={}",
+                        chunk_count,
+                        bytes.len(),
+                        preview
+                    );
+                }
                 buffer.push_str(&text);
 
                 // 逐行解析 SSE 数据（以 \n 为分隔符）
@@ -165,6 +205,10 @@ pub async fn stream_chat(
                         let data = data.trim();
                         if data == "[DONE]" {
                             // 流结束标识
+                            info!(
+                                "[stream_chat] 完成: {} chunks, {} tokens, {} chars",
+                                chunk_count, token_count, full_response.len()
+                            );
                             let _ = app.emit("stream-done", ());
                             return Ok(full_response);
                         }
@@ -180,6 +224,7 @@ pub async fn stream_chat(
                                     .and_then(|c| c["delta"]["content"].as_str())
                                     .unwrap_or("");
                                 if !delta.is_empty() {
+                                    token_count += 1;
                                     full_response.push_str(delta);
                                     // 发射每个 token 给前端
                                     let _ = app.emit("stream-token", delta.to_string());

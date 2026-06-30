@@ -6,6 +6,7 @@
 use crate::api;
 use crate::models::*;
 use crate::storage;
+use log::{info, warn};
 use std::sync::Mutex;
 use tauri::Emitter;
 use tauri::State;
@@ -51,9 +52,21 @@ pub async fn send_message(
         .find(|p| p.id == model.provider_id)
         .ok_or_else(|| "未找到对应的 Provider".to_string())?;
 
+    info!(
+        "[send_message] model={}, provider={}, history_len={}",
+        model_id,
+        provider.id,
+        messages.len()
+    );
+
     // 持久化用户消息（messages 最后一条是新发送的用户消息）
+    // 使用 spawn_blocking 避免同步 I/O 阻塞异步运行时线程
     if let Some(user_msg) = messages.last() {
-        storage::append_message(&app, user_msg).ok();
+        let msg = user_msg.clone();
+        let app_handle = app.clone();
+        tokio::task::spawn_blocking(move || {
+            storage::append_message(&app_handle, &msg).ok();
+        });
     }
 
     // 创建取消通道
@@ -73,6 +86,10 @@ pub async fn send_message(
     {
         Ok(full_response) => {
             // 流式完成（含正常结束、取消、流中断）：持久化 AI 回复
+            info!(
+                "[send_message] 流式结束，回复长度={} chars",
+                full_response.len()
+            );
             if !full_response.is_empty() {
                 let assistant_msg = Message {
                     id: format!("a-{}", chrono::Utc::now().timestamp_millis()),
@@ -81,11 +98,16 @@ pub async fn send_message(
                     model_id: Some(model_id),
                     created_at: chrono::Utc::now().timestamp() as u64,
                 };
-                storage::append_message(&app, &assistant_msg).ok();
+                // 使用 spawn_blocking 避免同步 I/O 阻塞异步线程
+                let app_handle = app.clone();
+                tokio::task::spawn_blocking(move || {
+                    storage::append_message(&app_handle, &assistant_msg).ok();
+                });
             }
         }
         Err(e) => {
             // 请求级别错误（401/429/网络等，流尚未开始）：发送错误事件
+            warn!("[send_message] 请求失败: {}", e);
             let err_str = e.to_string();
             match e {
                 api::ApiError::Unauthorized => {
@@ -113,6 +135,7 @@ pub async fn send_message(
 #[tauri::command]
 pub async fn stop_generation(state: State<'_, CancelState>) -> Result<(), String> {
     if let Some(sender) = state.sender.lock().unwrap().as_ref() {
+        info!("[stop_generation] 用户取消生成");
         sender.send(true).ok(); // 发送取消信号，忽略无接收者的情况
     }
     Ok(())

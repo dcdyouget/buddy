@@ -1,5 +1,6 @@
 import { useUIStore } from '@/stores/uiStore';
 import { GlassPanel } from '@/components/shared/GlassPanel';
+import { handleDragStart } from '@/utils/windowDrag';
 
 /**
  * 无密钥页组件
@@ -19,6 +20,7 @@ export function NoApiKeyPage() {
 
   return (
     <div
+      onMouseDown={handleDragStart}
       style={{
         width: '100vw',
         height: '100vh',

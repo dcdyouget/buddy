@@ -44,7 +44,7 @@ pub fn get_config(app: &tauri::AppHandle) -> Result<AppConfig, String> {
     let content =
         fs::read_to_string(&path).map_err(|e| format!("读取配置文件失败: {}", e))?;
     serde_json::from_str(&content).or_else(|e| {
-        eprintln!("配置文件损坏，使用默认配置: {}", e);
+        log::warn!("配置文件损坏，使用默认配置: {}", e);
         Ok(AppConfig::default())
     })
 }

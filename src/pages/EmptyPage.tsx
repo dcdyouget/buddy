@@ -6,6 +6,7 @@ import { useConfigStore } from '@/stores/configStore';
 import { GlassPanel } from '@/components/shared/GlassPanel';
 import { InputDock } from '@/components/chat/InputDock';
 import { ModelDropdown } from '@/components/chat/ModelDropdown';
+import { handleDragStart } from '@/utils/windowDrag';
 import type { ModelInfo } from '@/types';
 
 /**
@@ -43,6 +44,7 @@ export function EmptyPage() {
 
   return (
     <div
+      onMouseDown={handleDragStart}
       style={{
         width: '100vw',
         height: '100vh',
