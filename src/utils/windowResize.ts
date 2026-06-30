@@ -19,8 +19,8 @@ const CONTENT_PAGES: PageState[] = ['conversation', 'streaming', 'settings', 'ad
 const PAGE_SIZES: Record<PageState, { width: number; height: number }> = {
   empty: { width: 520, height: 78 },
   noapikey: { width: 520, height: 78 },
-  conversation: { width: 720, height: 620 },
-  streaming: { width: 720, height: 620 },
+  conversation: { width: 750, height: 500 },
+  streaming: { width: 750, height: 500 },
   settings: { width: 760, height: 640 },
   'add-provider': { width: 760, height: 640 },
 };
@@ -46,9 +46,11 @@ export async function resizeWindowForPage(fromPage: PageState, toPage: PageState
 
   try {
     const { getCurrentWindow } = await import('@tauri-apps/api/window');
-    const { PhysicalSize } = await import('@tauri-apps/api/dpi');
-    await getCurrentWindow().setSize(new PhysicalSize(size.width, size.height));
-  } catch {
-    // 浏览器环境或 Tauri API 不可用时静默忽略
+    const { LogicalSize } = await import('@tauri-apps/api/dpi');
+    console.log('[Buddy] resizeWindow:', fromPage, '→', toPage, 'size:', size.width, 'x', size.height);
+    await getCurrentWindow().setSize(new LogicalSize(size.width, size.height));
+    console.log('[Buddy] resizeWindow done');
+  } catch (e) {
+    console.error('[Buddy] resizeWindow error:', e);
   }
 }

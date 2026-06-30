@@ -8,6 +8,13 @@ node_modules/
 # Build outputs
 dist/
 src-tauri/target/
+*.dmg
+*.app
+
+# Auto-generated icons (Tauri tauri icon command)
+src-tauri/gen/
+src-tauri/icons/
+!src-tauri/icons/icon.png
 
 # IDE
 .vscode/
