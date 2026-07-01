@@ -18,8 +18,7 @@ import { useChatStore } from '@/stores/chatStore';
 import { useStreaming } from '@/hooks/useStreaming';
 import { EmptyPage } from '@/pages/EmptyPage';
 import { NoApiKeyPage } from '@/pages/NoApiKeyPage';
-import { ConversationPage } from '@/pages/ConversationPage';
-import { StreamingPage } from '@/pages/StreamingPage';
+import { ChatPage } from '@/pages/ChatPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 
 /**
@@ -35,9 +34,8 @@ function PageRenderer() {
     case 'noapikey':
       return <NoApiKeyPage />;
     case 'conversation':
-      return <ConversationPage />;
     case 'streaming':
-      return <StreamingPage />;
+      return <ChatPage />;
     // 'settings' 由 App 中的 overlay 处理，不在此切换
     case 'settings':
       return null;

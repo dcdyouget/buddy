@@ -6,7 +6,7 @@ import { useConfigStore } from '@/stores/configStore';
 import { GlassPanel } from '@/components/shared/GlassPanel';
 import { InputDock } from '@/components/chat/InputDock';
 import { ModelDropdown } from '@/components/chat/ModelDropdown';
-import { useDragHandle } from '@/utils/windowDrag';
+import { useDragHandle } from '@/hooks/useDragHandle';
 import type { ModelInfo } from '@/types';
 
 /**

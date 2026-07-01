@@ -33,20 +33,6 @@ interface ConfigState {
   updateHotkey: (hotkey: string) => Promise<void>;          // 更新快捷键
 }
 
-/**
- * 后端调用包装器
- * 浏览器模式下直接返回 undefined，Tauri 环境下动态导入 invoke 函数
- * 使用动态导入避免浏览器环境下因 @tauri-apps/api 不可用而报错
- */
-async function invokeBackend<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  if (isBrowser) {
-    // 浏览器 mock：不需要持久化，直接返回
-    return undefined as T;
-  }
-  const { invoke } = await import('@tauri-apps/api/core');
-  return invoke<T>(cmd, args);
-}
-
 export const useConfigStore = create<ConfigState>((set, get) => ({
   config: null,
   loading: false,
@@ -61,14 +47,13 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
         set({ config: { ...MOCK_CONFIG }, loading: false });
         return;
       }
-      const { invoke } = await import('@tauri-apps/api/core');
-      let config = await invoke<AppConfig>('get_config');
+      const { getConfig: getCfg, saveConfig: saveCfg } = await import('@/api/config');
+      let config = await getCfg();
 
       // 首次启动：如果没有任何 provider，自动注入 mock 预设
-      // 确保用户首次打开应用时就能看到可用的模型
       if (config.providers.length === 0) {
         config = { ...MOCK_CONFIG };
-        await invoke('save_config', { config });
+        await saveCfg(config);
       }
 
       set({ config, loading: false });
@@ -81,11 +66,12 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
   saveConfig: async (config: AppConfig) => {
     set({ loading: true, error: null });
     try {
-      await invokeBackend('save_config', { config });
+      const { saveConfig: saveCfg } = await import('@/api/config');
+      await saveCfg(config);
       set({ config, loading: false });
     } catch (e) {
       set({ error: String(e), loading: false });
-      if (!isBrowser) throw e; // Tauri 环境下向上抛出异常，让调用方处理
+      if (!isBrowser) throw e;
     }
   },
 

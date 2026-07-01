@@ -194,11 +194,6 @@ export function InputDock({
           <ClearButton visible={hasContent} onClear={() => onDraftChange('')} />
 
 
-          {/* <ModelPicker
-            model={selectedModel}
-            onClick={onModelPickerClick}
-          /> */}
-
           <IconButton
             icon={Send}
             onClick={onSend}
