@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { AnimatePresence } from 'framer-motion';
 import { Settings } from 'lucide-react';
 import { useUIStore } from '@/stores/uiStore';
 import { useChatStore } from '@/stores/chatStore';
@@ -7,25 +8,26 @@ import { GlassPanel } from '@/components/shared/GlassPanel';
 import { IconButton } from '@/components/shared/IconButton';
 import { InputDock } from '@/components/chat/InputDock';
 import { MessageBubble } from '@/components/chat/MessageBubble';
-import { useDragHandle } from '@/utils/windowDrag';
+import { ModelDropdown } from '@/components/chat/ModelDropdown';
+import { useDragHandle } from '@/hooks/useDragHandle';
 import type { ModelInfo } from '@/types';
 
 /**
- * 流式页组件
+ * 统一聊天页组件
  *
- * 在 AI 生成回复时展示，实时显示逐 token 输出的消息内容。
- * 与 ConversationPage 结构相似，但输入区域会展示流式状态指示器（模型名称、token 计数）。
- * 用户可点击停止按钮中断生成，之后自动回到对话页。
- *
- * 无 props —— 所需状态全部来自全局 store。
+ * 合并了 ConversationPage（对话浏览）和 StreamingPage（流式生成）的功能。
+ * 通过 chatStore.isStreaming 判断当前模式：
+ * - 非流式：可发送消息、切换模型、打开模型下拉菜单
+ * - 流式中：显示实时内容块、token 计数、停止按钮，禁止发送/切换模型
  */
-export function StreamingPage() {
+export function ChatPage() {
   const dragRef = useDragHandle();
   const { setPage } = useUIStore();
   const {
     messages,
     draftInput,
     setDraftInput,
+    sendMessage,
     stopGeneration,
     isStreaming,
     streamingTokens,
@@ -33,14 +35,26 @@ export function StreamingPage() {
     streamingBlocks,
   } = useChatStore();
   const { config } = useConfigStore();
+  const [showDropdown, setShowDropdown] = useState(false);
 
-  // 从配置中查找当前选中的模型信息（用于输入区域默认显示）
+  // 当前选中的模型
   const selectedModel: ModelInfo | null =
     config?.models.find((m) => m.id === config?.selected_model_id) ?? null;
-  // 查找当前正在流式输出的模型信息（用于展示流式状态）
+  // 当前正在流式输出的模型
   const streamingModel = config?.models.find((m) => m.id === streamingModelId);
 
-  // 消息列表发生变化时自动滚动到底部，确保最新 token 始终可见
+  /** 发送消息：校验后发起对话 */
+  const handleSend = () => {
+    if (!draftInput.trim() || !config?.selected_model_id) return;
+    sendMessage(draftInput, config.selected_model_id);
+  };
+
+  /** 停止生成并保持在对话页 */
+  const handleStop = () => {
+    stopGeneration();
+  };
+
+  // 消息列表变化时自动滚动到底部
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (scrollRef.current) {
@@ -71,7 +85,7 @@ export function StreamingPage() {
           position: 'relative',
         }}
       >
-        {/* 顶部：设置按钮（浮动，不占布局空间） */}
+        {/* 设置按钮 */}
         <div
           style={{
             position: 'absolute',
@@ -88,14 +102,14 @@ export function StreamingPage() {
         >
           <IconButton
             icon={Settings}
-            onClick={() => { setPage('settings'); }}
+            onClick={() => setPage('settings')}
             size={24}
             iconSize={14}
             title="设置"
           />
         </div>
 
-        {/* 消息列表区域，支持滚动 */}
+        {/* 消息列表 */}
         <div
           ref={scrollRef}
           className="no-scrollbar"
@@ -105,16 +119,31 @@ export function StreamingPage() {
             padding: 'var(--space-6) 0 var(--space-4) 0',
           }}
         >
+          {messages.length === 0 && (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: '100%',
+                color: 'var(--text-tertiary)',
+                fontSize: '14px',
+              }}
+            >
+              开始新对话
+            </div>
+          )}
           {messages.map((msg, i) => {
             const questionId =
               msg.role === 'assistant' && i > 0 && messages[i - 1].role === 'user'
                 ? `msg-${messages[i - 1].id}`
                 : undefined;
             const isLast = isStreaming && msg.role === 'assistant' && i === messages.length - 1;
-            // 流式过程中，将 live blocks 注入最后一条 assistant 消息用于渲染
-            const displayMsg = isLast && streamingBlocks.length > 0
-              ? { ...msg, blocks: streamingBlocks }
-              : msg;
+            // 流式过程中将 live blocks 注入最后一条 assistant 消息
+            const displayMsg =
+              isLast && streamingBlocks.length > 0
+                ? { ...msg, blocks: streamingBlocks }
+                : msg;
             return (
               <MessageBubble
                 key={msg.id}
@@ -126,7 +155,7 @@ export function StreamingPage() {
           })}
         </div>
 
-        {/* 底部输入区域：流式进行中，展示模型名称和 token 计数 */}
+        {/* 输入区域 */}
         <InputDock
           isStreaming={isStreaming}
           streamingModelName={streamingModel?.display_name}
@@ -134,15 +163,28 @@ export function StreamingPage() {
           selectedModel={selectedModel}
           draftInput={draftInput}
           onDraftChange={setDraftInput}
-          onSend={() => {}} // 流式进行中不允许发送新消息
-          onStop={() => {
-            // 停止生成后回到对话页
-            stopGeneration();
-            setPage('conversation');
-          }}
-          onModelPickerClick={() => {}} // 流式进行中不允许切换模型
+          onSend={isStreaming ? () => {} : handleSend}
+          onStop={handleStop}
+          onModelPickerClick={
+            isStreaming ? () => {} : () => setShowDropdown(!showDropdown)
+          }
         />
       </GlassPanel>
+
+      {/* 模型选择下拉（仅非流式时可用） */}
+      <AnimatePresence>
+        {showDropdown && !isStreaming && (
+          <ModelDropdown
+            models={config?.models || []}
+            selectedId={config?.selected_model_id || ''}
+            onSelect={(id) => {
+              useConfigStore.getState().setDefaultModel(id);
+              setShowDropdown(false);
+            }}
+            onClose={() => setShowDropdown(false)}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

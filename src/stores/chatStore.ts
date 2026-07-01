@@ -21,6 +21,7 @@
 import { create } from 'zustand';
 import type { Message, ContentBlock } from '@/types';
 import { isBrowser, MOCK_MESSAGES } from '@/utils/mock';
+import { parseThinkBlocks } from '@/utils/thinkParser';
 
 /** ChatStore 状态和操作定义 */
 interface ChatState {
@@ -68,58 +69,18 @@ function generateId(): string {
 }
 
 /**
- * 从文本中解析 <think>...</think> 标签，转换为 ContentBlock 数组
+ * 适配器：将 parseThinkBlocks() 的 ContentSegment[] 转换为 ContentBlock[]
  *
- * 用于流式渲染期间实时检测思考标签。与 thinkParser.ts 中的
- * parseThinkBlocks 逻辑一致，但直接返回 ContentBlock[] 格式。
- *
- * 规则：
- * - <think> 之前的内容 → text block
- * - <think>...</think> → thinking block (is_open=false)
- * - <think>... (无闭合) → thinking block (is_open=true)
- * - 嵌套 <think> 当作字面文本
+ * thinkParser.ts 返回 { type: 'think', content, isOpen } 格式，
+ * 此处统一转换为 store 使用的 { type: 'thinking', content, is_open } 格式。
  */
 function parseThinkFromText(text: string): ContentBlock[] {
-  const blocks: ContentBlock[] = [];
-  const THINK_OPEN = '<think>';
-  const THINK_CLOSE = '</think>';
-  let i = 0;
-
-  while (i < text.length) {
-    const thinkOpen = text.indexOf(THINK_OPEN, i);
-
-    if (thinkOpen === -1) {
-      // 没有更多标签，剩余全是文本
-      blocks.push({ type: 'text', content: text.substring(i) });
-      break;
+  return parseThinkBlocks(text).map((seg) => {
+    if (seg.type === 'think') {
+      return { type: 'thinking', content: seg.content, is_open: seg.isOpen };
     }
-
-    // <think> 之前的文本
-    if (thinkOpen > i) {
-      blocks.push({ type: 'text', content: text.substring(i, thinkOpen) });
-    }
-
-    // 查找闭合标签
-    const thinkStart = thinkOpen + THINK_OPEN.length;
-    const thinkClose = text.indexOf(THINK_CLOSE, thinkStart);
-
-    if (thinkClose === -1) {
-      // 无闭合 → 流式进行中
-      blocks.push({ type: 'thinking', content: text.substring(thinkStart), is_open: true });
-      break;
-    }
-
-    // 完整闭合
-    blocks.push({
-      type: 'thinking',
-      content: text.substring(thinkStart, thinkClose),
-      is_open: false,
-    });
-    i = thinkClose + THINK_CLOSE.length;
-  }
-
-  // 过滤空 text block
-  return blocks.filter((b) => b.type !== 'text' || b.content.length > 0);
+    return { type: 'text', content: seg.content };
+  });
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -198,11 +159,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     try {
       // Tauri 模式：调用 Rust 后端发起 SSE 请求
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('send_message', {
-        messages: updatedMessages.slice(0, -1),
-        modelId,
-      });
+      const { sendMessage: sendMsg } = await import('@/api/chat');
+      await sendMsg(updatedMessages.slice(0, -1), modelId);
     } catch (e) {
       set({
         isStreaming: false,
@@ -215,8 +173,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   stopGeneration: async () => {
     if (isBrowser) return;
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('stop_generation');
+      const { stopGeneration: stop } = await import('@/api/chat');
+      await stop();
     } catch (e) {
       console.error('Failed to stop generation:', e);
     }
@@ -421,8 +379,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   saveMessage: async (message: Message) => {
     if (isBrowser) return;
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('save_message', { message });
+      const { saveMessage: save } = await import('@/api/storage');
+      await save(message);
     } catch (e) {
       console.error('[Buddy] 保存消息失败:', e);
     }
@@ -432,8 +390,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   loadMessages: async (offset = 0, limit = 100) => {
     if (isBrowser) return;
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const history = await invoke<Message[]>('load_messages', { offset, limit });
+      const { loadMessages: load } = await import('@/api/storage');
+      const history = await load(offset, limit);
       if (history && history.length > 0) {
         // 为没有 blocks 的消息从 content 中解析 blocks
         const withBlocks = history.map((msg) => {

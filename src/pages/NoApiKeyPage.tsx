@@ -1,6 +1,6 @@
 import { useUIStore } from '@/stores/uiStore';
 import { GlassPanel } from '@/components/shared/GlassPanel';
-import { useDragHandle } from '@/utils/windowDrag';
+import { useDragHandle } from '@/hooks/useDragHandle';
 
 /**
  * 无密钥页组件

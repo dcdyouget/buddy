@@ -1,5 +1,5 @@
 /**
- * windowDrag.ts — Spotlight 风格窗口拖拽
+ * useDragHandle.ts — Spotlight 风格窗口拖拽
  *
  * 关键：Tauri 的 startDragging() 必须在原生 mousedown 事件中同步调用，
  * React 合成事件（onMouseDown）经过事件委托后会丢失原生事件上下文。
