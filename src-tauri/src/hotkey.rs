@@ -3,6 +3,7 @@
 // 提供 HotkeyState 状态管理以及 register / unregister / update_hotkey 三个核心函数。
 // 当用户修改热键配置后，update_hotkey 负责先注销旧热键再注册新热键，保证始终只有一个有效热键。
 
+use log;
 use tauri::Manager;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
@@ -27,17 +28,23 @@ pub fn register(app: &tauri::AppHandle, shortcut: Shortcut) {
             if event.state == ShortcutState::Pressed {
                 if let Some(window) = app.get_webview_window("main") {
                     let was_visible = window.is_visible().unwrap_or(false);
+                    log::info!("[hotkey] pressed, was_visible={}", was_visible);
                     if was_visible {
                         let _ = window.hide();
+                        log::info!("[hotkey] hidden");
                     } else {
                         crate::get_selected_text(app);
-                        // 多屏适配：将窗口移到光标所在的显示器中心
+                        log::info!("[hotkey] before reposition");
                         crate::reposition_to_cursor_monitor(&window);
-                        // 等待一帧（~16ms），确保窗口服务器已应用新的 frame 再 show，
-                        // 避免跨屏时窗口在旧位置短暂闪现
+                        log::info!("[hotkey] before sleep");
                         std::thread::sleep(std::time::Duration::from_millis(16));
+                        log::info!("[hotkey] before show, pos={:?}", window.outer_position().ok());
                         let _ = window.show();
+                        log::info!("[hotkey] after show, visible={}", window.is_visible().unwrap_or(false));
+                        crate::mark_window_shown(app);
+                        log::info!("[hotkey] after mark_window_shown");
                         let _ = window.set_focus();
+                        log::info!("[hotkey] after set_focus, focused={}", window.is_focused().unwrap_or(false));
                     }
                 }
             }

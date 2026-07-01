@@ -1,6 +1,6 @@
 import { useUIStore } from '@/stores/uiStore';
 import { GlassPanel } from '@/components/shared/GlassPanel';
-import { handleDragStart } from '@/utils/windowDrag';
+import { useDragHandle } from '@/utils/windowDrag';
 
 /**
  * 无密钥页组件
@@ -11,6 +11,7 @@ import { handleDragStart } from '@/utils/windowDrag';
  * 无 props —— 仅依赖全局 store 判断是否需要跳转。
  */
 export function NoApiKeyPage() {
+  const dragRef = useDragHandle();
   const { setPage } = useUIStore();
 
   /** 跳转到设置页，并同步调整窗口尺寸以匹配设置页面的布局 */
@@ -20,7 +21,7 @@ export function NoApiKeyPage() {
 
   return (
     <div
-      onMouseDown={handleDragStart}
+      ref={dragRef}
       style={{
         width: '100vw',
         height: '100vh',

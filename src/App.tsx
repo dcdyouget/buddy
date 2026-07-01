@@ -10,8 +10,8 @@
  * 5. 应用入口动画：frameless 窗口的淡入缩放效果
  */
 
-import { useEffect } from 'react';
-import { motion } from 'framer-motion';
+import { useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useConfigStore } from '@/stores/configStore';
 import { useUIStore } from '@/stores/uiStore';
 import { useChatStore } from '@/stores/chatStore';
@@ -38,8 +38,9 @@ function PageRenderer() {
       return <ConversationPage />;
     case 'streaming':
       return <StreamingPage />;
+    // 'settings' 由 App 中的 overlay 处理，不在此切换
     case 'settings':
-      return <SettingsPage />;
+      return null;
     default:
       return (
         <div className="flex h-full w-full flex-col items-center justify-center gap-3 text-center">
@@ -61,9 +62,9 @@ function PageRenderer() {
 function App() {
   const { loadConfig, config } = useConfigStore();
   const { loadMessages } = useChatStore();
-  const { setPage, setThemeReady } = useUIStore();
+  const { setPage, setThemeReady, currentPage } = useUIStore();
 
-  // 注册流式事件监听（stream-token / stream-done / stream-error / stream-cancelled）
+  // 注册流式事件监听
   useStreaming();
 
   // 应用启动时加载配置和历史消息
@@ -71,11 +72,10 @@ function App() {
     loadConfig().then(() => {
       setThemeReady(true);
     });
-    // 并行加载历史消息，恢复上次的对话状态
     loadMessages();
   }, []);
 
-  // 监听主题变更，切换 document 根元素的 dark 类名
+  // 监听主题变更
   useEffect(() => {
     if (config?.theme) {
       const isDark = config.theme === 'dark';
@@ -84,13 +84,20 @@ function App() {
   }, [config?.theme]);
 
   // 根据配置决定入口页面
-  // 如果没有 provider 或未选择模型，停留在 empty 页面
   useEffect(() => {
     if (!config) return;
     if (config.providers.length === 0 || !config.selected_model_id) {
       setPage('empty');
     }
   }, [config?.providers.length, config?.selected_model_id]);
+
+  // 记住进入设置前的页面，退出设置时恢复
+  const prevPageRef = useRef<ReturnType<typeof useUIStore.getState>['currentPage']>('empty');
+  useEffect(() => {
+    if (currentPage !== 'settings') {
+      prevPageRef.current = currentPage;
+    }
+  }, [currentPage]);
 
   // ── Esc = 隐藏窗口（不停止流式生成）──
   useEffect(() => {
@@ -126,21 +133,29 @@ function App() {
 
   return (
     <motion.div
-      // 窗口出现时的弹性动画：从 95% 缩放淡入到 100%
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
       transition={{
         duration: 0.3,
-        ease: [0.34, 1.56, 0.64, 1], // 自定义贝塞尔曲线，带回弹效果
+        ease: [0.34, 1.56, 0.64, 1],
       }}
       style={{
         width: '100vw',
         height: '100vh',
         overflow: 'hidden',
-        background: 'transparent', // 透明背景，配合毛玻璃效果
+        background: 'transparent',
+        position: 'relative',
       }}
     >
+      {/* 背景页面 */}
       <PageRenderer />
+
+      {/* 设置页覆层：从右滑入 */}
+      <AnimatePresence>
+        {currentPage === 'settings' && (
+          <SettingsPage onBack={() => setPage(prevPageRef.current)} />
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 }

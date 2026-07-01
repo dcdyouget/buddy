@@ -126,15 +126,7 @@ export function StreamingMarkdown({ content, isStreaming }: StreamingMarkdownPro
         </ReactMarkdown>
       )}
 
-      {/* 流式开始但内容为空时，渲染一个空格防止 ReactMarkdown 报错 */}
-      {isStreaming && !content && (
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={COMPONENTS}>
-          {' '}
-        </ReactMarkdown>
-      )}
-
-      {/* 流式输出中的闪烁光标 */}
-      {isStreaming && <span className="buddy-cursor" />}
+      {/* 流式输出中的闪烁光标已移至 MessageBubble 层统一控制 */}
     </div>
   );
 }

@@ -6,7 +6,7 @@ import { useConfigStore } from '@/stores/configStore';
 import { GlassPanel } from '@/components/shared/GlassPanel';
 import { InputDock } from '@/components/chat/InputDock';
 import { ModelDropdown } from '@/components/chat/ModelDropdown';
-import { handleDragStart } from '@/utils/windowDrag';
+import { useDragHandle } from '@/utils/windowDrag';
 import type { ModelInfo } from '@/types';
 
 /**
@@ -19,6 +19,7 @@ import type { ModelInfo } from '@/types';
  * 无 props —— 所需状态全部来自全局 store。
  */
 export function EmptyPage() {
+  const dragRef = useDragHandle();
   const { setPage } = useUIStore();
   const { sendMessage, draftInput, setDraftInput } = useChatStore();
   const { config } = useConfigStore();
@@ -44,7 +45,7 @@ export function EmptyPage() {
 
   return (
     <div
-      onMouseDown={handleDragStart}
+      ref={dragRef}
       style={{
         width: '100vw',
         height: '100vh',

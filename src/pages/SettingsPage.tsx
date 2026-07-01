@@ -1,14 +1,18 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { X, ArrowLeft, Eye, EyeOff, ExternalLink } from 'lucide-react';
+import { ArrowLeft, Eye, EyeOff, ExternalLink } from 'lucide-react';
+import { motion } from 'framer-motion';
 import { invoke } from '@tauri-apps/api/core';
 import { useConfigStore } from '@/stores/configStore';
-import { useUIStore } from '@/stores/uiStore';
 import { GlassPanel } from '@/components/shared/GlassPanel';
 import { FooterActions } from '@/components/shared/FooterActions';
 import { ProviderCard } from '@/components/settings/ProviderCard';
 import { SlideInPanel } from '@/components/shared/SlideInPanel';
-import { handleDragStart } from '@/utils/windowDrag';
+import { useDragHandle } from '@/utils/windowDrag';
 import { PROVIDER_PRESETS } from '@/types';
+
+interface SettingsPageProps {
+  onBack: () => void;
+}
 import type { ModelInfo, ProviderConfig } from '@/types';
 
 /* ── SettingsPage ──────────────────────────────────────── */
@@ -24,8 +28,8 @@ import type { ModelInfo, ProviderConfig } from '@/types';
  *
  * 无 props —— 所需状态全部来自全局 store（configStore / uiStore）。
  */
-export function SettingsPage() {
-  const { setPage } = useUIStore();
+export function SettingsPage({ onBack }: SettingsPageProps) {
+  const dragRef = useDragHandle();
   const { config, updateTheme, updateHotkey, setDefaultModel } = useConfigStore();
   const [showAddProvider, setShowAddProvider] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -124,54 +128,64 @@ export function SettingsPage() {
   };
 
   return (
-    <div
-      onMouseDown={handleDragStart}
+    <motion.div
+      initial={{ x: '100%' }}
+      animate={{ x: 0 }}
+      exit={{ x: '100%' }}
+      transition={{ type: 'tween', duration: 0.25, ease: [0.2, 0, 0, 1] }}
+      ref={dragRef}
       style={{
-        width: '100vw',
-        height: '100vh',
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        width: '100%',
+        height: '100%',
+        zIndex: 100,
         display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
         background: 'transparent',
-        position: 'relative',
       }}
     >
       <GlassPanel
         style={{
-          width: 760,
-          height: 640,
+          flex: 1,
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
+          margin: 0,
+          borderRadius: 'var(--radius-xl)',
         }}
       >
-        {/* Header：标题 + 关闭按钮，同时也是窗口拖拽区域 */}
+        {/* Header：返回按钮 + 标题 */}
         <div
-          onMouseDown={handleDragStart}
           style={{
             display: 'flex',
-            justifyContent: 'space-between',
             alignItems: 'center',
+            gap: 'var(--space-2)',
             padding: 'var(--space-2) var(--space-4)',
             minHeight: '36px',
             borderBottom: '1px solid var(--border-subtle)',
           }}
         >
-          <h2 className="t-title" style={{ color: 'var(--text-primary)' }}>
-            设置
-          </h2>
           <button
-            onClick={() => setPage('conversation')}
+            onClick={onBack}
             style={{
               border: 'none',
               background: 'none',
               color: 'var(--text-muted)',
               cursor: 'pointer',
               padding: '4px',
+              borderRadius: 'var(--radius-sm)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
             }}
+            title="返回"
           >
-            <X size={18} />
+            <ArrowLeft size={18} />
           </button>
+          <h2 className="t-title" style={{ color: 'var(--text-primary)' }}>
+            设置
+          </h2>
         </div>
 
         {/* Content：可滚动的设置区域 */}
@@ -397,8 +411,8 @@ export function SettingsPage() {
 
         {/* 底部操作栏：取消/确定 */}
         <FooterActions
-          onCancel={() => setPage('conversation')}
-          onConfirm={() => setPage('conversation')}
+          onCancel={onBack}
+          onConfirm={onBack}
           confirmLabel="确定"
         />
       </GlassPanel>
@@ -407,7 +421,7 @@ export function SettingsPage() {
       <SlideInPanel from="right" show={showAddProvider}>
         <AddProviderPageContent onBack={() => setShowAddProvider(false)} />
       </SlideInPanel>
-    </div>
+    </motion.div>
   );
 }
 
@@ -454,13 +468,15 @@ function AddProviderPageContent({ onBack }: AddProviderPageProps) {
     setError(null);
     try {
       const models = await invoke<ModelInfo[]>('fetch_models', { baseUrl, apiKey });
-      // 为获取到的模型附加 provider_id，关联到当前选择的 provider
+      if (models.length === 0) {
+        setError('未获取到模型列表（该厂商可能不支持 /models 端点）');
+        return;
+      }
       const modelsWithProvider = models.map((m) => ({
         ...m,
         provider_id: selectedPreset || 'custom',
       }));
       setFetchedModels(modelsWithProvider);
-      // 默认全选所有获取到的模型
       setSelectedModelIds(new Set(modelsWithProvider.map((m) => m.id)));
     } catch (e) {
       setError(String(e));
@@ -584,7 +600,7 @@ function AddProviderPageContent({ onBack }: AddProviderPageProps) {
             padding: '4px',
           }}
         >
-          <X size={18} />
+          <ArrowLeft size={18} />
         </button>
       </div>
 

@@ -83,4 +83,5 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   { id: 'minimax', name: 'MiniMax', base_url: 'https://api.minimaxi.com/v1', icon_letter: 'M' },
   { id: 'glm', name: 'GLM (智谱)', base_url: 'https://open.bigmodel.cn/api/paas/v4', icon_letter: 'G' },
   { id: 'kimi', name: 'Kimi (月之暗面)', base_url: 'https://api.moonshot.cn/v1', icon_letter: 'K' },
+  { id: 'mimo', name: 'MiMo (小米)', base_url: 'https://api.xiaomimimo.com/v1', icon_letter: 'X' },
 ];

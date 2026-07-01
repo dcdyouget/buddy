@@ -12,8 +12,8 @@ import type { PageState } from '@/types';
 /** 紧凑状态页面：窗口初始尺寸较小，切换到内容页面时需要展开 */
 const COMPACT_PAGES: PageState[] = ['empty', 'noapikey'];
 
-/** 内容状态页面：需要较大窗口容纳聊天/设置内容 */
-const CONTENT_PAGES: PageState[] = ['conversation', 'streaming', 'settings', 'add-provider'];
+/** 内容状态页面：需要较大窗口容纳聊天内容（设置已改为覆层，不自动 resize） */
+const CONTENT_PAGES: PageState[] = ['conversation', 'streaming'];
 
 /** 各页面对应的窗口预设尺寸（逻辑像素） */
 const PAGE_SIZES: Record<PageState, { width: number; height: number }> = {

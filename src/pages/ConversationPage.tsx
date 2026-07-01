@@ -9,7 +9,7 @@ import { IconButton } from '@/components/shared/IconButton';
 import { InputDock } from '@/components/chat/InputDock';
 import { MessageBubble } from '@/components/chat/MessageBubble';
 import { ModelDropdown } from '@/components/chat/ModelDropdown';
-import { handleDragStart } from '@/utils/windowDrag';
+import { useDragHandle } from '@/utils/windowDrag';
 import type { ModelInfo } from '@/types';
 
 /**
@@ -22,6 +22,7 @@ import type { ModelInfo } from '@/types';
  * 无 props —— 所需状态全部来自全局 store（uiStore / chatStore / configStore）。
  */
 export function ConversationPage() {
+  const dragRef = useDragHandle();
   const { setPage } = useUIStore();
   const { messages, draftInput, setDraftInput, sendMessage, stopGeneration, isStreaming } =
     useChatStore();
@@ -55,7 +56,7 @@ export function ConversationPage() {
 
   return (
     <div
-      onMouseDown={handleDragStart}
+      ref={dragRef}
       style={{
         width: '100vw',
         height: '100vh',
@@ -76,9 +77,8 @@ export function ConversationPage() {
           position: 'relative',
         }}
       >
-        {/* 顶部拖拽区域：绝对定位浮动在内容上方，不占布局空间 */}
+        {/* 顶部：设置按钮（浮动，不占布局空间） */}
         <div
-          onMouseDown={handleDragStart}
           style={{
             position: 'absolute',
             top: 0,
@@ -127,9 +127,14 @@ export function ConversationPage() {
             </div>
           )}
           {/* 渲染历史消息列表 */}
-          {messages.map((msg) => (
-            <MessageBubble key={msg.id} message={msg} />
-          ))}
+          {messages.map((msg, i) => {
+            // 找到此 AI 消息对应的用户问题（前一条消息）
+            const questionId =
+              msg.role === 'assistant' && i > 0 && messages[i - 1].role === 'user'
+                ? `msg-${messages[i - 1].id}`
+                : undefined;
+            return <MessageBubble key={msg.id} message={msg} questionId={questionId} />;
+          })}
         </div>
 
         {/* 底部输入区域 */}
