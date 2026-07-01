@@ -3,12 +3,12 @@
 // 每个 #[tauri::command] 函数对应一个前端 invoke 调用点，
 // 负责参数校验、调用业务逻辑、返回结果或错误。
 
-use crate::api;
 use crate::models::*;
+use crate::providers::{self, ApiError, ProviderType};
+use crate::streaming::{ContentBlock, StopReason, StreamEventEmitter};
 use crate::storage;
 use log::{info, warn};
 use std::sync::Mutex;
-use tauri::Emitter;
 use tauri::State;
 use tokio::sync::watch;
 
@@ -23,11 +23,11 @@ pub struct CancelState {
 
 /// 发送消息命令
 ///
-/// 前端调用此命令发起 AI 对话。后端自动处理持久化：
+/// 前端调用此命令发起 AI 对话。后端根据 Provider 类型分发到对应适配器：
 /// 1. 查找模型和 Provider 配置
 /// 2. 持久化用户消息到本地存储
 /// 3. 创建取消通道并存入共享状态
-/// 4. 调用 api::stream_chat 进行流式对话（token 实时推送到前端）
+/// 4. 调用对应 Provider 的 stream_chat 进行流式对话
 /// 5. 流式完成后自动持久化 AI 回复
 /// 6. 错误时发送对应事件给前端
 /// 7. 清理取消通道
@@ -52,15 +52,17 @@ pub async fn send_message(
         .find(|p| p.id == model.provider_id)
         .ok_or_else(|| "未找到对应的 Provider".to_string())?;
 
+    let provider_type = ProviderType::from_str(&provider.provider_type);
+
     info!(
-        "[send_message] model={}, provider={}, history_len={}",
+        "[send_message] model={}, provider={}, type={:?}, history_len={}",
         model_id,
         provider.id,
+        provider_type,
         messages.len()
     );
 
     // 持久化用户消息（messages 最后一条是新发送的用户消息）
-    // 使用 spawn_blocking 避免同步 I/O 阻塞异步运行时线程
     if let Some(user_msg) = messages.last() {
         let msg = user_msg.clone();
         let app_handle = app.clone();
@@ -73,32 +75,44 @@ pub async fn send_message(
     let (cancel_tx, cancel_rx) = watch::channel(false);
     *state.sender.lock().unwrap() = Some(cancel_tx);
 
-    // 发起流式请求，返回累积的完整 AI 回复
-    match api::stream_chat(
-        &provider.base_url,
-        &provider.api_key,
-        &model_id,
-        &messages,
-        &app,
-        cancel_rx,
-    )
-    .await
+    // 创建统一事件发射器
+    let emitter = StreamEventEmitter::new(app.clone());
+
+    // 根据 Provider 类型创建对应的适配器
+    let llm_provider = providers::create_provider(&provider_type);
+
+    // 获取 compat 配置引用
+    let compat = provider.compat.as_ref();
+
+    // 发起流式请求
+    match llm_provider
+        .stream_chat(
+            &provider.base_url,
+            &provider.api_key,
+            &model_id,
+            &messages,
+            &emitter,
+            cancel_rx,
+            compat,
+        )
+        .await
     {
         Ok(full_response) => {
-            // 流式完成（含正常结束、取消、流中断）：持久化 AI 回复
             info!(
                 "[send_message] 流式结束，回复长度={} chars",
                 full_response.len()
             );
             if !full_response.is_empty() {
+                // 解析 <think> 标签为结构化 blocks
+                let blocks = ContentBlock::parse_from_text(&full_response);
                 let assistant_msg = Message {
                     id: format!("a-{}", chrono::Utc::now().timestamp_millis()),
                     role: MessageRole::Assistant,
                     content: full_response,
+                    blocks: Some(blocks),
                     model_id: Some(model_id),
                     created_at: chrono::Utc::now().timestamp() as u64,
                 };
-                // 使用 spawn_blocking 避免同步 I/O 阻塞异步线程
                 let app_handle = app.clone();
                 tokio::task::spawn_blocking(move || {
                     storage::append_message(&app_handle, &assistant_msg).ok();
@@ -106,20 +120,17 @@ pub async fn send_message(
             }
         }
         Err(e) => {
-            // 请求级别错误（401/429/网络等，流尚未开始）：发送错误事件
             warn!("[send_message] 请求失败: {}", e);
-            let err_str = e.to_string();
-            match e {
-                api::ApiError::Unauthorized => {
-                    let _ = app.emit("stream-error", "401");
+            // 使用统一事件发射器发送错误（前端监听 stream-event）
+            let error_emitter = StreamEventEmitter::new(app.clone());
+            let msg = e.to_string();
+            let reason = match e {
+                ApiError::Unauthorized | ApiError::QuotaExceeded => {
+                    StopReason::Error
                 }
-                api::ApiError::QuotaExceeded => {
-                    let _ = app.emit("stream-error", "429");
-                }
-                _ => {
-                    let _ = app.emit("stream-error", err_str);
-                }
-            }
+                _ => StopReason::Error,
+            };
+            error_emitter.error(reason, &msg, "");
         }
     }
 
@@ -136,7 +147,7 @@ pub async fn send_message(
 pub async fn stop_generation(state: State<'_, CancelState>) -> Result<(), String> {
     if let Some(sender) = state.sender.lock().unwrap().as_ref() {
         info!("[stop_generation] 用户取消生成");
-        sender.send(true).ok(); // 发送取消信号，忽略无接收者的情况
+        sender.send(true).ok();
     }
     Ok(())
 }
@@ -176,27 +187,17 @@ pub async fn save_config(app: tauri::AppHandle, config: AppConfig) -> Result<(),
 
 /// 获取模型列表命令
 ///
-/// 调用 api::fetch_models 获取原始数据，转换为内部 ModelInfo 结构。
+/// 根据 Provider 类型调用对应适配器的 fetch_models。
 /// 注意：context_window 使用默认值 128000，latency_ms 初始为 None。
 #[tauri::command]
-pub async fn fetch_models(base_url: String, api_key: String) -> Result<Vec<ModelInfo>, String> {
-    let raw_models = api::fetch_models(&base_url, &api_key).await?;
-
-    let models: Vec<ModelInfo> = raw_models
-        .iter()
-        .filter_map(|m| {
-            let id = m["id"].as_str()?; // 跳过无 id 字段的模型
-            Some(ModelInfo {
-                id: id.to_string(),
-                provider_id: String::new(), // 由前端填写所属 provider_id
-                display_name: id.to_string(),
-                context_window: 128000,  // 默认上下文窗口
-                latency_ms: None,        // 尚未测速
-            })
-        })
-        .collect();
-
-    Ok(models)
+pub async fn fetch_models(
+    base_url: String,
+    api_key: String,
+    provider_type: Option<String>,
+) -> Result<Vec<ModelInfo>, String> {
+    let pt = ProviderType::from_str(&provider_type.unwrap_or_default());
+    let llm_provider = providers::create_provider(&pt);
+    llm_provider.fetch_models(&base_url, &api_key).await
 }
 
 /// 测试延迟命令
@@ -207,8 +208,11 @@ pub async fn test_latency(
     base_url: String,
     api_key: String,
     model_id: String,
+    provider_type: Option<String>,
 ) -> Result<u32, String> {
-    api::test_latency(&base_url, &api_key, &model_id).await
+    let pt = ProviderType::from_str(&provider_type.unwrap_or_default());
+    let llm_provider = providers::create_provider(&pt);
+    llm_provider.test_latency(&base_url, &api_key, &model_id).await
 }
 
 /// 加载历史消息命令
@@ -228,9 +232,6 @@ pub async fn load_messages(
 /// 将单条消息追加到本地存储分块文件中。
 /// 若当前分块已满则自动创建新分块，并更新 manifest 计数。
 #[tauri::command]
-pub async fn save_message(
-    app: tauri::AppHandle,
-    message: Message,
-) -> Result<(), String> {
+pub async fn save_message(app: tauri::AppHandle, message: Message) -> Result<(), String> {
     storage::append_message(&app, &message).map_err(|e| format!("保存消息失败: {}", e))
 }

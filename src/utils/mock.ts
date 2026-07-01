@@ -33,8 +33,9 @@ export const MOCK_CONFIG: AppConfig = {
       id: 'deepseek',
       name: 'DeepSeek',
       base_url: 'https://api.deepseek.com/v1',
-      api_key: 'sk-mock-xxxxxxxxxxxxxxxx', // 模拟 API Key
+      api_key: 'sk-mock-xxxxxxxxxxxxxxxx',
       enabled_model_ids: ['deepseek-chat'],
+      provider_type: 'openai_compatible',
     },
   ],
   models: [

@@ -1,15 +1,12 @@
 import { memo } from 'react';
 import { CornerUpLeft } from 'lucide-react';
-import type { Message } from '@/types';
+import type { Message, ContentBlock } from '@/types';
 import { parseThinkBlocks } from '@/utils/thinkParser';
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { ThinkSection } from './ThinkSection';
 
 /**
  * MessageBubble 组件的 Props
- * @param message - 要渲染的消息对象，包含角色和内容
- * @param isStreaming - 是否正在流式输出中，用于显示光标动画
- * @param questionId - 此回答对应的用户问题的 DOM id，用于"回到问题"按钮
  */
 interface MessageBubbleProps {
   message: Message;
@@ -18,13 +15,85 @@ interface MessageBubbleProps {
 }
 
 /**
- * 消息气泡组件
- * 根据消息角色（user/assistant）渲染不同样式的聊天气泡。
- * 用户消息右对齐，带品牌色背景；AI 消息左对齐，使用流式增量 Markdown 渲染。
- * AI 流式输出时会在末尾显示闪烁光标。
- * 非流式 AI 消息末尾显示「回到问题」按钮，点击跳转到对应的问题位置。
+ * 渲染 AI 助手消息的内容区域
  *
- * 使用 React.memo + 自定义比较函数防止不必要的重渲染。
+ * 优先级：
+ * 1. 如果 message.blocks 存在（v2.0 结构化格式），直接用 blocks 渲染
+ * 2. 否则回退到旧的 <think> 标签解析（v1.0 兼容）
+ */
+function AssistantContent({ message, isStreaming }: { message: Message; isStreaming: boolean }) {
+  // ── v2.0: 结构化 blocks 渲染 ──
+  if (message.blocks && message.blocks.length > 0) {
+    return (
+      <>
+        {message.blocks.map((block: ContentBlock, i: number) => {
+          const isLast = i === message.blocks!.length - 1;
+          if (block.type === 'thinking') {
+            const thinkStreaming = isLast && block.is_open && isStreaming;
+            return (
+              <ThinkSection
+                key={`block-think-${i}`}
+                content={block.content}
+                isStreaming={thinkStreaming}
+                defaultExpanded={thinkStreaming}
+              />
+            );
+          }
+          // text block
+          return (
+            <StreamingMarkdown
+              key={`block-text-${i}`}
+              content={block.content}
+              isStreaming={isLast && isStreaming}
+            />
+          );
+        })}
+        {isStreaming && <span className="buddy-cursor" />}
+      </>
+    );
+  }
+
+  // ── v1.0: 旧格式 <think> 标签解析（向后兼容）──
+  const segments = parseThinkBlocks(message.content);
+  if (segments.length === 0 || (segments.length === 1 && segments[0].type === 'text')) {
+    return (
+      <>
+        <StreamingMarkdown content={message.content} isStreaming={isStreaming} />
+        {isStreaming && <span className="buddy-cursor" />}
+      </>
+    );
+  }
+
+  return (
+    <>
+      {segments.map((seg, i) => {
+        const isLast = i === segments.length - 1;
+        if (seg.type === 'think') {
+          const thinkStreaming = isLast && seg.isOpen && isStreaming;
+          return (
+            <ThinkSection
+              key={`think-${i}`}
+              content={seg.content}
+              isStreaming={thinkStreaming}
+              defaultExpanded={thinkStreaming}
+            />
+          );
+        }
+        return (
+          <StreamingMarkdown
+            key={`text-${i}`}
+            content={seg.content}
+            isStreaming={isLast && isStreaming}
+          />
+        );
+      })}
+      {isStreaming && <span className="buddy-cursor" />}
+    </>
+  );
+}
+
+/**
+ * 消息气泡组件
  */
 export const MessageBubble = memo(function MessageBubble({
   message,
@@ -79,43 +148,7 @@ export const MessageBubble = memo(function MessageBubble({
           <span>{message.content}</span>
         ) : (
           <>
-            {(() => {
-              const segments = parseThinkBlocks(message.content);
-              // 无 think 标签 → 沿用原有渲染路径
-              if (segments.length === 0 || (segments.length === 1 && segments[0].type === 'text')) {
-                return (
-                  <StreamingMarkdown
-                    content={message.content}
-                    isStreaming={isStreaming}
-                  />
-                );
-              }
-              // 有 think 标签 → 分段渲染
-              return segments.map((seg, i) => {
-                const isLast = i === segments.length - 1;
-                if (seg.type === 'think') {
-                  const thinkStreaming = isLast && seg.isOpen && isStreaming;
-                  return (
-                    <ThinkSection
-                      key={`think-${i}`}
-                      content={seg.content}
-                      isStreaming={thinkStreaming}
-                      defaultExpanded={thinkStreaming}
-                    />
-                  );
-                }
-                return (
-                  <StreamingMarkdown
-                    key={`text-${i}`}
-                    content={seg.content}
-                    isStreaming={isLast && isStreaming}
-                  />
-                );
-              });
-            })()}
-            {/* 流式输出中的闪烁光标 — 始终在所有内容末尾 */}
-            {isStreaming && <span className="buddy-cursor" />}
-            {/* 回答完成且关联了问题：显示"回到问题"按钮 */}
+            <AssistantContent message={message} isStreaming={isStreaming} />
             {!isStreaming && questionId && message.content && (
               <button
                 onClick={handleBackToQuestion}
@@ -157,6 +190,7 @@ export const MessageBubble = memo(function MessageBubble({
   return (
     prevProps.message.id === nextProps.message.id &&
     prevProps.message.content === nextProps.message.content &&
+    prevProps.message.blocks === nextProps.message.blocks &&
     prevProps.isStreaming === nextProps.isStreaming &&
     prevProps.questionId === nextProps.questionId
   );
