@@ -13,7 +13,7 @@ import { PROVIDER_PRESETS } from '@/types';
 interface SettingsPageProps {
   onBack: () => void;
 }
-import type { ModelInfo, ProviderConfig } from '@/types';
+import type { ModelInfo, ProviderConfig, ProviderType } from '@/types';
 
 /* ── SettingsPage ──────────────────────────────────────── */
 
@@ -437,7 +437,7 @@ interface AddProviderPageProps {
  * 添加模型子页面内容组件
  *
  * 在设置页中通过 SlideInPanel 滑入展示，提供完整的 Provider 配置流程：
- * 1. 选择预设 Provider（如 DeepSeek、OpenAI 等）或自定义兼容服务
+ * 1. 选择预设 Provider（如 DeepSeek、Anthropic 等）或自定义兼容服务
  * 2. 填写 Base URL 和 API Key
  * 3. 获取模型列表并勾选需要启用的模型
  * 4. 可选地对首个模型进行延迟测速
@@ -453,6 +453,13 @@ function AddProviderPageContent({ onBack }: AddProviderPageProps) {
   const [selectedModelIds, setSelectedModelIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 自定义 provider 的类型选择
+  const [customProviderType, setCustomProviderType] = useState<ProviderType>('openai_compatible');
+
+  /** 获取当前有效的 provider_type */
+  const effectiveProviderType: ProviderType = selectedPreset === 'custom'
+    ? customProviderType
+    : (PROVIDER_PRESETS.find((p) => p.id === selectedPreset)?.provider_type || 'openai_compatible');
 
   /** 选择预设 Provider，自动填充其默认 Base URL */
   const handleSelectPreset = (presetId: string) => {
@@ -467,7 +474,11 @@ function AddProviderPageContent({ onBack }: AddProviderPageProps) {
     setLoading(true);
     setError(null);
     try {
-      const models = await invoke<ModelInfo[]>('fetch_models', { baseUrl, apiKey });
+      const models = await invoke<ModelInfo[]>('fetch_models', {
+        baseUrl,
+        apiKey,
+        providerType: effectiveProviderType,
+      });
       if (models.length === 0) {
         setError('未获取到模型列表（该厂商可能不支持 /models 端点）');
         return;
@@ -491,9 +502,11 @@ function AddProviderPageContent({ onBack }: AddProviderPageProps) {
     const firstModel = fetchedModels[0];
     try {
       const latency = await invoke<number>('test_latency', {
-        baseUrl, apiKey, modelId: firstModel.id,
+        baseUrl,
+        apiKey,
+        modelId: firstModel.id,
+        providerType: effectiveProviderType,
       });
-      // 将测速结果写入对应模型的 latency_ms 字段
       setFetchedModels((prev) =>
         prev.map((m) => (m.id === firstModel.id ? { ...m, latency_ms: latency } : m)),
       );
@@ -515,6 +528,8 @@ function AddProviderPageContent({ onBack }: AddProviderPageProps) {
         base_url: baseUrl,
         api_key: apiKey,
         enabled_model_ids: Array.from(selectedModelIds),
+        provider_type: effectiveProviderType,
+        compat: undefined, // 自定义 provider 使用默认 compat
       };
       const modelsToAdd = fetchedModels
         .filter((m) => selectedModelIds.has(m.id))
@@ -534,6 +549,8 @@ function AddProviderPageContent({ onBack }: AddProviderPageProps) {
       base_url: baseUrl,
       api_key: apiKey,
       enabled_model_ids: Array.from(selectedModelIds),
+      provider_type: preset.provider_type,
+      compat: preset.compat, // 应用预设的 compat 配置
     };
     const modelsToAdd = fetchedModels.filter((m) => selectedModelIds.has(m.id));
 
@@ -633,6 +650,7 @@ function AddProviderPageContent({ onBack }: AddProviderPageProps) {
               iconLetter={preset.icon_letter}
               active={selectedPreset === preset.id}
               onSelect={() => handleSelectPreset(preset.id)}
+              providerType={preset.provider_type}
             />
           ))}
         </div>
@@ -651,8 +669,112 @@ function AddProviderPageContent({ onBack }: AddProviderPageProps) {
             padding: 0,
           }}
         >
-          + 自定义 OpenAI 兼容服务
+          + 自定义兼容服务
         </button>
+
+        {/* 自定义 Provider 类型选择（仅自定义时显示） */}
+        {selectedPreset === 'custom' && (
+          <>
+            <div>
+              <label className="t-body-sm" style={{ display: 'block', color: 'var(--text-muted)', marginBottom: 'var(--space-1)' }}>
+                Provider 类型
+              </label>
+              <select
+                value={effectiveProviderType}
+                onChange={(e) => {
+                  setCustomProviderType(e.target.value as ProviderType);
+                }}
+                style={{
+                  width: '100%',
+                  padding: 'var(--space-2) var(--space-3)',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--border-default)',
+                  background: 'var(--bg-sunken)',
+                  color: 'var(--text-primary)',
+                  fontFamily: 'var(--font-sans)',
+                  fontSize: '13px',
+                  outline: 'none',
+                }}
+              >
+                <option value="openai_compatible">OpenAI 兼容 (chat/completions)</option>
+                <option value="anthropic">Anthropic (messages API)</option>
+              </select>
+            </div>
+            {/* 自定义 Provider 的 compat 配置 */}
+            <details style={{ fontSize: '12px' }}>
+              <summary style={{ cursor: 'pointer', color: 'var(--text-muted)', marginBottom: 'var(--space-2)' }}>
+                兼容性配置 (Compat)
+              </summary>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', paddingLeft: 'var(--space-2)' }}>
+                {effectiveProviderType === 'openai_compatible' && (
+                  <>
+                    <label className="t-caption" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      Thinking 格式
+                      <select
+                        defaultValue="openai"
+                        style={{
+                          padding: '2px 6px', borderRadius: 'var(--radius-sm)',
+                          border: '1px solid var(--border-default)',
+                          background: 'var(--bg-sunken)', color: 'var(--text-primary)',
+                          fontSize: '11px', fontFamily: 'var(--font-sans)',
+                        }}
+                      >
+                        <option value="openai">openai (reasoning_effort)</option>
+                        <option value="deepseek">deepseek (thinking type)</option>
+                        <option value="openrouter">openrouter (reasoning effort)</option>
+                        <option value="qwen">qwen (enable_thinking)</option>
+                        <option value="together">together (reasoning enabled)</option>
+                        <option value="zai">zai (thinking type)</option>
+                      </select>
+                    </label>
+                    <label className="t-caption" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      Max Tokens 字段
+                      <select
+                        defaultValue="max_tokens"
+                        style={{
+                          padding: '2px 6px', borderRadius: 'var(--radius-sm)',
+                          border: '1px solid var(--border-default)',
+                          background: 'var(--bg-sunken)', color: 'var(--text-primary)',
+                          fontSize: '11px', fontFamily: 'var(--font-sans)',
+                        }}
+                      >
+                        <option value="max_tokens">max_tokens</option>
+                        <option value="max_completion_tokens">max_completion_tokens</option>
+                      </select>
+                    </label>
+                  </>
+                )}
+              </div>
+            </details>
+          </>
+        )}
+
+        {/* 选中预设时显示 compat 信息 */}
+        {selectedPreset && selectedPreset !== 'custom' && (() => {
+          const preset = PROVIDER_PRESETS.find(p => p.id === selectedPreset);
+          if (!preset?.compat || Object.keys(preset.compat).length === 0) return null;
+          return (
+            <div style={{
+              padding: 'var(--space-2) var(--space-3)',
+              borderRadius: 'var(--radius-md)',
+              background: 'var(--bg-sunken)',
+              fontSize: '11px',
+              color: 'var(--text-muted)',
+              fontFamily: 'var(--font-mono)',
+              lineHeight: 1.6,
+            }}>
+              <div style={{ fontWeight: 600, marginBottom: 'var(--space-1)', color: 'var(--text-secondary)' }}>
+                Compat 预设:
+              </div>
+              {preset.compat.thinking_format && <div>thinking_format: {preset.compat.thinking_format}</div>}
+              {preset.compat.max_tokens_field && <div>max_tokens_field: {preset.compat.max_tokens_field}</div>}
+              {preset.compat.supports_store === false && <div>supports_store: false</div>}
+              {preset.compat.supports_developer_role === false && <div>supports_developer_role: false</div>}
+              {preset.compat.supports_stream_options_usage === false && <div>supports_stream_options_usage: false</div>}
+              {preset.compat.supports_temperature === false && <div>supports_temperature: false</div>}
+            </div>
+          );
+        })()}
 
         {/* Base URL 输入 */}
         <div>

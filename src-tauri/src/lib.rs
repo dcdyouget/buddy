@@ -17,11 +17,12 @@ pub struct LastShowTime(pub Mutex<Instant>);
 /// 记录用户拖拽后的窗口位置（物理像素），key 为显示器 (x,y)，value 为窗口位置 (x,y)
 pub struct SavedWindowPositions(pub Mutex<std::collections::HashMap<(i32, i32), (i32, i32)>>);
 
-mod api;
 mod commands;
 mod hotkey;
 mod models;
+mod providers;
 mod storage;
+mod streaming;
 
 /// macOS 平台：模拟 Cmd+C 复制当前选中文本（Bob 风格取词）
 ///

@@ -10,14 +10,14 @@ interface ProviderCardProps {
   active: boolean;
   /** 点击选中该提供商的回调 */
   onSelect: () => void;
+  /** 提供商类型标签（可选） */
+  providerType?: string;
 }
 
 /**
  * 提供商卡片
  * 在设置页的提供商列表中渲染单个提供商的卡片按钮。
- * - 激活状态：蓝色边框 + 浅蓝背景 + 实心图标 + 加粗文字
- * - 非激活状态：细边框 + 白色背景 + 灰色图标 + 常规文字
- * - 图标区显示首字母，使用品牌色作为背景色
+ * 显示名称、图标和提供商类型标签。
  */
 export function ProviderCard({
   id: _id,
@@ -25,6 +25,7 @@ export function ProviderCard({
   iconLetter,
   active,
   onSelect,
+  providerType,
 }: ProviderCardProps) {
   return (
     <button
@@ -37,7 +38,6 @@ export function ProviderCard({
         gap: 'var(--space-2)',
         padding: 'var(--space-4)',
         borderRadius: 'var(--radius-lg)',
-        // 激活状态：品牌色边框 + 浅色背景
         border: active
           ? '1px solid var(--buddy-primary)'
           : '1px solid var(--border-subtle)',
@@ -46,21 +46,36 @@ export function ProviderCard({
           : 'var(--bg-elevated)',
         cursor: 'pointer',
         fontFamily: 'var(--font-sans)',
+        position: 'relative',
         transition: `all var(--duration-fast) var(--ease-standard)`,
       }}
     >
-      {/* 图标容器：激活时品牌色实心背景，否则灰色低调背景 */}
+      {/* 提供商类型标签（如 "Anthropic"） */}
+      {providerType && providerType !== 'openai_compatible' && (
+        <span
+          style={{
+            position: 'absolute',
+            top: '6px',
+            right: '6px',
+            padding: '1px 6px',
+            borderRadius: 'var(--radius-full)',
+            background: active ? 'var(--buddy-primary)' : 'var(--bg-sunken)',
+            color: active ? 'var(--text-on-primary)' : 'var(--text-muted)',
+            fontSize: '9px',
+            fontWeight: 600,
+            lineHeight: '16px',
+          }}
+        >
+          {providerType === 'anthropic' ? 'A' : providerType.slice(0, 3).toUpperCase()}
+        </span>
+      )}
       <div
         style={{
           width: 40,
           height: 40,
           borderRadius: 'var(--radius-md)',
-          background: active
-            ? 'var(--buddy-primary)'
-            : 'var(--bg-sunken)',
-          color: active
-            ? 'var(--text-on-primary)'
-            : 'var(--text-muted)',
+          background: active ? 'var(--buddy-primary)' : 'var(--bg-sunken)',
+          color: active ? 'var(--text-on-primary)' : 'var(--text-muted)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -70,7 +85,6 @@ export function ProviderCard({
       >
         {iconLetter}
       </div>
-      {/* 提供商名称：激活时品牌色 + 加粗，否则常规 */}
       <span
         className="t-body-sm"
         style={{

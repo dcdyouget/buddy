@@ -1,6 +1,7 @@
 // 数据模型模块：定义应用中所有核心数据结构，包括应用配置、Provider、模型信息、消息及持久化存储相关的结构体
 
 use serde::{Deserialize, Serialize};
+use crate::streaming::ContentBlock;
 
 /// 应用全局配置
 ///
@@ -45,8 +46,8 @@ pub enum Theme {
 
 /// API Provider 配置
 ///
-/// 一个 Provider 代表一个 OpenAI 兼容的 API 端点（如 OpenAI、DeepSeek 等）。
-/// 包含连接信息和该 Provider 下启用的模型 ID 列表。
+/// 一个 Provider 代表一个 AI 模型服务端点（OpenAI、Anthropic 等）。
+/// 包含连接信息、提供商类型、兼容性配置和该 Provider 下启用的模型 ID 列表。
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ProviderConfig {
     /// Provider 唯一标识
@@ -59,6 +60,190 @@ pub struct ProviderConfig {
     pub api_key: String,
     /// 该 Provider 下启用的模型 ID 列表
     pub enabled_model_ids: Vec<String>,
+    /// 提供商类型（openai_compatible / anthropic）
+    /// 用于选择正确的 API 适配器
+    #[serde(default = "default_provider_type")]
+    pub provider_type: String,
+    /// 兼容性配置（可选）：用于适配不同厂商的 API 差异
+    /// None 时使用 provider_type 对应的默认配置
+    #[serde(default)]
+    pub compat: Option<CompatConfig>,
+}
+
+/// 默认 Provider 类型（向后兼容旧配置）
+fn default_provider_type() -> String {
+    "openai_compatible".to_string()
+}
+
+// ── 兼容性配置（Compat）──────────────────────────────────
+
+/// 兼容性配置：适配不同模型厂商的 API 差异
+///
+/// 灵感来源于 pi-agent 的 OpenAICompletionsCompat / AnthropicMessagesCompat。
+/// 每个字段都是可选的，None 表示使用该 provider_type 的默认行为。
+///
+/// 不同厂商即使使用同一个 API 格式（如 OpenAI chat/completions），
+/// 在以下方面可能存在差异：
+/// - thinking/reasoning 参数格式
+/// - max_tokens 字段名
+/// - stream_options 支持情况
+/// - temperature 支持
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CompatConfig {
+    // ── 通用字段 ──
+
+    /// 思考/推理参数的发送格式
+    ///
+    /// - "openai" (默认): reasoning_effort 字段
+    /// - "deepseek": thinking: { type: "enabled"/"disabled" } + 可选 reasoning_effort
+    /// - "openrouter": reasoning: { effort: "..." }
+    /// - "qwen": enable_thinking: true/false
+    /// - "together": reasoning: { enabled: true/false } + 可选 reasoning_effort
+    /// - "zai": thinking: { type: "enabled"/"disabled" }
+    #[serde(default)]
+    pub thinking_format: Option<String>,
+
+    // ── OpenAI 兼容 API 字段 ──
+
+    /// 最大 token 数字段名
+    ///
+    /// - "max_tokens" (默认): 标准 OpenAI 字段
+    /// - "max_completion_tokens": 部分新 OpenAI 模型使用
+    #[serde(default)]
+    pub max_tokens_field: Option<String>,
+
+    /// 是否支持 stream_options: { include_usage: true }
+    /// 用于在流式响应中获取 token 用量统计
+    #[serde(default)]
+    pub supports_stream_options_usage: Option<bool>,
+
+    /// 是否支持 reasoning_effort 字段
+    /// 部分兼容厂商不支持此字段，即使使用 thinking_format 发送 thinking 参数
+    #[serde(default)]
+    pub supports_reasoning_effort: Option<bool>,
+
+    /// 是否支持 store 字段（OpenAI 的持久化存储功能）
+    #[serde(default)]
+    pub supports_store: Option<bool>,
+
+    /// 是否支持 developer 角色（替代 system 角色）
+    #[serde(default)]
+    pub supports_developer_role: Option<bool>,
+
+    // ── Anthropic API 字段 ──
+
+    /// 是否支持 temperature 参数
+    /// Claude Opus 4.7+ 拒绝非默认的 temperature 值
+    #[serde(default)]
+    pub supports_temperature: Option<bool>,
+
+    /// 是否支持长缓存保留（1h TTL）
+    #[serde(default)]
+    pub supports_long_cache_retention: Option<bool>,
+}
+
+impl CompatConfig {
+    /// 获取 thinking_format，带默认值回退
+    pub fn thinking_format(&self) -> &str {
+        self.thinking_format.as_deref().unwrap_or("openai")
+    }
+
+    /// 获取 max_tokens_field，带默认值回退
+    pub fn max_tokens_field(&self) -> &str {
+        self.max_tokens_field.as_deref().unwrap_or("max_tokens")
+    }
+
+    /// 获取 supports_stream_options_usage，带默认值回退
+    pub fn supports_stream_options_usage(&self) -> bool {
+        self.supports_stream_options_usage.unwrap_or(true)
+    }
+
+    /// 获取 supports_reasoning_effort，带默认值回退
+    pub fn supports_reasoning_effort(&self) -> bool {
+        self.supports_reasoning_effort.unwrap_or(true)
+    }
+
+    /// 获取 supports_temperature，带默认值回退
+    pub fn supports_temperature(&self) -> bool {
+        self.supports_temperature.unwrap_or(true)
+    }
+
+    /// 获取 supports_long_cache_retention，带默认值回退
+    pub fn supports_long_cache_retention(&self) -> bool {
+        self.supports_long_cache_retention.unwrap_or(true)
+    }
+}
+
+impl Default for CompatConfig {
+    fn default() -> Self {
+        Self {
+            thinking_format: None,
+            max_tokens_field: None,
+            supports_stream_options_usage: None,
+            supports_reasoning_effort: None,
+            supports_store: None,
+            supports_developer_role: None,
+            supports_temperature: None,
+            supports_long_cache_retention: None,
+        }
+    }
+}
+
+/// 内置 Provider Compat 预设
+///
+/// 为已知的模型厂商提供默认的兼容性配置。
+/// 用户添加 Provider 时自动应用对应预设。
+impl CompatConfig {
+    /// 根据 provider_id 获取默认 compat 预设
+    pub fn preset_for(provider_id: &str) -> Option<Self> {
+        match provider_id.to_lowercase().as_str() {
+            // DeepSeek: thinkingFormat=deepseek, 不支持 store/developer_role
+            "deepseek" => Some(Self {
+                thinking_format: Some("deepseek".into()),
+                supports_store: Some(false),
+                supports_developer_role: Some(false),
+                ..Default::default()
+            }),
+
+            // MiniMax: 标准 OpenAI 格式
+            "minimax" => Some(Self {
+                supports_stream_options_usage: Some(false),
+                ..Default::default()
+            }),
+
+            // GLM (智谱): thinkingFormat=qwen 风格
+            "glm" => Some(Self {
+                thinking_format: Some("qwen".into()),
+                supports_stream_options_usage: Some(false),
+                ..Default::default()
+            }),
+
+            // Kimi (月之暗面): 标准 OpenAI 格式，不使用 store
+            "kimi" => Some(Self {
+                supports_store: Some(false),
+                ..Default::default()
+            }),
+
+            // MiMo (小米): thinkingFormat=deepseek
+            "mimo" => Some(Self {
+                thinking_format: Some("deepseek".into()),
+                supports_store: Some(false),
+                ..Default::default()
+            }),
+
+            // Anthropic: 使用 supports_temperature (部分模型不支持)
+            "anthropic" => Some(Self {
+                supports_temperature: Some(true),
+                supports_long_cache_retention: Some(true),
+                ..Default::default()
+            }),
+
+            // OpenAI: 全默认
+            "openai" => Some(Self::default()),
+
+            _ => None,
+        }
+    }
 }
 
 /// 模型信息
@@ -85,8 +270,12 @@ pub struct Message {
     pub id: String,
     /// 消息角色（用户或助手）
     pub role: MessageRole,
-    /// 消息文本内容
+    /// 消息文本内容（含 <think> 标签的原始文本）
     pub content: String,
+    /// 结构化内容块（从 content 中解析 <think> 标签得到）
+    /// None 表示尚未解析（历史数据兼容）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocks: Option<Vec<ContentBlock>>,
     /// 生成该消息的模型 ID（用户消息可为 None）
     pub model_id: Option<String>,
     /// 消息创建时间戳（Unix 秒）

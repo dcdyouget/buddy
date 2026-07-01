@@ -30,6 +30,7 @@ export function StreamingPage() {
     isStreaming,
     streamingTokens,
     streamingModelId,
+    streamingBlocks,
   } = useChatStore();
   const { config } = useConfigStore();
 
@@ -109,15 +110,16 @@ export function StreamingPage() {
               msg.role === 'assistant' && i > 0 && messages[i - 1].role === 'user'
                 ? `msg-${messages[i - 1].id}`
                 : undefined;
+            const isLast = isStreaming && msg.role === 'assistant' && i === messages.length - 1;
+            // 流式过程中，将 live blocks 注入最后一条 assistant 消息用于渲染
+            const displayMsg = isLast && streamingBlocks.length > 0
+              ? { ...msg, blocks: streamingBlocks }
+              : msg;
             return (
               <MessageBubble
                 key={msg.id}
-                message={msg}
-                isStreaming={
-                  isStreaming &&
-                  msg.role === 'assistant' &&
-                  i === messages.length - 1
-                }
+                message={displayMsg}
+                isStreaming={isLast}
                 questionId={questionId}
               />
             );
