@@ -73,6 +73,9 @@ pub(crate) fn get_selected_text(_app: &tauri::AppHandle) {}
 ///
 /// 多屏场景下用户按下快捷键时期望窗口出现在当前聚焦的屏幕上。
 /// 此函数获取光标位置 → 找到包含光标的显示器 → 将窗口居中到该显示器。
+///
+/// macOS 下使用 NSWindow.setFrameOrigin: 同步设置窗口位置，
+/// 避免 Tauri set_position() 的异步 IPC 延迟导致 show() 时闪现旧位置。
 pub(crate) fn reposition_to_cursor_monitor(window: &tauri::WebviewWindow) {
     // 获取当前光标位置
     let cursor_pos = match window.cursor_position() {
@@ -107,8 +110,17 @@ pub(crate) fn reposition_to_cursor_monitor(window: &tauri::WebviewWindow) {
         },
     };
 
-    // 计算居中位置
     let m_pos = monitor.position();
+
+    // 防闪烁：窗口已在目标显示器上，跳过重定位
+    if let Ok(Some(current)) = window.current_monitor() {
+        let cp = current.position();
+        if cp.x == m_pos.x && cp.y == m_pos.y {
+            return;
+        }
+    }
+
+    // 计算居中位置
     let m_size = monitor.size();
     let w_size = match window.outer_size() {
         Ok(s) => s,
@@ -117,6 +129,22 @@ pub(crate) fn reposition_to_cursor_monitor(window: &tauri::WebviewWindow) {
 
     let x = m_pos.x + ((m_size.width as i32 - w_size.width as i32) / 2).max(0);
     let y = m_pos.y + ((m_size.height as i32 - w_size.height as i32) / 2).max(0);
+
+    // macOS：使用 NSWindow.setFrameOrigin: 同步设置位置，防止跨屏闪烁
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(ns_window_ptr) = window.ns_window() {
+            use objc2::msg_send;
+            use objc2::runtime::AnyObject;
+            use objc2_foundation::NSPoint;
+            unsafe {
+                let ns_window: *mut AnyObject = ns_window_ptr as *mut _;
+                let point = NSPoint::new(x as f64, y as f64);
+                let _: () = msg_send![ns_window, setFrameOrigin: point];
+            }
+            return;
+        }
+    }
 
     let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
 }

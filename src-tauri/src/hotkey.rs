@@ -33,6 +33,9 @@ pub fn register(app: &tauri::AppHandle, shortcut: Shortcut) {
                         crate::get_selected_text(app);
                         // 多屏适配：将窗口移到光标所在的显示器中心
                         crate::reposition_to_cursor_monitor(&window);
+                        // 等待一帧（~16ms），确保窗口服务器已应用新的 frame 再 show，
+                        // 避免跨屏时窗口在旧位置短暂闪现
+                        std::thread::sleep(std::time::Duration::from_millis(16));
                         let _ = window.show();
                         let _ = window.set_focus();
                     }
