@@ -7,7 +7,7 @@ import { GlassPanel } from '@/components/shared/GlassPanel';
 import { IconButton } from '@/components/shared/IconButton';
 import { InputDock } from '@/components/chat/InputDock';
 import { MessageBubble } from '@/components/chat/MessageBubble';
-import { handleDragStart } from '@/utils/windowDrag';
+import { useDragHandle } from '@/utils/windowDrag';
 import type { ModelInfo } from '@/types';
 
 /**
@@ -20,6 +20,7 @@ import type { ModelInfo } from '@/types';
  * 无 props —— 所需状态全部来自全局 store。
  */
 export function StreamingPage() {
+  const dragRef = useDragHandle();
   const { setPage } = useUIStore();
   const {
     messages,
@@ -48,7 +49,7 @@ export function StreamingPage() {
 
   return (
     <div
-      onMouseDown={handleDragStart}
+      ref={dragRef}
       style={{
         width: '100vw',
         height: '100vh',
@@ -69,9 +70,8 @@ export function StreamingPage() {
           position: 'relative',
         }}
       >
-        {/* 顶部拖拽区域：绝对定位浮动在内容上方，不占布局空间 */}
+        {/* 顶部：设置按钮（浮动，不占布局空间） */}
         <div
-          onMouseDown={handleDragStart}
           style={{
             position: 'absolute',
             top: 0,
@@ -104,18 +104,24 @@ export function StreamingPage() {
             padding: 'var(--space-6) 0 var(--space-4) 0',
           }}
         >
-          {messages.map((msg, i) => (
-            <MessageBubble
-              key={msg.id}
-              message={msg}
-              isStreaming={
-                // 仅当消息为 assistant 角色、是最后一条、且正在流式输出时标记为流式中
-                isStreaming &&
-                msg.role === 'assistant' &&
-                i === messages.length - 1
-              }
-            />
-          ))}
+          {messages.map((msg, i) => {
+            const questionId =
+              msg.role === 'assistant' && i > 0 && messages[i - 1].role === 'user'
+                ? `msg-${messages[i - 1].id}`
+                : undefined;
+            return (
+              <MessageBubble
+                key={msg.id}
+                message={msg}
+                isStreaming={
+                  isStreaming &&
+                  msg.role === 'assistant' &&
+                  i === messages.length - 1
+                }
+                questionId={questionId}
+              />
+            );
+          })}
         </div>
 
         {/* 底部输入区域：流式进行中，展示模型名称和 token 计数 */}

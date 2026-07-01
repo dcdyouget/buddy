@@ -1,12 +1,21 @@
 // 应用入口模块：负责窗口创建、快捷键注册、系统托盘、毛玻璃效果及圆角等核心初始化逻辑
 
 use commands::CancelState;
+use log::info;
+use std::sync::Mutex;
+use std::time::Instant;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager,
 };
 use tauri_plugin_global_shortcut::Shortcut;
+
+/// 记录窗口最后 show 的时间戳，用于失焦冷却
+pub struct LastShowTime(pub Mutex<Instant>);
+
+/// 记录用户拖拽后的窗口位置（物理像素），key 为显示器 (x,y)，value 为窗口位置 (x,y)
+pub struct SavedWindowPositions(pub Mutex<std::collections::HashMap<(i32, i32), (i32, i32)>>);
 
 mod api;
 mod commands;
@@ -111,26 +120,61 @@ pub(crate) fn reposition_to_cursor_monitor(window: &tauri::WebviewWindow) {
     };
 
     let m_pos = monitor.position();
-
-    // 防闪烁：窗口已在目标显示器上，跳过重定位
-    if let Ok(Some(current)) = window.current_monitor() {
-        let cp = current.position();
-        if cp.x == m_pos.x && cp.y == m_pos.y {
-            return;
-        }
-    }
-
-    // 计算居中位置
     let m_size = monitor.size();
     let w_size = match window.outer_size() {
         Ok(s) => s,
         Err(_) => return,
     };
+    let scale = monitor.scale_factor();
 
-    let x = m_pos.x + ((m_size.width as i32 - w_size.width as i32) / 2).max(0);
-    let y = m_pos.y + ((m_size.height as i32 - w_size.height as i32) / 2).max(0);
+    // 统一转换为逻辑坐标（点）
+    let m_x = m_pos.x as f64 / scale;
+    let m_y = m_pos.y as f64 / scale;
+    let m_w = m_size.width as f64 / scale;
+    let m_h = m_size.height as f64 / scale;
+    let w_w = w_size.width as f64 / scale;
+    let w_h = w_size.height as f64 / scale;
 
-    // macOS：使用 NSWindow.setFrameOrigin: 同步设置位置，防止跨屏闪烁
+    // 默认：屏幕居中。如果用户拖动过窗口，则使用记住的位置
+    let mut x = m_x + (m_w - w_w) / 2.0;
+    let mut y = m_y + (m_h - w_h) / 2.0;
+
+    // 检查是否有用户记住的位置（同一显示器）
+    {
+        let saved = window
+            .app_handle()
+            .try_state::<SavedWindowPositions>()
+            .and_then(|s| s.0.lock().ok().and_then(|map| map.get(&(m_pos.x, m_pos.y)).copied()));
+        if let Some((sx, sy)) = saved {
+            // 确保记住的位置仍在当前屏幕范围内
+            let sxf = sx as f64 / scale;
+            let syf = sy as f64 / scale;
+            if sxf >= m_x && sxf + w_w <= m_x + m_w && syf >= m_y && syf + w_h <= m_y + m_h {
+                x = sxf;
+                y = syf;
+                log::info!("[reposition] using saved position: ({:.0},{:.0}) logical", x, y);
+            }
+        }
+    }
+
+    // macOS 坐标系转换：(0,0) 在主屏左下角，需要把我们的左上角 Y 转成左下角 Y
+    // 公式：macos_y = 主屏逻辑高度 - 左上角_y - 窗口逻辑高度
+    #[cfg(target_os = "macos")]
+    let macos_y = {
+        let primary_logical_h = window
+            .primary_monitor()
+            .ok()
+            .flatten()
+            .map(|m| m.size().height as f64 / m.scale_factor())
+            .unwrap_or(m_y + m_h); // 回退：用目标屏幕的底边
+        primary_logical_h - y - w_h
+    };
+    #[cfg(not(target_os = "macos"))]
+    let macos_y = 0.0_f64;
+
+    info!("[reposition] final logical pos=({:.0},{:.0}) macosY={:.0}, win_logical=({:.0}x{:.0})", x, y, macos_y, w_w, w_h);
+
+    // macOS：使用 NSWindow.setFrameOrigin: 同步设置位置（macOS 左下角坐标），防止跨屏闪烁
     #[cfg(target_os = "macos")]
     {
         if let Ok(ns_window_ptr) = window.ns_window() {
@@ -139,14 +183,31 @@ pub(crate) fn reposition_to_cursor_monitor(window: &tauri::WebviewWindow) {
             use objc2_foundation::NSPoint;
             unsafe {
                 let ns_window: *mut AnyObject = ns_window_ptr as *mut _;
-                let point = NSPoint::new(x as f64, y as f64);
+                let point = NSPoint::new(x, macos_y);
                 let _: () = msg_send![ns_window, setFrameOrigin: point];
             }
             return;
         }
     }
 
-    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+    // 非 macOS 回退：Tauri API 需要物理像素
+    let _ = window.set_position(tauri::PhysicalPosition::new(
+        (x * scale) as i32,
+        (y * scale) as i32,
+    ));
+}
+
+/// 标记窗口刚被 show，更新失焦冷却时间戳
+///
+/// 在 hotkey/tray 等所有 show 窗口的入口处调用，
+/// 防止 Focused(false) 事件在 show 后 200ms 内误隐藏窗口（跨屏呼出时常见）。
+pub(crate) fn mark_window_shown(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<LastShowTime>() {
+        if let Ok(mut t) = state.0.lock() {
+            *t = Instant::now();
+            log::info!("[mark_window_shown] timestamp updated");
+        }
+    }
 }
 
 /// 应用主入口 run 函数：配置并启动整个 Tauri 应用
@@ -171,6 +232,10 @@ pub fn run() {
         .manage(hotkey::HotkeyState {
             current: std::sync::Mutex::new(None),
         })
+        // 记录窗口 show 时间戳，用于失焦冷却（防跨屏呼出时被误隐藏）
+        .manage(LastShowTime(Mutex::new(Instant::now())))
+        // 记录用户拖拽后的窗口位置（按显示器记忆）
+        .manage(SavedWindowPositions(Mutex::new(std::collections::HashMap::new())))
         .setup(|app| {
             // 从磁盘加载用户配置，沿用默认值作为兜底
             let config = storage::get_config(app.handle())
@@ -210,6 +275,7 @@ pub fn run() {
                         if let Some(window) = app.get_webview_window("main") {
                             reposition_to_cursor_monitor(&window);
                             let _ = window.show();
+                            mark_window_shown(app);
                             let _ = window.set_focus();
                         }
                     }
@@ -232,6 +298,7 @@ pub fn run() {
                         if let Some(window) = app.get_webview_window("main") {
                             reposition_to_cursor_monitor(&window);
                             let _ = window.show();
+                            mark_window_shown(app);
                             let _ = window.set_focus();
                         }
                     }
@@ -279,9 +346,43 @@ pub fn run() {
             commands::save_message,
         ])
         // 窗口失焦时自动隐藏（实现「点击外部关闭」行为）
+        // 加 200ms 冷却：防止跨屏呼出时 show/setFocus 之间 macOS 短暂失焦导致窗口被误隐藏
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Focused(false) = event {
-                let _ = window.hide();
+            match event {
+                tauri::WindowEvent::Focused(false) => {
+                    let now = std::time::Instant::now();
+                    let last_show = window
+                        .app_handle()
+                        .try_state::<LastShowTime>()
+                        .and_then(|s| s.0.lock().ok().map(|t| *t));
+                    let in_cooldown = last_show
+                        .map(|t| now.duration_since(t) < std::time::Duration::from_millis(200))
+                        .unwrap_or(false);
+                    log::info!(
+                        "[on_window_event] Focused(false), in_cooldown={}, last_show={:?}",
+                        in_cooldown,
+                        last_show.map(|t| format!("{:?} ago", now.duration_since(t)))
+                    );
+                    if in_cooldown {
+                        return;
+                    }
+                    // 隐藏前保存窗口位置（用户可能拖拽过），下次同屏呼出时恢复
+                    if let Ok(pos) = window.outer_position() {
+                        if let Ok(Some(mon)) = window.current_monitor() {
+                            let mp = mon.position();
+                            if let Some(state) = window.app_handle().try_state::<SavedWindowPositions>() {
+                                if let Ok(mut map) = state.0.lock() {
+                                    map.insert((mp.x, mp.y), (pos.x, pos.y));
+                                    log::info!("[on_window_event] saved pos=({},{}) for monitor=({},{})", pos.x, pos.y, mp.x, mp.y);
+                                }
+                            }
+                        }
+                    }
+                    log::info!("[on_window_event] hiding window");
+                    let _ = window.hide();
+                    log::info!("[on_window_event] hidden, visible={}", window.is_visible().unwrap_or(false));
+                }
+                _ => {}
             }
         })
         .run(tauri::generate_context!())
