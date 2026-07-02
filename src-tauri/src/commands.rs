@@ -21,6 +21,62 @@ pub struct CancelState {
     pub sender: Mutex<Option<watch::Sender<bool>>>,
 }
 
+// ── 滑动窗口辅助函数 ──
+
+/// 估算文本的 token 数量（字符级启发式算法）
+///
+/// 公式: `chars().count() / 3`，最少返回 1
+///
+/// 对于中英文混合文本，这是一个合理的保守估算：
+/// - 英文约 4 字符/token → 可能高估约 25%
+/// - 中文约 1-2 字符/token → 可能低估约 30%
+/// - 30% 的预算余量可以吸收估算误差
+fn estimate_tokens(text: &str) -> u32 {
+    let count = text.chars().count() as u32;
+    if count == 0 {
+        return 0;
+    }
+    (count / 3).max(1)
+}
+
+/// 估算消息列表的总 token 数
+fn estimate_total_tokens(messages: &[Message]) -> u32 {
+    messages.iter().map(|m| estimate_tokens(&m.content)).sum()
+}
+
+/// 计算滑动窗口的起始索引
+///
+/// 从最新消息开始向前累加 token 估算值，预算耗尽时停止。
+/// 返回可保留的最老消息的索引，调用方使用 `&messages[start..]`。
+///
+/// 保证最后一条消息（当前用户输入）永不被丢弃。
+fn compute_window_start(messages: &[Message], token_budget: u32) -> usize {
+    if messages.is_empty() {
+        return 0;
+    }
+
+    let mut remaining = token_budget;
+    let mut start = messages.len();
+
+    // 从最新到最老遍历
+    for i in (0..messages.len()).rev() {
+        let cost = estimate_tokens(&messages[i].content);
+        if remaining >= cost {
+            remaining -= cost;
+            start = i;
+        } else {
+            break;
+        }
+    }
+
+    // 安全网：永远不丢弃最后一条消息
+    if start == messages.len() {
+        start = messages.len() - 1;
+    }
+
+    start
+}
+
 /// 发送消息命令
 ///
 /// 前端调用此命令发起 AI 对话。后端根据 Provider 类型分发到对应适配器：
@@ -55,12 +111,43 @@ pub async fn send_message(
     let provider_type = ProviderType::from_str(&provider.provider_type);
 
     info!(
-        "[send_message] model={}, provider={}, type={:?}, history_len={}",
+        "[send_message] model={}, provider={}, type={:?}, history_len={}, est_tokens={}, context_window={}",
         model_id,
         provider.id,
         provider_type,
-        messages.len()
+        messages.len(),
+        estimate_total_tokens(&messages),
+        model.context_window,
     );
+
+    // ── 滑动窗口：保留 70% context_window 以内的最近消息 ──
+    let budget = ((model.context_window as f64) * 0.7_f64) as u32;
+    let full_est = estimate_total_tokens(&messages);
+    let start_idx = compute_window_start(&messages, budget);
+    let windowed_messages = &messages[start_idx..];
+    let windowed_est = estimate_total_tokens(windowed_messages);
+
+    if start_idx > 0 {
+        warn!(
+            "[send_message] 滑动窗口裁剪: 保留 {}/{} 条消息, est_tokens={}/{}, budget={}/{}, dropped={}条, oldest_kept_idx={}",
+            windowed_messages.len(),
+            messages.len(),
+            windowed_est,
+            full_est,
+            budget,
+            model.context_window,
+            start_idx,
+            start_idx,
+        );
+    } else {
+        info!(
+            "[send_message] 滑动窗口: 无需裁剪, est_tokens={}/{}, budget={}, messages={}",
+            full_est,
+            model.context_window,
+            budget,
+            messages.len(),
+        );
+    }
 
     // 持久化用户消息（messages 最后一条是新发送的用户消息）
     if let Some(user_msg) = messages.last() {
@@ -90,7 +177,7 @@ pub async fn send_message(
             &provider.base_url,
             &provider.api_key,
             &model_id,
-            &messages,
+            windowed_messages,
             &emitter,
             cancel_rx,
             compat,
@@ -188,7 +275,7 @@ pub async fn save_config(app: tauri::AppHandle, config: AppConfig) -> Result<(),
 /// 获取模型列表命令
 ///
 /// 根据 Provider 类型调用对应适配器的 fetch_models。
-/// 注意：context_window 使用默认值 128000，latency_ms 初始为 None。
+/// context_window 通过已知模型映射表获取，未知模型默认 128000。
 #[tauri::command]
 pub async fn fetch_models(
     base_url: String,
@@ -234,4 +321,104 @@ pub async fn load_messages(
 #[tauri::command]
 pub async fn save_message(app: tauri::AppHandle, message: Message) -> Result<(), String> {
     storage::append_message(&app, &message).map_err(|e| format!("保存消息失败: {}", e))
+}
+
+// ── 测试 ──
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_msg(content: &str) -> Message {
+        Message {
+            id: uuid::Uuid::new_v4().to_string(),
+            role: MessageRole::User,
+            content: content.to_string(),
+            blocks: None,
+            model_id: None,
+            created_at: 0,
+        }
+    }
+
+    // ── estimate_tokens ──
+
+    #[test]
+    fn test_estimate_tokens_empty() {
+        assert_eq!(estimate_tokens(""), 0);
+    }
+
+    #[test]
+    fn test_estimate_tokens_single_char() {
+        assert_eq!(estimate_tokens("a"), 1); // 1/3=0, .max(1)=1
+        assert_eq!(estimate_tokens("中"), 1);
+    }
+
+    #[test]
+    fn test_estimate_tokens_english() {
+        // "Hello world" = 11 chars → 11/3 = 3
+        assert_eq!(estimate_tokens("Hello world"), 3);
+        // 30 chars → 10 tokens
+        assert_eq!(estimate_tokens("abcdefghijklmnopqrstuvwxyzabcd"), 10);
+    }
+
+    #[test]
+    fn test_estimate_tokens_chinese() {
+        // "你好世界" = 4 chars → 4/3 = 1
+        assert_eq!(estimate_tokens("你好世界"), 1);
+        // 12 Chinese chars → 4 tokens
+        assert_eq!(estimate_tokens("这是一段比较长的中文文本内容"), 4);
+    }
+
+    // ── compute_window_start ──
+
+    #[test]
+    fn test_window_empty() {
+        assert_eq!(compute_window_start(&[], 1000), 0);
+    }
+
+    #[test]
+    fn test_window_all_fit() {
+        let msgs = vec![make_msg("hi"), make_msg("hello"), make_msg("hey")];
+        // 3 messages × ~1 token each → well within 100 budget
+        assert_eq!(compute_window_start(&msgs, 100), 0);
+    }
+
+    #[test]
+    fn test_window_trims_from_front() {
+        let msgs: Vec<Message> = (0..12).map(|i| make_msg(&format!("msg{}", i))).collect();
+        // Each msg: "msg0"=4 chars → 1 token. 12 msgs = ~12 tokens.
+        // Budget of 5 → should keep ~5 most recent messages.
+        let start = compute_window_start(&msgs, 5);
+        assert!(start > 0, "should have dropped some messages");
+        assert!(start <= 7, "should keep at least 5 messages");
+        // Verify last message is always included
+        assert!(start < msgs.len());
+    }
+
+    #[test]
+    fn test_window_keeps_last_message_when_over_budget() {
+        let msgs = vec![
+            make_msg("short"),
+            make_msg("a very long message that exceeds the budget all by itself"),
+        ];
+        // Budget is tiny, even the last message exceeds it
+        let start = compute_window_start(&msgs, 1);
+        // Should keep the last message (index 1)
+        assert_eq!(start, 1);
+    }
+
+    #[test]
+    fn test_window_budget_zero() {
+        let msgs = vec![make_msg("a"), make_msg("b"), make_msg("c")];
+        let start = compute_window_start(&msgs, 0);
+        // Budget zero → only the last message is kept
+        assert_eq!(start, msgs.len() - 1);
+    }
+
+    #[test]
+    fn test_window_single_message() {
+        let msgs = vec![make_msg("solo")];
+        assert_eq!(compute_window_start(&msgs, 1), 0);
+        assert_eq!(compute_window_start(&msgs, 0), 0); // kept anyway
+    }
 }

@@ -14,7 +14,7 @@
 // 参考：https://docs.anthropic.com/en/api/messages-streaming
 
 use super::{ApiError, LlmProvider};
-use crate::models::{CompatConfig, Message, MessageRole, ModelInfo};
+use crate::models::{get_context_window, CompatConfig, Message, MessageRole, ModelInfo};
 use crate::streaming::{StopReason, StreamEventEmitter};
 use futures_util::StreamExt;
 use log::{error, info, warn};
@@ -429,7 +429,7 @@ impl LlmProvider for AnthropicProvider {
                         id: id.to_string(),
                         provider_id: String::new(),
                         display_name: id.to_string(),
-                        context_window: 200000,
+                        context_window: get_context_window(id),
                         latency_ms: None,
                     })
                 })
@@ -498,28 +498,28 @@ fn builtin_anthropic_models() -> Vec<ModelInfo> {
             id: "claude-sonnet-4-6".to_string(),
             provider_id: String::new(),
             display_name: "Claude Sonnet 4.6".to_string(),
-            context_window: 200000,
+            context_window: get_context_window("claude-sonnet-4-6"),
             latency_ms: None,
         },
         ModelInfo {
             id: "claude-opus-4-8".to_string(),
             provider_id: String::new(),
             display_name: "Claude Opus 4.8".to_string(),
-            context_window: 200000,
+            context_window: get_context_window("claude-opus-4-8"),
             latency_ms: None,
         },
         ModelInfo {
             id: "claude-haiku-4-5".to_string(),
             provider_id: String::new(),
             display_name: "Claude Haiku 4.5".to_string(),
-            context_window: 200000,
+            context_window: get_context_window("claude-haiku-4-5"),
             latency_ms: None,
         },
         ModelInfo {
             id: "claude-fable-5".to_string(),
             provider_id: String::new(),
             display_name: "Claude Fable 5".to_string(),
-            context_window: 200000,
+            context_window: get_context_window("claude-fable-5"),
             latency_ms: None,
         },
     ]

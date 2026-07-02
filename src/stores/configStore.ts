@@ -30,6 +30,7 @@ interface ConfigState {
   toggleModel: (modelId: string) => Promise<void>;          // 切换模型启用状态
   setDefaultModel: (modelId: string) => Promise<void>;      // 设置默认模型
   removeProvider: (providerId: string) => Promise<void>;    // 删除提供商及其模型
+  updateModel: (modelId: string, updates: Partial<ModelInfo>) => Promise<void>; // 更新模型字段
   updateHotkey: (hotkey: string) => Promise<void>;          // 更新快捷键
 }
 
@@ -47,14 +48,8 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
         set({ config: { ...MOCK_CONFIG }, loading: false });
         return;
       }
-      const { getConfig: getCfg, saveConfig: saveCfg } = await import('@/api/config');
-      let config = await getCfg();
-
-      // 首次启动：如果没有任何 provider，自动注入 mock 预设
-      if (config.providers.length === 0) {
-        config = { ...MOCK_CONFIG };
-        await saveCfg(config);
-      }
+      const { getConfig: getCfg } = await import('@/api/config');
+      const config = await getCfg();
 
       set({ config, loading: false });
     } catch (e) {
@@ -157,6 +152,16 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
         ? config.selected_model_id
         : '';
     await get().saveConfig({ ...config, providers, models, selected_model_id });
+  },
+
+  /** 更新指定模型的字段（如 context_window） */
+  updateModel: async (modelId: string, updates: Partial<ModelInfo>) => {
+    const { config } = get();
+    if (!config) return;
+    const models = config.models.map((m) =>
+      m.id === modelId ? { ...m, ...updates } : m,
+    );
+    await get().saveConfig({ ...config, models });
   },
 
   /** 更新全局快捷键 */

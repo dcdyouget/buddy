@@ -29,7 +29,7 @@ pub enum ContentBlock {
     Thinking {
         content: String,
         /// 思考是否仍在进行中（流式期间为 true）
-        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         is_open: bool,
     },
 }
@@ -101,6 +101,7 @@ pub enum StopReason {
     /// 正常结束
     Stop,
     /// 达到最大 token 长度
+    #[allow(dead_code)]
     Length,
     /// 错误终止
     Error,
@@ -145,6 +146,7 @@ pub enum StreamEvent {
         delta: String,
     },
     /// 思考块结束
+    #[allow(dead_code)]
     ThinkingEnd {
         content_index: usize,
         /// 完整思考内容
@@ -232,6 +234,7 @@ impl StreamEventEmitter {
     }
 
     /// 便捷方法：发射 ThinkingEnd 事件
+    #[allow(dead_code)]
     pub fn thinking_end(&self, content_index: usize, content: &str) {
         self.emit(&StreamEvent::ThinkingEnd {
             content_index,
@@ -257,6 +260,7 @@ impl StreamEventEmitter {
     }
 
     /// 获取 AppHandle 引用（供内部使用）
+    #[allow(dead_code)]
     pub fn app_handle(&self) -> &tauri::AppHandle {
         &self.app
     }

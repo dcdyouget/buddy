@@ -17,10 +17,12 @@ interface ThinkSectionProps {
 /**
  * 思考区块组件
  *
- * 渲染一个可折叠的 "思考中..." 区块：
- * - 折叠态：Brain 图标 + "思考中..." + ChevronRight（可点击展开）
- * - 展开态：同上但 ChevronDown，下方渲染 markdown 内容
+ * 渲染一个可折叠的思考区块：
+ * - 流式中：折叠态显示 Brain 图标 + "思考中..." + pulsing dot + ChevronRight
+ * - 完成后：折叠态显示 Brain 图标 + "思考内容" + ChevronRight
+ * - 展开态：ChevronDown，下方渲染 markdown 内容
  * - 流式写入时自动展开，完成后默认折叠
+ * - 点击整个思考框即可展开/折叠（不仅是箭头）
  * - 使用 React.memo 防止无关 token 更新导致重渲染
  */
 export const ThinkSection = memo(function ThinkSection({
@@ -51,16 +53,27 @@ export const ThinkSection = memo(function ThinkSection({
 
   return (
     <div
+      onClick={toggle}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          toggle();
+        }
+      }}
       style={{
         border: '1px solid var(--border-subtle)',
         borderRadius: 'var(--radius-md)',
         overflow: 'hidden',
         margin: 'var(--space-2) 0',
+        cursor: 'pointer',
+        width: '100%',
+        boxSizing: 'border-box',
       }}
     >
       {/* 可点击的折叠 header */}
-      <button
-        onClick={toggle}
+      <div
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -69,9 +82,9 @@ export const ThinkSection = memo(function ThinkSection({
           padding: 'var(--space-2) var(--space-2)',
           background: 'transparent',
           border: 'none',
-          cursor: 'pointer',
           fontSize: '12px',
           color: 'var(--text-muted)',
+          boxSizing: 'border-box',
         }}
         onMouseEnter={(e) => {
           e.currentTarget.style.background = 'var(--bg-sunken)';
@@ -81,7 +94,9 @@ export const ThinkSection = memo(function ThinkSection({
         }}
       >
         <Brain size={14} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-        <span style={{ fontWeight: 500 }}>思考中...</span>
+        <span style={{ fontWeight: 500 }}>
+          {isStreaming ? '思考中...' : '思考内容'}
+        </span>
         {/* 流式指示灯：一个小的 pulsing dot */}
         {isStreaming && (
           <span
@@ -100,7 +115,7 @@ export const ThinkSection = memo(function ThinkSection({
         ) : (
           <ChevronRight size={14} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
         )}
-      </button>
+      </div>
 
       {/* 展开时渲染思考内容 */}
       {expanded && (
@@ -110,6 +125,11 @@ export const ThinkSection = memo(function ThinkSection({
             borderTop: '1px solid var(--border-subtle)',
             fontSize: '13px',
             color: 'var(--text-muted)',
+            width: '100%',
+            boxSizing: 'border-box',
+            overflowWrap: 'break-word',
+            wordBreak: 'break-word',
+            overflow: 'hidden',
           }}
         >
           {content ? (

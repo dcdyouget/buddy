@@ -1,6 +1,22 @@
 import type { ModelInfo } from '@/types';
 import { StatusDot } from '@/components/shared/StatusDot';
 
+/** 上下文窗口预设选项（token 数） */
+const CTX_PRESETS = [128_000, 256_000, 512_000, 1_000_000];
+
+/** 获取下拉选项列表：预设 + 当前值（如果不在预设中） */
+function getCtxOptions(current: number): number[] {
+  const opts = [...CTX_PRESETS];
+  if (!opts.includes(current)) opts.push(current);
+  return opts.sort((a, b) => a - b);
+}
+
+/** 格式化 token 数为可读字符串 */
+function formatContextWindow(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  return `${Math.round(tokens / 1000)}K`;
+}
+
 /** 模型行组件的 Props */
 interface ModelRowProps {
   /** 模型数据 */
@@ -13,6 +29,8 @@ interface ModelRowProps {
   onToggle: () => void;
   /** 设为默认模型的回调 */
   onSetDefault: () => void;
+  /** 更新上下文窗口的回调 */
+  onUpdateContextWindow?: (ctx: number) => void;
 }
 
 /**
@@ -31,6 +49,7 @@ export function ModelRow({
   isDefault,
   onToggle,
   onSetDefault,
+  onUpdateContextWindow,
 }: ModelRowProps) {
   return (
     <div
@@ -107,12 +126,34 @@ export function ModelRow({
             </span>
           )}
         </div>
-        {/* 上下文窗口大小（单位转换为 K） */}
-        <div className="t-caption" style={{ color: 'var(--text-muted)' }}>
-          {model.context_window
-            ? `${(model.context_window / 1000).toFixed(0)}K 上下文`
-            : ''}
-        </div>
+        {/* 上下文窗口大小：可下拉选择或只读展示 */}
+        {onUpdateContextWindow ? (
+          <select
+            value={model.context_window}
+            onChange={(e) => onUpdateContextWindow(Number(e.target.value))}
+            style={{
+              marginTop: 2,
+              padding: '1px 4px',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid var(--border-default)',
+              background: 'var(--bg-sunken)',
+              color: 'var(--text-muted)',
+              fontSize: '11px',
+              fontFamily: 'var(--font-sans)',
+              cursor: 'pointer',
+            }}
+          >
+            {getCtxOptions(model.context_window).map((opt) => (
+              <option key={opt} value={opt}>{formatContextWindow(opt)}</option>
+            ))}
+          </select>
+        ) : (
+          <div className="t-caption" style={{ color: 'var(--text-muted)' }}>
+            {model.context_window
+              ? `${(model.context_window / 1000).toFixed(0)}K 上下文`
+              : ''}
+          </div>
+        )}
       </div>
 
       {/* 延迟状态：根据 latency_ms 分级显示状态点 */}

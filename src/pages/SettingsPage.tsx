@@ -26,7 +26,7 @@ interface SettingsPageProps {
  */
 export function SettingsPage({ onBack }: SettingsPageProps) {
   const dragRef = useDragHandle();
-  const { config, updateTheme, updateHotkey, setDefaultModel } = useConfigStore();
+  const { config, updateTheme, updateHotkey, setDefaultModel, updateModel } = useConfigStore();
   const [showAddProvider, setShowAddProvider] = useState(false);
 
   if (!config) return null;
@@ -111,6 +111,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             selectedModelId={config.selected_model_id}
             onSetDefault={setDefaultModel}
             onAddClick={() => setShowAddProvider(true)}
+            onUpdateModel={updateModel}
           />
         </div>
 
