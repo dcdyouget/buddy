@@ -94,11 +94,13 @@ impl CompatConfig {
         self.supports_temperature.unwrap_or(true)
     }
 
+    #[allow(dead_code)]
     pub fn supports_long_cache_retention(&self) -> bool {
         self.supports_long_cache_retention.unwrap_or(true)
     }
 
     /// 根据 provider_id 获取默认 compat 预设
+    #[allow(dead_code)]
     pub fn preset_for(provider_id: &str) -> Option<Self> {
         match provider_id.to_lowercase().as_str() {
             "deepseek" => Some(Self {

@@ -6,10 +6,11 @@ interface ModelListProps {
   selectedModelId: string;
   onSetDefault: (modelId: string) => void;
   onAddClick: () => void;
+  onUpdateModel?: (modelId: string, updates: Partial<ModelInfo>) => void;
 }
 
 /** 模型范围设置：展示已添加的模型列表 + 添加新模型入口 */
-export function ModelList({ models, selectedModelId, onSetDefault, onAddClick }: ModelListProps) {
+export function ModelList({ models, selectedModelId, onSetDefault, onAddClick, onUpdateModel }: ModelListProps) {
   return (
     <section>
       <h3 className="t-h3" style={{ color: 'var(--text-primary)', marginBottom: 'var(--space-3)' }}>
@@ -30,6 +31,11 @@ export function ModelList({ models, selectedModelId, onSetDefault, onAddClick }:
               isDefault={isDefault}
               onToggle={() => {}}
               onSetDefault={() => onSetDefault(model.id)}
+              onUpdateContextWindow={
+                onUpdateModel
+                  ? (ctx: number) => onUpdateModel(model.id, { context_window: ctx })
+                  : undefined
+              }
             />
           );
         })

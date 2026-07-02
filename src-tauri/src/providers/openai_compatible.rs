@@ -6,7 +6,7 @@
 // 将 OpenAI SSE 格式（choices[0].delta.content）转换为统一的 StreamEvent 协议。
 
 use super::{ApiError, LlmProvider};
-use crate::models::{CompatConfig, Message, MessageRole, ModelInfo};
+use crate::models::{get_context_window, CompatConfig, Message, MessageRole, ModelInfo};
 use crate::streaming::{StopReason, StreamEventEmitter};
 use futures_util::StreamExt;
 use log::{error, info, warn};
@@ -372,7 +372,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                                 id: id.to_string(),
                                 provider_id: String::new(),
                                 display_name: id.to_string(),
-                                context_window: 128000,
+                                context_window: get_context_window(id),
                                 latency_ms: None,
                             })
                         })
@@ -395,7 +395,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                                 id: id.to_string(),
                                 provider_id: String::new(),
                                 display_name: id.to_string(),
-                                context_window: 128000,
+                                context_window: get_context_window(id),
                                 latency_ms: None,
                             })
                         })

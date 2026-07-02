@@ -2,8 +2,10 @@
 
 pub mod config;
 pub mod message;
+pub mod model_context;
 pub mod storage;
 
 pub use config::*;
 pub use message::*;
+pub use model_context::*;
 pub use storage::*;

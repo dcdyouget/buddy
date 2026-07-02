@@ -133,6 +133,7 @@ export const MessageBubble = memo(function MessageBubble({
                 minWidth: 0,
               }
             : {
+                width: '100%',
                 maxWidth: '85%',
                 padding: 'var(--space-2) var(--space-2)',
                 color: 'var(--text-primary)',

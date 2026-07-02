@@ -6,6 +6,7 @@
 // 3. Message 分块存储 —— 每条消息追加到 chunk 文件，每 100 条自动切新块
 
 use crate::models::*;
+use log::warn;
 use std::fs;
 use std::path::PathBuf;
 use tauri::Manager;
@@ -134,9 +135,15 @@ pub fn append_message(app: &tauri::AppHandle, message: &Message) -> Result<(), S
     let mut chunk: ChatChunk = if chunk_path.exists() {
         let content =
             fs::read_to_string(&chunk_path).map_err(|e| format!("读取消息文件失败: {}", e))?;
-        serde_json::from_str(&content).unwrap_or(ChatChunk {
-            id: chunk_file.trim_end_matches(".json").to_string(),
-            messages: vec![],
+        serde_json::from_str(&content).unwrap_or_else(|e| {
+            warn!(
+                "[storage::append_message] 分块 {} JSON 解析失败，将创建新分块: {}",
+                chunk_file, e
+            );
+            ChatChunk {
+                id: chunk_file.trim_end_matches(".json").to_string(),
+                messages: vec![],
+            }
         })
     } else {
         ChatChunk {
@@ -208,9 +215,15 @@ pub fn load_messages(
         }
 
         let content = fs::read_to_string(&chunk_path).unwrap_or_default();
-        let chunk: ChatChunk = serde_json::from_str(&content).unwrap_or(ChatChunk {
-            id: meta.file.trim_end_matches(".json").to_string(),
-            messages: vec![],
+        let chunk: ChatChunk = serde_json::from_str(&content).unwrap_or_else(|e| {
+            warn!(
+                "[storage::load_messages] 分块 {} JSON 解析失败: {}",
+                meta.file, e
+            );
+            ChatChunk {
+                id: meta.file.trim_end_matches(".json").to_string(),
+                messages: vec![],
+            }
         });
 
         // 计算该分块内的起始索引（跨 chunk offset 修正）

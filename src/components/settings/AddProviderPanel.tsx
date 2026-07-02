@@ -8,6 +8,22 @@ import { ProviderCard } from '@/components/settings/ProviderCard';
 import { PROVIDER_PRESETS } from '@/types';
 import type { ModelInfo, ProviderConfig, ProviderType } from '@/types';
 
+/** 上下文窗口预设选项（token 数） */
+const CTX_PRESETS = [128_000, 256_000, 512_000, 1_000_000];
+
+/** 获取下拉选项列表：预设 + 当前值（如果不在预设中） */
+function getCtxOptions(current: number): number[] {
+  const opts = [...CTX_PRESETS];
+  if (!opts.includes(current)) opts.push(current);
+  return opts.sort((a, b) => a - b);
+}
+
+/** 格式化 token 数为可读字符串（如 "128K"、"1.0M"） */
+function formatContextWindow(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  return `${Math.round(tokens / 1000)}K`;
+}
+
 interface AddProviderPanelProps {
   onBack: () => void;
 }
@@ -134,6 +150,13 @@ export function AddProviderPanel({ onBack }: AddProviderPanelProps) {
       next.has(modelId) ? next.delete(modelId) : next.add(modelId);
       return next;
     });
+  };
+
+  /** 更新单个模型的上下文窗口大小 */
+  const updateContextWindow = (modelId: string, ctx: number) => {
+    setFetchedModels((prev) =>
+      prev.map((m) => (m.id === modelId ? { ...m, context_window: ctx } : m)),
+    );
   };
 
   return (
@@ -317,33 +340,6 @@ export function AddProviderPanel({ onBack }: AddProviderPanelProps) {
           </>
         )}
 
-        {/* 选中预设时显示 compat 信息 */}
-        {selectedPreset && selectedPreset !== 'custom' && (() => {
-          const preset = PROVIDER_PRESETS.find(p => p.id === selectedPreset);
-          if (!preset?.compat || Object.keys(preset.compat).length === 0) return null;
-          return (
-            <div style={{
-              padding: 'var(--space-2) var(--space-3)',
-              borderRadius: 'var(--radius-md)',
-              background: 'var(--bg-sunken)',
-              fontSize: '11px',
-              color: 'var(--text-muted)',
-              fontFamily: 'var(--font-mono)',
-              lineHeight: 1.6,
-            }}>
-              <div style={{ fontWeight: 600, marginBottom: 'var(--space-1)', color: 'var(--text-secondary)' }}>
-                Compat 预设:
-              </div>
-              {preset.compat.thinking_format && <div>thinking_format: {preset.compat.thinking_format}</div>}
-              {preset.compat.max_tokens_field && <div>max_tokens_field: {preset.compat.max_tokens_field}</div>}
-              {preset.compat.supports_store === false && <div>supports_store: false</div>}
-              {preset.compat.supports_developer_role === false && <div>supports_developer_role: false</div>}
-              {preset.compat.supports_stream_options_usage === false && <div>supports_stream_options_usage: false</div>}
-              {preset.compat.supports_temperature === false && <div>supports_temperature: false</div>}
-            </div>
-          );
-        })()}
-
         {/* Base URL 输入 */}
         <div>
           <label className="t-body-sm" style={{ display: 'block', color: 'var(--text-muted)', marginBottom: 'var(--space-1)' }}>
@@ -479,31 +475,60 @@ export function AddProviderPanel({ onBack }: AddProviderPanelProps) {
               可用模型 ({fetchedModels.length})
             </h4>
             {fetchedModels.map((model) => (
-              <label
+              <div
                 key={model.id}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: 'var(--space-2)',
                   padding: 'var(--space-1) 0',
-                  cursor: 'pointer',
                 }}
               >
-                <input
-                  type="checkbox"
-                  checked={selectedModelIds.has(model.id)}
-                  onChange={() => toggleModel(model.id)}
-                  style={{ accentColor: 'var(--buddy-primary)', width: 16, height: 16 }}
-                />
-                <span className="t-body" style={{ color: 'var(--text-primary)' }}>
-                  {model.display_name}
-                </span>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-2)',
+                    cursor: 'pointer',
+                    flex: 1,
+                    minWidth: 0,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedModelIds.has(model.id)}
+                    onChange={() => toggleModel(model.id)}
+                    style={{ accentColor: 'var(--buddy-primary)', width: 16, height: 16, flexShrink: 0 }}
+                  />
+                  <span className="t-body" style={{ color: 'var(--text-primary)' }}>
+                    {model.display_name}
+                  </span>
+                </label>
                 {model.latency_ms != null && (
-                  <span className="t-caption" style={{ color: 'var(--text-muted)' }}>
+                  <span className="t-caption" style={{ color: 'var(--text-muted)', flexShrink: 0 }}>
                     {model.latency_ms}ms
                   </span>
                 )}
-              </label>
+                <select
+                  value={model.context_window}
+                  onChange={(e) => updateContextWindow(model.id, Number(e.target.value))}
+                  style={{
+                    padding: '2px 4px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border-default)',
+                    background: 'var(--bg-sunken)',
+                    color: 'var(--text-primary)',
+                    fontSize: '11px',
+                    fontFamily: 'var(--font-sans)',
+                    flexShrink: 0,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {getCtxOptions(model.context_window).map((opt) => (
+                    <option key={opt} value={opt}>{formatContextWindow(opt)}</option>
+                  ))}
+                </select>
+              </div>
             ))}
           </div>
         )}

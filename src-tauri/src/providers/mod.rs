@@ -27,6 +27,7 @@ pub enum ApiError {
     /// 网络错误
     NetworkError(String),
     /// 流式错误
+    #[allow(dead_code)]
     StreamError(String),
 }
 
@@ -61,6 +62,7 @@ impl ProviderType {
     }
 
     /// 转换为字符串（用于序列化）
+    #[allow(dead_code)]
     pub fn as_str(&self) -> &'static str {
         match self {
             ProviderType::OpenAICompatible => "openai_compatible",
