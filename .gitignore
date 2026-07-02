@@ -13,8 +13,23 @@ src-tauri/target/
 
 # Auto-generated icons (Tauri tauri icon command)
 src-tauri/gen/
-src-tauri/icons/
+src-tauri/icons/**
+# Dock / app icon PNG matrix (rasterized from buddy-app-icon.svg)
 !src-tauri/icons/icon.png
+!src-tauri/icons/16x16.png
+!src-tauri/icons/32x32.png
+!src-tauri/icons/64x64.png
+!src-tauri/icons/128x128.png
+!src-tauri/icons/128x128@2x.png
+!src-tauri/icons/256x256.png
+!src-tauri/icons/512x512.png
+!src-tauri/icons/1024x1024.png
+!src-tauri/icons/icon-1024.png
+# Menu bar / system tray icon (rasterized from buddy-menubar.svg)
+!src-tauri/icons/tray.png
+!src-tauri/icons/tray@2x.png
+# SVG sources (design originals; PNG matrix above is rasterized from these)
+!src-tauri/icons/*.svg
 
 # IDE
 .vscode/
