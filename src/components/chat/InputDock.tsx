@@ -26,6 +26,8 @@ interface InputDockProps {
   onSend: () => void;
   onStop: () => void;
   onModelPickerClick?: () => void;
+  /** 禁用 textarea 自动撑高，改为固定高度 + 滚动条（用于紧凑窗口） */
+  disableAutoResize?: boolean;
 }
 
 /**
@@ -46,6 +48,7 @@ export function InputDock({
   onDraftChange,
   onSend,
   onStop,
+  disableAutoResize = false,
 }: InputDockProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // 保持最新的 isStreaming 值供事件回调使用（避免闭包过期）
@@ -53,13 +56,15 @@ export function InputDock({
   isStreamingRef.current = isStreaming;
 
   // 输入内容变化时，自动调整 textarea 高度（最高 120px）
+  // 紧凑窗口（如 EmptyPage）禁用自动撑高，使用固定高度 + 滚动条
   useEffect(() => {
+    if (disableAutoResize) return;
     const ta = textareaRef.current;
     if (ta) {
       ta.style.height = 'auto';
       ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
     }
-  }, [draftInput]);
+  }, [draftInput, disableAutoResize]);
 
   // 自动聚焦：组件挂载、流式结束、窗口呼出时聚焦输入框
   useEffect(() => {
@@ -86,12 +91,19 @@ export function InputDock({
 
   /**
    * 键盘事件处理
-   * - 普通 Enter：阻止默认换行行为，触发发送
+   * - 输入法组合中（中文输入法确认英文等）：不拦截 Enter
    * - Cmd/Ctrl + Enter：允许默认换行行为
+   * - 普通 Enter：阻止默认换行行为，触发发送
    * - 流式生成中或无有效输入时不发送
    */
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter') {
+      // IME 输入法处理中：keyCode 229 表示按键正被输入法拦截处理
+      // （中文输入法确认英文时 compositionend 在 keydown 之前触发，
+      //   此时 isComposing 已为 false，但 keyCode 仍为 229）
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) {
+        return;
+      }
       // Cmd/Ctrl+Enter → 换行，不拦截
       if (e.metaKey || e.ctrlKey) {
         return; // Let default behavior insert newline
