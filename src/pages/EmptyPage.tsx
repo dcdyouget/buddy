@@ -51,19 +51,19 @@ export function EmptyPage() {
         height: '100vh',
         display: 'flex',
         flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
         background: 'transparent',
-        gap: 'var(--space-4)',
       }}
     >
       <GlassPanel
         style={{
-          width: 520,
-          minHeight: 60,
-          padding: 'var(--space-2) var(--space-4)',
+          flex: 1,
           display: 'flex',
-          alignItems: 'center',
+          flexDirection: 'column',
+          justifyContent: 'flex-end',
+          overflow: 'hidden',
+          margin: 0,
+          borderRadius: 'var(--radius-xl)',
+          position: 'relative',
         }}
       >
         <InputDock
@@ -73,6 +73,7 @@ export function EmptyPage() {
           onDraftChange={setDraftInput}
           onSend={handleSend}
           onStop={() => {}} // 空态页无流式进行中，stop 为空操作
+          disableAutoResize
         />
       </GlassPanel>
 
