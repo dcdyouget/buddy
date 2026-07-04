@@ -12,9 +12,6 @@ import type { PageState } from '@/types';
 /** 紧凑状态页面：窗口初始尺寸较小，切换到内容页面时需要展开 */
 const COMPACT_PAGES: PageState[] = ['empty', 'noapikey'];
 
-/** 内容状态页面：需要较大窗口容纳聊天内容（设置已改为覆层，不自动 resize） */
-const CONTENT_PAGES: PageState[] = ['conversation', 'streaming'];
-
 /** 各页面对应的窗口预设尺寸（逻辑像素） */
 const PAGE_SIZES: Record<PageState, { width: number; height: number }> = {
   empty: { width: 520, height: 78 },
@@ -37,9 +34,9 @@ const PAGE_SIZES: Record<PageState, { width: number; height: number }> = {
  * @param toPage 目标页面
  */
 export async function resizeWindowForPage(fromPage: PageState, toPage: PageState): Promise<void> {
-  // 仅允许「紧凑页面 → 内容页面」的初始展开
+  // 仅允许「紧凑页面 → 非紧凑页面」的初始展开
   if (!COMPACT_PAGES.includes(fromPage)) return; // 来源不是紧凑页面，保持用户尺寸
-  if (!CONTENT_PAGES.includes(toPage)) return;   // 目标不是内容页面，不需要展开
+  if (COMPACT_PAGES.includes(toPage)) return;    // 目标仍是紧凑页面，不需要展开
 
   const size = PAGE_SIZES[toPage];
   if (!size) return;
