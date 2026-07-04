@@ -1,7 +1,35 @@
 import { memo, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { isTauri } from '@tauri-apps/api/core';
+import { open as openExternal } from '@tauri-apps/plugin-shell';
 import { CodeBlock } from './CodeBlock';
+
+/**
+ * 判断 URL 是否为外链（http/https/mailto 等）。内部锚点（#/）不算。
+ */
+function isExternalUrl(href: string): boolean {
+  if (!href) return false;
+  if (href.startsWith('#')) return false;
+  return /^(https?:|mailto:)/i.test(href);
+}
+
+/**
+ * 调用系统默认应用打开外链：
+ * - Tauri 环境下用 plugin-shell open()（用系统默认浏览器）
+ * - 浏览器环境降级到 window.open
+ */
+async function openInDefaultApp(url: string) {
+  try {
+    if (isTauri()) {
+      await openExternal(url);
+    } else {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+  } catch (err) {
+    console.error('[StreamingMarkdown] failed to open external url', url, err);
+  }
+}
 
 /**
  * 共享的 markdown 组件映射，避免每次渲染都重新创建
@@ -31,6 +59,30 @@ const COMPONENTS = {
   },
   p({ children }: any) {
     return <p style={{ margin: '0 0 var(--space-2) 0' }}>{children}</p>;
+  },
+  // 拦截外链：阻止 webview 内部跳转，强制走系统默认浏览器
+  a({ href, children, ...props }: any) {
+    const external = isExternalUrl(href);
+    return (
+      <a
+        href={href}
+        rel="noopener noreferrer"
+        // 外链点击时拦截，强制走系统默认应用（Tauri shell.open / 浏览器 window.open）
+        onClick={(e) => {
+          if (!external) return; // 内部锚点放行
+          e.preventDefault();
+          openInDefaultApp(href);
+        }}
+        style={{
+          color: 'var(--primary)',
+          textDecoration: 'underline',
+          cursor: 'pointer',
+        }}
+        {...props}
+      >
+        {children}
+      </a>
+    );
   },
 };
 
