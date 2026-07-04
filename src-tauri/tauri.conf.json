@@ -6,7 +6,8 @@
   "build": {
     "devUrl": "http://localhost:1420",
     "frontendDist": "../dist",
-    "beforeDevCommand": "npx vite"
+    "beforeDevCommand": "npx vite",
+    "beforeBuildCommand": "npm run build"
   },
   "app": {
     "withGlobalTauri": false,
