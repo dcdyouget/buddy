@@ -39,7 +39,7 @@ interface AddProviderPanelProps {
  * 5. 确认添加后将 provider 和模型写入配置
  */
 export function AddProviderPanel({ onBack }: AddProviderPanelProps) {
-  const { addProvider, addModels } = useConfigStore();
+  const { addProvider, addModels, setDefaultModel } = useConfigStore();
   const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
   const [baseUrl, setBaseUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
@@ -100,7 +100,7 @@ export function AddProviderPanel({ onBack }: AddProviderPanelProps) {
     }
   };
 
-  /** 确认添加：写入 provider 配置和选中的模型，然后返回设置页 */
+  /** 确认添加：写入 provider 配置和选中的模型，自动选中首个模型，然后返回设置页 */
   const handleAdd = async () => {
     if (!selectedPreset || !baseUrl || !apiKey) return;
 
@@ -120,6 +120,9 @@ export function AddProviderPanel({ onBack }: AddProviderPanelProps) {
         .map((m) => ({ ...m, provider_id: customId }));
       await addProvider(provider);
       if (modelsToAdd.length > 0) await addModels(modelsToAdd);
+      // 自动选中第一个模型，避免出现「已配 Key 但仍提示无 Key」的情况
+      const firstId = modelsToAdd[0]?.id;
+      if (firstId) await setDefaultModel(firstId);
       onBack();
       return;
     }
@@ -140,6 +143,9 @@ export function AddProviderPanel({ onBack }: AddProviderPanelProps) {
 
     await addProvider(provider);
     if (modelsToAdd.length > 0) await addModels(modelsToAdd);
+    // 自动选中第一个模型，避免出现「已配 Key 但仍提示无 Key」的情况
+    const firstId = modelsToAdd[0]?.id;
+    if (firstId) await setDefaultModel(firstId);
     onBack();
   };
 

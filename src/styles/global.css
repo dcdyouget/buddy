@@ -151,6 +151,12 @@ body {
   background: transparent !important;
 }
 
+/* Windows：窗口不透明，需要实色背景 */
+html[data-platform="windows"] body,
+html[data-platform="windows"] #root {
+  background: var(--bg-canvas) !important;
+}
+
 /* ── Frosted Glass ── */
 .surface-glass {
   background: var(--bg-surface);

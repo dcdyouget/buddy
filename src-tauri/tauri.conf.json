@@ -16,8 +16,8 @@
         "width": 520,
         "height": 60,
         "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
+        "transparent": false,
+        "alwaysOnTop": false,
         "visibleOnAllWorkspaces": true,
         "focus": false,
         "skipTaskbar": true,
@@ -45,7 +45,8 @@
       "icons/512x512.png",
       "icons/1024x1024.png",
       "icons/icon.png",
-      "icons/icon-1024.png"
+      "icons/icon-1024.png",
+      "icons/icon.ico"
     ],
     "macOS": {
       "minimumSystemVersion": "12.0"

@@ -72,12 +72,17 @@ function App() {
   // 注册流式事件监听
   useStreaming();
 
-  // 应用启动时加载配置和历史消息
+  // 应用启动时加载配置、历史消息、检测平台
   useEffect(() => {
     loadConfig().then(() => {
       setThemeReady(true);
     });
     loadMessages();
+
+    // 平台检测：用于 CSS 区分 Windows/macOS 样式（如透明效果）
+    const userAgent = navigator.userAgent || '';
+    const platform = userAgent.includes('Win') ? 'windows' : userAgent.includes('Mac') ? 'macos' : 'linux';
+    document.documentElement.setAttribute('data-platform', platform);
   }, []);
 
   // 监听主题变更
@@ -88,11 +93,19 @@ function App() {
     }
   }, [config?.theme]);
 
-  // 根据配置决定入口页面
+  // 根据配置决定入口页面（双向：缺失时提示，具备时回对话页）
   useEffect(() => {
     if (!config) return;
-    if (config.providers.length === 0 || !config.selected_model_id) {
+    const hasValidConfig = config.providers.length > 0 && !!config.selected_model_id;
+    if (!hasValidConfig) {
+      // 配置缺失 → 回到空态/提示页
       setPage('empty');
+    } else {
+      // 配置已具备 → 如果当前正显示「无 Key」页，自动跳回对话页
+      const cur = useUIStore.getState().currentPage;
+      if (cur === 'noapikey' || cur === 'empty') {
+        setPage('empty');
+      }
     }
   }, [config?.providers.length, config?.selected_model_id]);
 
