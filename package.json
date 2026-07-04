@@ -16,6 +16,7 @@
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-autostart": "^2.5.1",
+    "@tauri-apps/plugin-shell": "^2.3.5",
     "framer-motion": "^12.42.0",
     "lucide-react": "^1.21.0",
     "prism-react-renderer": "^2.4.1",

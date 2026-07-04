@@ -1,9 +1,39 @@
-import { memo } from 'react';
-import { CornerUpLeft } from 'lucide-react';
+import { memo, useState } from 'react';
+import { Check, Copy, CornerUpLeft } from 'lucide-react';
 import type { Message, ContentBlock } from '@/types';
-import { parseThinkBlocks } from '@/utils/thinkParser';
+import { parseThinkBlocks, type TextBlock } from '@/utils/thinkParser';
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { ThinkSection } from './ThinkSection';
+
+/**
+ * 把秒级 Unix 时间戳格式化为本地时区的 YYYY-MM-DD HH:MM 字符串。
+ * 例如 1752135600 → "2025-07-10 10:30"（按系统时区显示）
+ */
+function formatMessageTime(unixSeconds: number): string {
+  const d = new Date(unixSeconds * 1000);
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/**
+ * 提取消息里"对用户可见"的回答正文，不含思考过程。
+ * - v2.0 blocks：按顺序拼接所有 type === 'text' 的块
+ * - v1.0 旧格式：用 thinkParser 剥掉 思考 段
+ */
+function getAnswerText(message: Message): string {
+  if (message.blocks && message.blocks.length > 0) {
+    return message.blocks
+      .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
+      .map((b) => b.content)
+      .join('\n\n')
+      .trim();
+  }
+  return parseThinkBlocks(message.content)
+    .filter((s): s is TextBlock => s.type === 'text')
+    .map((s) => s.content)
+    .join('\n\n')
+    .trim();
+}
 
 /**
  * MessageBubble 组件的 Props
@@ -101,10 +131,23 @@ export const MessageBubble = memo(function MessageBubble({
   questionId,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user';
+  const [copied, setCopied] = useState(false);
 
   const handleBackToQuestion = () => {
     if (!questionId) return;
     document.getElementById(questionId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const handleCopy = async () => {
+    const text = getAnswerText(message);
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (err) {
+      console.error('复制失败', err);
+    }
   };
 
   return (
@@ -151,35 +194,84 @@ export const MessageBubble = memo(function MessageBubble({
           <>
             <AssistantContent message={message} isStreaming={isStreaming} />
             {!isStreaming && questionId && message.content && (
-              <button
-                onClick={handleBackToQuestion}
-                title="回到问题"
+              <div
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
-                  gap: '4px',
+                  gap: 'var(--space-2)',
                   marginTop: 'var(--space-2)',
-                  padding: '2px 8px',
-                  border: 'none',
-                  borderRadius: 'var(--radius-sm)',
-                  background: 'transparent',
-                  color: 'var(--text-tertiary)',
-                  fontSize: '12px',
-                  cursor: 'pointer',
-                  transition: 'color 0.15s, background 0.15s',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.color = 'var(--text-muted)';
-                  e.currentTarget.style.background = 'var(--bg-sunken)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.color = 'var(--text-tertiary)';
-                  e.currentTarget.style.background = 'transparent';
                 }}
               >
-                <CornerUpLeft size={13} />
-                回到问题
-              </button>
+                <span
+                  title={new Date(message.created_at * 1000).toLocaleString()}
+                  style={{
+                    fontSize: '12px',
+                    color: 'var(--text-tertiary)',
+                    fontVariantNumeric: 'tabular-nums',
+                    userSelect: 'none',
+                  }}
+                >
+                  {formatMessageTime(message.created_at)}
+                </span>
+                <button
+                  onClick={handleCopy}
+                  title={copied ? '已复制' : '复制回答'}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    padding: '2px 8px',
+                    border: 'none',
+                    borderRadius: 'var(--radius-sm)',
+                    background: copied ? 'var(--primary-tint-soft)' : 'transparent',
+                    color: copied ? 'var(--primary)' : 'var(--text-tertiary)',
+                    fontSize: '12px',
+                    cursor: 'pointer',
+                    transition: 'color 0.15s, background 0.15s',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (copied) return;
+                    e.currentTarget.style.color = 'var(--text-muted)';
+                    e.currentTarget.style.background = 'var(--bg-sunken)';
+                  }}
+                  onMouseLeave={(e) => {
+                    if (copied) return;
+                    e.currentTarget.style.color = 'var(--text-tertiary)';
+                    e.currentTarget.style.background = 'transparent';
+                  }}
+                >
+                  {copied ? <Check size={13} /> : <Copy size={13} />}
+                  {copied ? '已复制' : '复制'}
+                </button>
+                <button
+                  onClick={handleBackToQuestion}
+                  title="回到问题"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    padding: '2px 8px',
+                    border: 'none',
+                    borderRadius: 'var(--radius-sm)',
+                    background: 'transparent',
+                    color: 'var(--text-tertiary)',
+                    fontSize: '12px',
+                    cursor: 'pointer',
+                    transition: 'color 0.15s, background 0.15s',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.color = 'var(--text-muted)';
+                    e.currentTarget.style.background = 'var(--bg-sunken)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.color = 'var(--text-tertiary)';
+                    e.currentTarget.style.background = 'transparent';
+                  }}
+                >
+                  <CornerUpLeft size={13} />
+                  回到问题
+                </button>
+              </div>
             )}
           </>
         )}

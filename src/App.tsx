@@ -10,8 +10,8 @@
  * 5. 应用入口动画：frameless 窗口的淡入缩放效果
  */
 
-import { useEffect, useRef } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useEffect } from 'react';
+import { motion } from 'framer-motion';
 import { useConfigStore } from '@/stores/configStore';
 import { useUIStore } from '@/stores/uiStore';
 import { useChatStore } from '@/stores/chatStore';
@@ -20,15 +20,25 @@ import { EmptyPage } from '@/pages/EmptyPage';
 import { NoApiKeyPage } from '@/pages/NoApiKeyPage';
 import { ChatPage } from '@/pages/ChatPage';
 import { SettingsPage } from '@/pages/SettingsPage';
+import { SlideInPanel } from '@/components/shared/SlideInPanel';
 
 /**
  * 页面渲染器 — 根据 currentPage 状态返回对应页面组件
  * 这是一个轻量级的页面路由器，避免引入 react-router 增加包体积
+ *
+ * 关键：当 currentPage === 'settings' 时，不要卸载背景层，而是
+ * 继续渲染上一个真正页面（previousPage），让 SettingsPage 在它
+ * 上面叠盖滑入。这样对话/流式状态不会被清空，滑入动画才有意义。
  */
 function PageRenderer() {
   const currentPage = useUIStore((s) => s.currentPage);
+  const previousPage = useUIStore((s) => s.previousPage);
 
-  switch (currentPage) {
+  // settings 模式下用 previousPage 作为底层页面；previousPage 为 null 时回落 empty
+  const effectivePage =
+    currentPage === 'settings' ? previousPage ?? 'empty' : currentPage;
+
+  switch (effectivePage) {
     case 'empty':
       return <EmptyPage />;
     case 'noapikey':
@@ -36,9 +46,6 @@ function PageRenderer() {
     case 'conversation':
     case 'streaming':
       return <ChatPage />;
-    // 'settings' 由 App 中的 overlay 处理，不在此切换
-    case 'settings':
-      return null;
     default:
       return (
         <div className="flex h-full w-full flex-col items-center justify-center gap-3 text-center">
@@ -88,14 +95,6 @@ function App() {
       setPage('empty');
     }
   }, [config?.providers.length, config?.selected_model_id]);
-
-  // 记住进入设置前的页面，退出设置时恢复
-  const prevPageRef = useRef<ReturnType<typeof useUIStore.getState>['currentPage']>('empty');
-  useEffect(() => {
-    if (currentPage !== 'settings') {
-      prevPageRef.current = currentPage;
-    }
-  }, [currentPage]);
 
   // ── Esc = 隐藏窗口（不停止流式生成）──
   useEffect(() => {
@@ -148,12 +147,17 @@ function App() {
       {/* 背景页面 */}
       <PageRenderer />
 
-      {/* 设置页覆层：从右滑入 */}
-      <AnimatePresence>
+      {/* 设置页覆层：从右滑入（在 ChatPage 之上，不卸载背景） */}
+      <SlideInPanel from="right" show={currentPage === 'settings'}>
         {currentPage === 'settings' && (
-          <SettingsPage onBack={() => setPage(prevPageRef.current)} />
+          <SettingsPage
+            onBack={() => {
+              const prev = useUIStore.getState().previousPage ?? 'empty';
+              setPage(prev);
+            }}
+          />
         )}
-      </AnimatePresence>
+      </SlideInPanel>
     </motion.div>
   );
 }
