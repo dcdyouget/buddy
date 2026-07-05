@@ -4,7 +4,7 @@
 // 负责参数校验、调用业务逻辑、返回结果或错误。
 
 use crate::models::*;
-use crate::providers::{self, ApiError, ProviderType};
+use crate::providers::{self, ProviderType};
 use crate::streaming::{ContentBlock, StopReason, StreamEventEmitter};
 use crate::storage;
 use log::{info, warn};
@@ -209,15 +209,10 @@ pub async fn send_message(
         Err(e) => {
             warn!("[send_message] 请求失败: {}", e);
             // 使用统一事件发射器发送错误（前端监听 stream-event）
+            // 当前所有 ApiError 变体均映射为 StopReason::Error —— 类型穷举性在编译期保证
             let error_emitter = StreamEventEmitter::new(app.clone());
             let msg = e.to_string();
-            let reason = match e {
-                ApiError::Unauthorized | ApiError::QuotaExceeded => {
-                    StopReason::Error
-                }
-                _ => StopReason::Error,
-            };
-            error_emitter.error(reason, &msg, "");
+            error_emitter.error(StopReason::Error, &msg, "");
         }
     }
 

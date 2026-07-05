@@ -9,7 +9,6 @@ mod hotkey;
 mod models;
 mod platform;
 mod providers;
-mod services;
 mod storage;
 mod streaming;
 mod tray;

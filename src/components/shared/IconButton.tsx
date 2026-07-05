@@ -58,7 +58,7 @@ export function IconButton({
       onClick={onClick}
       disabled={disabled}
       title={title}
-      className={`icon-button ${className}`}
+      className={className}
       style={{
         width: size,
         height: size,

@@ -165,7 +165,7 @@ export const MessageBubble = memo(function MessageBubble({
             ? {
                 maxWidth: '80%',
                 padding: 'var(--space-2) var(--space-3)',
-                borderRadius: '8px 8px 8px 4px',
+                borderRadius: 'var(--radius-md) var(--radius-md) var(--radius-md) var(--radius-sm)',
                 background: 'var(--primary-tint-soft)',
                 border: '1px solid var(--primary-tint-strong)',
                 color: 'var(--text-primary)',
