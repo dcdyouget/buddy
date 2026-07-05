@@ -17,9 +17,10 @@ pub struct HotkeyState {
 
 /// 注册全局热键并绑定窗口 toggle 行为
 ///
-/// 按下热键时：
-/// - 若主窗口当前可见 → 隐藏窗口
-/// - 若主窗口当前不可见 → 获取选中文本（macOS 下通过 Cmd+C 模拟）、显示窗口、聚焦窗口
+/// 三态切换（参考 Bob 等 macOS 工具型应用的标准行为）：
+/// - **隐藏状态** → 获取选中文本、重新定位到当前光标所在显示器、显示、聚焦
+/// - **显示但失焦**（用户点到了别的窗口，窗口在 z 序后面）→ 唤回到最前，不改位置
+/// - **显示且已聚焦**（在最前）→ 隐藏
 ///
 /// 仅在按键按下（Pressed）时触发，避免按下/释放各触发一次。
 pub fn register(app: &tauri::AppHandle, shortcut: Shortcut) {
@@ -27,17 +28,28 @@ pub fn register(app: &tauri::AppHandle, shortcut: Shortcut) {
         .on_shortcut(shortcut, move |app, _sc, event| {
             if event.state == ShortcutState::Pressed {
                 if let Some(window) = app.get_webview_window("main") {
-                    let was_visible = window.is_visible().unwrap_or(false);
-                    log::info!("[hotkey] pressed, was_visible={}", was_visible);
-                    if was_visible {
+                    let visible = window.is_visible().unwrap_or(false);
+                    let focused = window.is_focused().unwrap_or(false);
+                    log::info!("[hotkey] pressed, visible={}, focused={}", visible, focused);
+
+                    if visible && focused {
+                        // ── 显示 + 已聚焦 → 隐藏 ──
                         let _ = window.hide();
                         log::info!("[hotkey] hidden");
                     } else {
-                        crate::platform::macos::get_selected_text(app);
-                        log::info!("[hotkey] before reposition");
-                        crate::window::positioning::reposition_to_cursor_monitor(&window);
-                        log::info!("[hotkey] before sleep");
-                        std::thread::sleep(std::time::Duration::from_millis(16));
+                        // ── 隐藏 OR 显示但失焦 → 带到最前 ──
+                        // 仅在从"隐藏"唤起时才重新定位到当前光标所在显示器；
+                        // 失焦唤回不重定位（保留用户拖拽后的位置）。
+                        if !visible {
+                            crate::platform::macos::get_selected_text(app);
+                            log::info!("[hotkey] before reposition (hidden → show)");
+                            crate::window::positioning::reposition_to_cursor_monitor(&window);
+                            log::info!("[hotkey] before sleep");
+                            std::thread::sleep(std::time::Duration::from_millis(16));
+                        } else {
+                            log::info!("[hotkey] shown+unfocused → bring_to_front (no reposition)");
+                        }
+
                         log::info!("[hotkey] before bring_to_front, pos={:?}", window.outer_position().ok());
 
                         // Windows 上需要绕过前台窗口锁定；其他平台直接 show + set_focus
