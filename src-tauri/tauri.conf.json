@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "identifier": "com.buddy.chat",
   "build": {
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://localhost:5173",
     "frontendDist": "../dist",
     "beforeDevCommand": "npx vite",
     "beforeBuildCommand": "npm run build"
