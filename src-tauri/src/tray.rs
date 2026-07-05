@@ -1,6 +1,5 @@
 // 系统托盘模块
 
-use crate::window::events::mark_window_shown;
 use crate::window::positioning::reposition_to_cursor_monitor;
 use tauri::{
     image::Image,
@@ -8,6 +7,20 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager,
 };
+
+/// 显示窗口并稳定抢到前台（跨平台）
+///
+/// 包装各平台的"绕过前台锁定"实现，确保从托盘打开窗口的体验与快捷键一致。
+fn show_window(window: &tauri::WebviewWindow) {
+    #[cfg(target_os = "windows")]
+    crate::platform::windows::bring_to_front(window);
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
 
 /// 创建系统托盘
 ///
@@ -42,9 +55,7 @@ pub fn create_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
             "设置" => {
                 if let Some(window) = app.get_webview_window("main") {
                     reposition_to_cursor_monitor(&window);
-                    let _ = window.show();
-                    mark_window_shown(app);
-                    let _ = window.set_focus();
+                    show_window(&window);
                 }
             }
             "autostart" => {}
@@ -63,9 +74,7 @@ pub fn create_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
                 let app = tray.app_handle();
                 if let Some(window) = app.get_webview_window("main") {
                     reposition_to_cursor_monitor(&window);
-                    let _ = window.show();
-                    mark_window_shown(app);
-                    let _ = window.set_focus();
+                    show_window(&window);
                 }
             }
         })
