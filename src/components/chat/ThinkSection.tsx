@@ -103,7 +103,7 @@ export const ThinkSection = memo(function ThinkSection({
             style={{
               width: 6,
               height: 6,
-              borderRadius: '50%',
+              borderRadius: 'var(--radius-full)',
               background: 'var(--buddy-primary)',
               opacity: 0.6,
             }}

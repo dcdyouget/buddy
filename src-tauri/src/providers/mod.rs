@@ -26,9 +26,6 @@ pub enum ApiError {
     ServerError(u16),
     /// 网络错误
     NetworkError(String),
-    /// 流式错误
-    #[allow(dead_code)]
-    StreamError(String),
 }
 
 impl std::fmt::Display for ApiError {
@@ -38,7 +35,6 @@ impl std::fmt::Display for ApiError {
             ApiError::QuotaExceeded => write!(f, "429"),
             ApiError::ServerError(code) => write!(f, "server_error({})", code),
             ApiError::NetworkError(msg) => write!(f, "network: {}", msg),
-            ApiError::StreamError(msg) => write!(f, "stream: {}", msg),
         }
     }
 }
@@ -54,19 +50,14 @@ pub enum ProviderType {
 
 impl ProviderType {
     /// 从字符串解析 ProviderType（兼容旧配置，默认 OpenAI 兼容）
+    ///
+    /// `ProviderType` 在外部以字符串形式存储于 `AppConfig::providers[].provider_type`；
+    /// 解析时大小写不识别小写以外的大小写变体，未匹配的一律回落到 OpenAI 兼容模式以
+    /// 向后兼容历史配置。
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "anthropic" => ProviderType::Anthropic,
             _ => ProviderType::OpenAICompatible, // 默认和向后兼容
-        }
-    }
-
-    /// 转换为字符串（用于序列化）
-    #[allow(dead_code)]
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ProviderType::OpenAICompatible => "openai_compatible",
-            ProviderType::Anthropic => "anthropic",
         }
     }
 }

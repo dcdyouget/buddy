@@ -167,14 +167,11 @@ html[data-platform="windows"] #root {
 }
 
 /* ── Typography Classes ── */
-.t-display { font: 600 var(--font-size-2xl)/var(--line-height-tight) var(--font-sans); letter-spacing: var(--letter-spacing-tight); }
 .t-title   { font: 600 var(--font-size-xl)/var(--line-height-tight) var(--font-sans); letter-spacing: var(--letter-spacing-tight); }
 .t-h3      { font: 600 var(--font-size-lg)/var(--line-height-tight) var(--font-sans); }
 .t-body    { font: 400 var(--font-size-md)/var(--line-height-base) var(--font-sans); }
 .t-body-sm { font: 400 var(--font-size-base)/var(--line-height-base) var(--font-sans); }
 .t-caption { font: 400 var(--font-size-sm)/var(--line-height-base) var(--font-sans); color: var(--text-muted); }
-.t-overline{ font: 500 var(--font-size-xs)/1 var(--font-sans); letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-tertiary); }
-.t-mono    { font-family: var(--font-mono); }
 
 /* ── Blinking Cursor ── */
 @keyframes buddy-blink {
@@ -324,11 +321,4 @@ html[data-platform="windows"] #root {
 }
 .no-scrollbar::-webkit-scrollbar {
   display: none;                  /* Chrome/Safari */
-}
-
-/* ── 消息气泡内长文本自动换行 ── */
-.msg-bubble {
-  overflow-wrap: break-word;
-  word-break: break-word;
-  min-width: 0;                   /* 防止 flex 子元素撑开父容器 */
 }

@@ -100,9 +100,6 @@ impl ContentBlock {
 pub enum StopReason {
     /// 正常结束
     Stop,
-    /// 达到最大 token 长度
-    #[allow(dead_code)]
-    Length,
     /// 错误终止
     Error,
     /// 用户取消
@@ -144,13 +141,6 @@ pub enum StreamEvent {
         content_index: usize,
         /// 增量思考文本
         delta: String,
-    },
-    /// 思考块结束
-    #[allow(dead_code)]
-    ThinkingEnd {
-        content_index: usize,
-        /// 完整思考内容
-        content: String,
     },
     /// 流式完成
     Done {
@@ -233,15 +223,6 @@ impl StreamEventEmitter {
         });
     }
 
-    /// 便捷方法：发射 ThinkingEnd 事件
-    #[allow(dead_code)]
-    pub fn thinking_end(&self, content_index: usize, content: &str) {
-        self.emit(&StreamEvent::ThinkingEnd {
-            content_index,
-            content: content.to_string(),
-        });
-    }
-
     /// 便捷方法：发射 Done 事件
     pub fn done(&self, reason: StopReason, full_text: &str) {
         self.emit(&StreamEvent::Done {
@@ -257,12 +238,6 @@ impl StreamEventEmitter {
             message: message.to_string(),
             partial_text: partial_text.to_string(),
         });
-    }
-
-    /// 获取 AppHandle 引用（供内部使用）
-    #[allow(dead_code)]
-    pub fn app_handle(&self) -> &tauri::AppHandle {
-        &self.app
     }
 }
 
