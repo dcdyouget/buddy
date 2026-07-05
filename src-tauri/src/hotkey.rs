@@ -38,13 +38,20 @@ pub fn register(app: &tauri::AppHandle, shortcut: Shortcut) {
                         crate::window::positioning::reposition_to_cursor_monitor(&window);
                         log::info!("[hotkey] before sleep");
                         std::thread::sleep(std::time::Duration::from_millis(16));
-                        log::info!("[hotkey] before show, pos={:?}", window.outer_position().ok());
-                        let _ = window.show();
-                        log::info!("[hotkey] after show, visible={}", window.is_visible().unwrap_or(false));
-                        crate::window::events::mark_window_shown(app);
-                        log::info!("[hotkey] after mark_window_shown");
-                        let _ = window.set_focus();
-                        log::info!("[hotkey] after set_focus, focused={}", window.is_focused().unwrap_or(false));
+                        log::info!("[hotkey] before bring_to_front, pos={:?}", window.outer_position().ok());
+
+                        // Windows 上需要绕过前台窗口锁定；其他平台直接 show + set_focus
+                        #[cfg(target_os = "windows")]
+                        crate::platform::windows::bring_to_front(&window);
+                        #[cfg(not(target_os = "windows"))]
+                        {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+
+                        log::info!("[hotkey] after bring_to_front, visible={}, focused={}",
+                            window.is_visible().unwrap_or(false),
+                            window.is_focused().unwrap_or(false));
                     }
                 }
             }

@@ -1,7 +1,6 @@
 // 应用入口模块：窗口创建、快捷键注册、系统托盘、毛玻璃效果及圆角等核心初始化逻辑
 
 use std::sync::Mutex;
-use std::time::Instant;
 use tauri::Manager;
 use tauri_plugin_global_shortcut::Shortcut;
 
@@ -18,7 +17,6 @@ mod window;
 
 // Re-export key types for commands and hotkey modules
 pub use commands::CancelState;
-pub use window::events::LastShowTime;
 pub use window::positioning::SavedWindowPositions;
 
 /// 应用主入口：配置并启动整个 Tauri 应用
@@ -37,7 +35,6 @@ pub fn run() {
         .manage(hotkey::HotkeyState {
             current: Mutex::new(None),
         })
-        .manage(LastShowTime(Mutex::new(Instant::now())))
         .manage(SavedWindowPositions(Mutex::new(std::collections::HashMap::new())))
         .setup(|app| {
             // 加载配置
