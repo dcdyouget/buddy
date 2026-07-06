@@ -127,6 +127,10 @@ function App() {
   // 用户在其他应用中选中文本后按快捷键，Rust 会发送该事件
   // 前端收到后将文本填入输入框草稿
   useEffect(() => {
+    // 仅在 Tauri 环境下执行（浏览器环境无 __TAURI_INTERNALS__，调用 listen 会抛错）
+    if (typeof window === 'undefined' || !(window as any).__TAURI_INTERNALS__) {
+      return;
+    }
     import('@tauri-apps/api/event').then(({ listen }) => {
       listen<string>('selected-text', (event) => {
         const text = event.payload.trim();

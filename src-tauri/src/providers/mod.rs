@@ -15,6 +15,38 @@ use crate::streaming::StreamEventEmitter;
 use std::future::Future;
 use tokio::sync::watch;
 
+/// 从 API 错误响应 JSON 中提取人类可读的错误消息
+///
+/// 尝试解析常见格式：
+/// - `{"error": {"message": "..."}}`（OpenAI/MiniMax/DeepSeek 等）
+/// - `{"error": {"error": {"message": "..."}}}`（Anthropic）
+/// - 解析失败时回退到截断的原始文本
+pub fn extract_error_message(body_text: &str) -> String {
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(body_text) {
+        // 尝试 error.message（OpenAI 兼容格式）
+        if let Some(msg) = json["error"]["message"].as_str() {
+            let trimmed = msg.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        // 尝试 error.error.message（Anthropic 格式）
+        if let Some(msg) = json["error"]["error"]["message"].as_str() {
+            let trimmed = msg.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+    // 回退：截断原始文本
+    let preview: String = body_text.chars().take(200).collect();
+    if preview.is_empty() {
+        "未知错误".to_string()
+    } else {
+        preview
+    }
+}
+
 /// API 错误类型
 #[derive(Debug)]
 pub enum ApiError {
@@ -22,8 +54,8 @@ pub enum ApiError {
     Unauthorized,
     /// 429 配额超限
     QuotaExceeded,
-    /// 服务端错误
-    ServerError(u16),
+    /// 服务端错误（HTTP 状态码, API 返回的错误消息）
+    ServerError(u16, String),
     /// 网络错误
     NetworkError(String),
 }
@@ -31,10 +63,10 @@ pub enum ApiError {
 impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ApiError::Unauthorized => write!(f, "401"),
-            ApiError::QuotaExceeded => write!(f, "429"),
-            ApiError::ServerError(code) => write!(f, "server_error({})", code),
-            ApiError::NetworkError(msg) => write!(f, "network: {}", msg),
+            ApiError::Unauthorized => write!(f, "401 Unauthorized"),
+            ApiError::QuotaExceeded => write!(f, "429 Quota Exceeded"),
+            ApiError::ServerError(code, msg) => write!(f, "{} (HTTP {})", msg, code),
+            ApiError::NetworkError(msg) => write!(f, "网络错误: {}", msg),
         }
     }
 }
