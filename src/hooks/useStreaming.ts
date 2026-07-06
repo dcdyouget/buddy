@@ -30,6 +30,7 @@ export function useStreaming() {
   const handleThinkingEnd = useChatStore((s) => s.handleThinkingEnd);
   const handleStreamDone = useChatStore((s) => s.handleStreamDone);
   const handleStreamError = useChatStore((s) => s.handleStreamError);
+  const saveMessage = useChatStore((s) => s.saveMessage);
   const setPage = useUIStore((s) => s.setPage);
 
   const epochRef = useRef(0);
@@ -104,19 +105,22 @@ export function useStreaming() {
                   created_at: Math.floor(Date.now() / 1000),
                 };
                 chatState.setMessages([...chatState.messages, warningMsg]);
+                saveMessage(warningMsg);
                 setPage('conversation');
-              } else if (e.message.includes('server') || e.message.includes('500')) {
+              } else if (e.message.includes('HTTP 5') || e.message.includes('server_error')) {
+                // 服务端错误：直接展示 API 返回的具体错误信息（如"当前服务集群负载较高，请稍后重试"）
                 const chatState = useChatStore.getState();
                 const retryMsg: Message = {
                   id: 'err-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 9),
                   role: 'assistant',
-                  content: '请求失败，请重试',
+                  content: e.message,
                   model_id: null,
                   created_at: Math.floor(Date.now() / 1000),
                 };
                 chatState.setMessages([...chatState.messages, retryMsg]);
+                saveMessage(retryMsg);
                 setPage('conversation');
-              } else if (e.message.includes('network') || e.message.includes('timeout')) {
+              } else if (e.message.includes('网络错误') || e.message.includes('network') || e.message.includes('timeout')) {
                 const chatState = useChatStore.getState();
                 const retryMsg: Message = {
                   id: 'err-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 9),
@@ -126,6 +130,7 @@ export function useStreaming() {
                   created_at: Math.floor(Date.now() / 1000),
                 };
                 chatState.setMessages([...chatState.messages, retryMsg]);
+                saveMessage(retryMsg);
                 setPage('conversation');
               } else {
                 setPage('conversation');

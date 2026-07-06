@@ -117,6 +117,9 @@ export function ChatPage() {
             flex: 1,
             overflowY: 'auto',
             padding: 'var(--space-6) 0 var(--space-4) 0',
+            display: 'flex',
+            flexDirection: 'column',
+            justifyContent: messages.length === 0 ? 'center' : 'flex-start',
           }}
         >
           {messages.length === 0 && (
@@ -125,9 +128,9 @@ export function ChatPage() {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                height: '100%',
                 color: 'var(--text-tertiary)',
                 fontSize: '14px',
+                paddingBottom: 'var(--space-3)',
               }}
             >
               开始新对话
@@ -156,19 +159,25 @@ export function ChatPage() {
         </div>
 
         {/* 输入区域 */}
-        <InputDock
-          isStreaming={isStreaming}
-          streamingModelName={streamingModel?.display_name}
-          streamingTokens={streamingTokens}
-          selectedModel={selectedModel}
-          draftInput={draftInput}
-          onDraftChange={setDraftInput}
-          onSend={isStreaming ? () => {} : handleSend}
-          onStop={handleStop}
-          onModelPickerClick={
-            isStreaming ? () => {} : () => setShowDropdown(!showDropdown)
-          }
-        />
+        <div
+          style={{
+            padding: messages.length === 0 ? '0 var(--space-3) var(--space-4)' : undefined,
+          }}
+        >
+          <InputDock
+            isStreaming={isStreaming}
+            streamingModelName={streamingModel?.display_name}
+            streamingTokens={streamingTokens}
+            selectedModel={selectedModel}
+            draftInput={draftInput}
+            onDraftChange={setDraftInput}
+            onSend={isStreaming ? () => {} : handleSend}
+            onStop={handleStop}
+            onModelPickerClick={
+              isStreaming ? () => {} : () => setShowDropdown(!showDropdown)
+            }
+          />
+        </div>
       </GlassPanel>
 
       {/* 模型选择下拉（仅非流式时可用） */}

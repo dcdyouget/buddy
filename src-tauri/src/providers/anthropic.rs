@@ -141,14 +141,16 @@ impl LlmProvider for AnthropicProvider {
                     status.as_u16(),
                     preview
                 );
+                let api_msg = super::extract_error_message(&body_text);
                 match status.as_u16() {
                     401 => return Err(ApiError::Unauthorized),
                     429 => return Err(ApiError::QuotaExceeded),
-                    code if code >= 500 => return Err(ApiError::ServerError(code)),
+                    code if code >= 500 => return Err(ApiError::ServerError(code, api_msg)),
                     _ => {
                         return Err(ApiError::NetworkError(format!(
-                            "HTTP {}",
-                            status.as_u16()
+                            "HTTP {}: {}",
+                            status.as_u16(),
+                            api_msg
                         )))
                     }
                 }

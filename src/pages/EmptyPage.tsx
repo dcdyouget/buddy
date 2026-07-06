@@ -52,6 +52,7 @@ export function EmptyPage() {
         display: 'flex',
         flexDirection: 'column',
         background: 'transparent',
+        position: 'relative',
       }}
     >
       <GlassPanel
@@ -59,7 +60,7 @@ export function EmptyPage() {
           flex: 1,
           display: 'flex',
           flexDirection: 'column',
-          justifyContent: 'flex-end',
+          justifyContent: 'center',
           overflow: 'hidden',
           margin: 0,
           borderRadius: 'var(--radius-xl)',
@@ -74,6 +75,7 @@ export function EmptyPage() {
           onSend={handleSend}
           onStop={() => {}} // 空态页无流式进行中，stop 为空操作
           disableAutoResize
+          hideBorder
         />
       </GlassPanel>
 

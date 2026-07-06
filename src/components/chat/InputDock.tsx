@@ -28,6 +28,8 @@ interface InputDockProps {
   onModelPickerClick?: () => void;
   /** 禁用 textarea 自动撑高，改为固定高度 + 滚动条（用于紧凑窗口） */
   disableAutoResize?: boolean;
+  /** 隐藏顶部分隔线（空态气泡中不需要分隔消息列表） */
+  hideBorder?: boolean;
 }
 
 /**
@@ -49,6 +51,7 @@ export function InputDock({
   onSend,
   onStop,
   disableAutoResize = false,
+  hideBorder = false,
 }: InputDockProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // 保持最新的 isStreaming 值供事件回调使用（避免闭包过期）
@@ -125,8 +128,8 @@ export function InputDock({
         display: 'flex',
         alignItems: 'flex-end',
         gap: 'var(--space-2)',
-        padding: 'var(--space-3) var(--space-4)',
-        borderTop: '1px solid var(--border-subtle)',
+        padding: 'var(--space-3)',
+        borderTop: hideBorder ? 'none' : '1px solid var(--border-subtle)',
         width: '100%',
       }}
     >
@@ -174,36 +177,49 @@ export function InputDock({
           />
         </>
       ) : (
-        /* 正常输入状态：textarea + 清除按钮 + 发送按钮 */
+        /* 正常输入状态：textarea（内含清除按钮）+ 发送按钮 */
         <>
-          <textarea
-            ref={textareaRef}
-            value={draftInput}
-            onChange={(e) => onDraftChange(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="输入消息... Enter 发送 · ⌘Enter 换行"
-            rows={1}
-            style={{
-              flex: 1,
-              padding: 'var(--space-2) var(--space-3)',
-              borderRadius: 'var(--radius-md)',
-              border: '1px solid var(--border-subtle)',
-              background: 'var(--bg-sunken)',
-              color: 'var(--text-primary)',
-              fontFamily: 'var(--font-sans)',
-              fontSize: '14px',
-              lineHeight: 1.5,
-              resize: 'none',
-              outline: 'none',
-              maxHeight: '120px',
-              overflowY: 'auto',
-              overflowWrap: 'break-word',
-              wordBreak: 'break-word',
-            }}
-          />
+          <div style={{ position: 'relative', flex: 1, display: 'flex' }}>
+            <textarea
+              ref={textareaRef}
+              value={draftInput}
+              onChange={(e) => onDraftChange(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="输入消息... Enter 发送 · ⌘Enter 换行"
+              rows={1}
+              style={{
+                flex: 1,
+                padding: 'var(--space-2) var(--space-3)',
+                paddingRight: hasContent ? '28px' : 'var(--space-3)',
+                borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--border-subtle)',
+                background: 'var(--bg-sunken)',
+                color: 'var(--text-primary)',
+                fontFamily: 'var(--font-sans)',
+                fontSize: '14px',
+                lineHeight: 1.5,
+                resize: 'none',
+                outline: 'none',
+                maxHeight: '120px',
+                overflowY: 'auto',
+                overflowWrap: 'break-word',
+                wordBreak: 'break-word',
+              }}
+            />
 
-          {/* 清除按钮：有输入内容时才显示 */}
-          <ClearButton visible={hasContent} onClear={() => onDraftChange('')} />
+            {/* 清除按钮：定位在输入框内部右侧 */}
+            <div
+              style={{
+                position: 'absolute',
+                right: '6px',
+                top: '50%',
+                transform: 'translateY(-50%)',
+                display: hasContent ? 'flex' : 'none',
+              }}
+            >
+              <ClearButton visible={hasContent} onClear={() => onDraftChange('')} />
+            </div>
+          </div>
 
 
           <IconButton
