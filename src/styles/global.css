@@ -182,11 +182,12 @@ html[data-platform="windows"] #root {
 .buddy-cursor {
   display: inline-block;
   width: 2px;
-  height: 1em;
+  height: 1.2em;
   background: var(--buddy-primary);
-  margin-left: 1px;
-  vertical-align: text-bottom;
+  margin-left: 0;
+  vertical-align: baseline;
   animation: buddy-blink 1s step-end infinite;
+  border-radius: 1px;
 }
 
 /* ── Reduced Motion ── */

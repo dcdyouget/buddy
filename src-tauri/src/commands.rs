@@ -117,6 +117,22 @@ fn compute_window_start(messages: &[Message], token_budget: u32) -> usize {
     start
 }
 
+/// 构造 tool 结果消息
+fn build_tool_msg(turn: usize, call: &crate::models::ToolCall, content: String, is_error: bool) -> Message {
+    Message {
+        id: format!("t-{}-{}", turn, chrono::Utc::now().timestamp_millis()),
+        role: MessageRole::Tool,
+        content,
+        blocks: None,
+        model_id: None,
+        created_at: chrono::Utc::now().timestamp() as u64,
+        tool_calls: None,
+        tool_call_id: Some(call.id.clone()),
+        tool_name: Some(call.name.clone()),
+        is_error: Some(is_error),
+    }
+}
+
 /// 发送消息命令
 ///
 /// 前端调用此命令发起 AI 对话。后端根据 Provider 类型分发到对应适配器：
@@ -200,7 +216,7 @@ pub async fn send_message(
     }
 
     // 创建取消通道
-    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let (cancel_tx, mut cancel_rx) = watch::channel(false);
     *state.sender.lock() = Some(cancel_tx);
 
     // 创建统一事件发射器
@@ -218,6 +234,9 @@ pub async fn send_message(
 
     // 把 messages 拷成可变的 Vec,tool 循环会往里 push assistant(tool_calls) + tool(result)
     let mut conv_messages: Vec<Message> = messages.clone();
+
+    // 每次 send_message 开始时重置"本次都允许"标志，防止上次被中断时残留
+    approval.approve_all_for_turn.store(false, Ordering::Relaxed);
 
     // 工具循环上限(防止 model 死循环):最多 5 轮 tool 调用
     const MAX_TOOL_TURNS: usize = 5;
@@ -274,7 +293,7 @@ pub async fn send_message(
             let app_handle = app.clone();
             let to_persist = assistant_msg.clone();
             tokio::task::spawn_blocking(move || {
-                storage::append_message(&app_handle, &to_persist).ok();
+                storage::append_message(&app_handle, &to_persist).unwrap_or_else(|e| warn!("持久化消息失败: {}", e));
             });
             conv_messages.push(assistant_msg.clone());
         }
@@ -293,22 +312,11 @@ pub async fn send_message(
                 None => {
                     let content = format!("tool '{}' 未在 ToolRegistry 中注册", call.name);
                     emitter.tool_result(&call.id, &call.name, &content, true);
-                    let tool_msg = Message {
-                        id: format!("t-{}-{}", turn, chrono::Utc::now().timestamp_millis()),
-                        role: MessageRole::Tool,
-                        content,
-                        blocks: None,
-                        model_id: None,
-                        created_at: chrono::Utc::now().timestamp() as u64,
-                        tool_calls: None,
-                        tool_call_id: Some(call.id.clone()),
-                        tool_name: Some(call.name.clone()),
-                        is_error: Some(true),
-                    };
+                    let tool_msg = build_tool_msg(turn, call, content, true);
                     let app_handle = app.clone();
                     let to_persist = tool_msg.clone();
                     tokio::task::spawn_blocking(move || {
-                        storage::append_message(&app_handle, &to_persist).ok();
+                        storage::append_message(&app_handle, &to_persist).unwrap_or_else(|e| warn!("持久化消息失败: {}", e));
                     });
                     conv_messages.push(tool_msg.clone());
                     continue;
@@ -329,32 +337,33 @@ pub async fn send_message(
                     reason: reason.clone(),
                     tx: Some(tx),
                 });
-                let approved = match rx.await {
-                    Ok(b) => b,
-                    Err(_) => {
-                        warn!("[send_message] 审批 oneshot 失败,按拒绝处理");
+                let approved = tokio::select! {
+                    _ = cancel_rx.changed() => {
+                        // User cancelled during approval wait — remove the slot from pending
+                        if let Some(idx) = approval.pending.lock().iter().position(|s| s.id == call.id) {
+                            approval.pending.lock().remove(idx);
+                        }
+                        warn!("[send_message] 审批被用户取消");
                         false
+                    }
+                    result = rx => {
+                        match result {
+                            Ok(b) => b,
+                            Err(_) => {
+                                warn!("[send_message] 审批 oneshot 失败,按拒绝处理");
+                                false
+                            }
+                        }
                     }
                 };
                 if !approved {
                     let content = "用户拒绝执行".to_string();
                     emitter.tool_result(&call.id, &call.name, &content, true);
-                    let tool_msg = Message {
-                        id: format!("t-{}-{}", turn, chrono::Utc::now().timestamp_millis()),
-                        role: MessageRole::Tool,
-                        content,
-                        blocks: None,
-                        model_id: None,
-                        created_at: chrono::Utc::now().timestamp() as u64,
-                        tool_calls: None,
-                        tool_call_id: Some(call.id.clone()),
-                        tool_name: Some(call.name.clone()),
-                        is_error: Some(true),
-                    };
+                    let tool_msg = build_tool_msg(turn, call, content, true);
                     let app_handle = app.clone();
                     let to_persist = tool_msg.clone();
                     tokio::task::spawn_blocking(move || {
-                        storage::append_message(&app_handle, &to_persist).ok();
+                        storage::append_message(&app_handle, &to_persist).unwrap_or_else(|e| warn!("持久化消息失败: {}", e));
                     });
                     conv_messages.push(tool_msg.clone());
                     continue;
@@ -368,22 +377,11 @@ pub async fn send_message(
                 Err(e) => {
                     let content = format!("参数解析失败: {}", e);
                     emitter.tool_result(&call.id, &call.name, &content, true);
-                    let tool_msg = Message {
-                        id: format!("t-{}-{}", turn, chrono::Utc::now().timestamp_millis()),
-                        role: MessageRole::Tool,
-                        content,
-                        blocks: None,
-                        model_id: None,
-                        created_at: chrono::Utc::now().timestamp() as u64,
-                        tool_calls: None,
-                        tool_call_id: Some(call.id.clone()),
-                        tool_name: Some(call.name.clone()),
-                        is_error: Some(true),
-                    };
+                    let tool_msg = build_tool_msg(turn, call, content, true);
                     let app_handle = app.clone();
                     let to_persist = tool_msg.clone();
                     tokio::task::spawn_blocking(move || {
-                        storage::append_message(&app_handle, &to_persist).ok();
+                        storage::append_message(&app_handle, &to_persist).unwrap_or_else(|e| warn!("持久化消息失败: {}", e));
                     });
                     conv_messages.push(tool_msg.clone());
                     continue;
@@ -400,42 +398,41 @@ pub async fn send_message(
             info!("[send_message] turn {} tool '{}' 执行结果: is_error={}, content_len={}",
                 turn, call.name, is_error, content.len());
             emitter.tool_result(&call.id, &call.name, &content, is_error);
-            let tool_msg = Message {
-                id: format!("t-{}-{}", turn, chrono::Utc::now().timestamp_millis()),
-                role: MessageRole::Tool,
-                content,
-                blocks: None,
-                model_id: None,
-                created_at: chrono::Utc::now().timestamp() as u64,
-                tool_calls: None,
-                tool_call_id: Some(call.id.clone()),
-                tool_name: Some(call.name.clone()),
-                is_error: Some(is_error),
-            };
+            let tool_msg = build_tool_msg(turn, call, content, is_error);
             let app_handle = app.clone();
             let to_persist = tool_msg.clone();
             tokio::task::spawn_blocking(move || {
-                storage::append_message(&app_handle, &to_persist).ok();
+                storage::append_message(&app_handle, &to_persist).unwrap_or_else(|e| warn!("持久化消息失败: {}", e));
             });
             conv_messages.push(tool_msg.clone());
         }
         // 继续下一轮:重新调 stream_chat(把 tool result 给 model)
     };
 
-    // 错误 → 单独发 error 事件
-    if let Err(e) = &outcome {
-        warn!("[send_message] 最终错误: {}", e);
-        let error_emitter = StreamEventEmitter::new(app.clone());
-        // 若在 tool 循环中失败(turn>1) → 附加提示信息
-        let error_msg = if turn > 1 {
-            format!(
-                "{} (工具调用后请求失败, 可能是 Provider 不支持 tool 回传格式)",
-                e
-            )
-        } else {
-            e.to_string()
-        };
-        error_emitter.error(StopReason::Error, &error_msg, "");
+    // 成功时发射 done 事件（仅当 provider 内部未发射过 error 时）
+    // done 事件从 provider 移到这里发射，保证 tool 循环中的多轮 stream_chat
+    // 不会触发前端过早调用 handleStreamDone()
+    match &outcome {
+        Ok(out) if !out.had_stream_error => {
+            emitter.done(StopReason::Stop, &out.full_text);
+        }
+        Ok(_) => {
+            // provider 已发射过 error 事件，不再发 done
+        }
+        Err(e) => {
+            warn!("[send_message] 最终错误: {}", e);
+            let error_emitter = StreamEventEmitter::new(app.clone());
+            // 若在 tool 循环中失败(turn>1) → 附加提示信息
+            let error_msg = if turn > 1 {
+                format!(
+                    "{} (工具调用后请求失败, 可能是 Provider 不支持 tool 回传格式)",
+                    e
+                )
+            } else {
+                e.to_string()
+            };
+            error_emitter.error(StopReason::Error, &error_msg, "");
+        }
     }
 
     // 清理:取消通道 + 重置 "本次都允许" 标志(P5 一次性,下次 send_message 重新开始)

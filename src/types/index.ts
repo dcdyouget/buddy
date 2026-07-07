@@ -149,6 +149,7 @@ export interface ProviderPreset {
   id: string;
   name: string;
   base_url: string;
+  icon_letter: string;
   provider_type: ProviderType;
   compat?: CompatConfig;
 }
@@ -159,6 +160,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     id: 'deepseek',
     name: 'DeepSeek',
     base_url: 'https://api.deepseek.com',
+    icon_letter: 'D',
     provider_type: 'openai_compatible',
     compat: { thinking_format: 'deepseek' },
   },
@@ -166,6 +168,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     id: 'openai',
     name: 'OpenAI',
     base_url: 'https://api.openai.com/v1',
+    icon_letter: 'O',
     provider_type: 'openai_compatible',
     compat: { max_tokens_field: 'max_completion_tokens' },
   },
@@ -173,6 +176,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     id: 'anthropic',
     name: 'Anthropic',
     base_url: 'https://api.anthropic.com',
+    icon_letter: 'A',
     provider_type: 'anthropic',
     compat: {},
   },
@@ -180,6 +184,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     id: 'openrouter',
     name: 'OpenRouter',
     base_url: 'https://openrouter.ai/api/v1',
+    icon_letter: 'O',
     provider_type: 'openai_compatible',
     compat: { thinking_format: 'openrouter' },
   },
@@ -187,6 +192,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     id: 'glm',
     name: 'GLM / 智谱',
     base_url: 'https://open.bigmodel.cn/api/paas/v4',
+    icon_letter: 'G',
     provider_type: 'openai_compatible',
     compat: {},
   },
@@ -194,6 +200,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     id: 'minimax',
     name: 'MiniMax',
     base_url: 'https://api.minimax.chat/v1',
+    icon_letter: 'M',
     provider_type: 'openai_compatible',
     compat: {},
   },
@@ -201,6 +208,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     id: 'moonshot',
     name: 'Moonshot / 月之暗面',
     base_url: 'https://api.moonshot.cn/v1',
+    icon_letter: 'M',
     provider_type: 'openai_compatible',
     compat: {},
   },
@@ -208,6 +216,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     id: 'qwen',
     name: 'Qwen / 通义千问',
     base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    icon_letter: 'Q',
     provider_type: 'openai_compatible',
     compat: { thinking_format: 'qwen' },
   },
@@ -215,6 +224,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     id: 'zhipu',
     name: 'Zhipu / 智谱',
     base_url: 'https://open.bigmodel.cn/api/paas/v4',
+    icon_letter: 'Z',
     provider_type: 'openai_compatible',
     compat: {},
   },

@@ -173,12 +173,14 @@ export function StreamingMarkdown({ content, isStreaming }: StreamingMarkdownPro
 
       {/* 不稳定部分：当前正在写的段落/标题/列表，跟随 token 更新 */}
       {unstablePart && (
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={COMPONENTS}>
-          {unstablePart}
-        </ReactMarkdown>
+        <>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={COMPONENTS}>
+            {unstablePart}
+          </ReactMarkdown>
+          {/* 光标嵌在内容末尾，随文字增长移动 */}
+          {isStreaming && <span className="buddy-cursor" />}
+        </>
       )}
-
-      {/* 流式输出中的闪烁光标已移至 MessageBubble 层统一控制 */}
     </div>
   );
 }

@@ -238,8 +238,7 @@ mod tests {
         let mut reg = ToolRegistry::new(vec![Arc::new(DummyTool)]);
         reg.set_mcp_tools(vec![Arc::new(OverrideTool)]);
         let t = reg.get("dummy").unwrap();
-        let out = t; // verify it's the override
-        let _ = out;
+        assert_eq!(t.description(), "override", "MCP tool should override builtin with same name");
     }
 
     #[test]

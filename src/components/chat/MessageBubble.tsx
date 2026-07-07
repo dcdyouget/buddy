@@ -78,7 +78,6 @@ function AssistantContent({ message, isStreaming }: { message: Message; isStream
             />
           );
         })}
-        {isStreaming && <span className="buddy-cursor" />}
       </>
     );
   }
@@ -89,7 +88,7 @@ function AssistantContent({ message, isStreaming }: { message: Message; isStream
     return (
       <>
         <StreamingMarkdown content={message.content} isStreaming={isStreaming} />
-        {isStreaming && <span className="buddy-cursor" />}
+        {/* cursor moved into StreamingMarkdown */}
       </>
     );
   }
@@ -117,7 +116,7 @@ function AssistantContent({ message, isStreaming }: { message: Message; isStream
           />
         );
       })}
-      {isStreaming && <span className="buddy-cursor" />}
+      {/* cursor moved into StreamingMarkdown */}
     </>
   );
 }

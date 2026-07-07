@@ -41,6 +41,11 @@ interface ChatState {
     reason: string;
   } | null;
 
+  // P9: 平滑文本渲染 —— 后端推送的文本增量先入队缓冲
+  // rAF 循环再从队头逐字消费到 streamingBlocks，避免突发的 SSE chunk
+  // 导致 React 批量 re-render 产生的「一卡一卡」视觉
+  pendingTextBuffer: string;
+
   // ── 操作 ──
   setDraftInput: (text: string) => void;
   sendMessage: (content: string, modelId: string) => Promise<void>;
@@ -65,6 +70,10 @@ interface ChatState {
   handleStreamDone: () => void;
   handleStreamError: (reason: string, message: string) => void;
   finalizeMessage: () => void;
+  // P9: 平滑渲染
+  feedTextDelta: (delta: string) => void;
+  smoothTextDelta: (count: number) => void;
+  flushTextBuffer: () => void;
   saveMessage: (message: Message) => Promise<void>;
   loadMessages: (offset?: number, limit?: number) => Promise<void>;
   clearMessages: () => void;
@@ -110,6 +119,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   streamingBlocks: [],
   error: null,
   toolApproval: null,
+  pendingTextBuffer: '',
   /** 设置输入框草稿文本（用于接收外部选中的文本） */
   setDraftInput: (text: string) => {
     set({ draftInput: text });
@@ -153,6 +163,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamingTokens: 0,
       streamingModelId: modelId,
       streamingBlocks: [],
+      pendingTextBuffer: '',
       error: null,
     });
 
@@ -298,29 +309,34 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  /** 思考块开始 */
-  handleThinkingStart: (contentIndex: number) => {
+  /** 思考块开始 —— 追加到 blocks 末尾而非按 content_index 覆盖 */
+  handleThinkingStart: (_contentIndex: number) => {
     const blocks = [...get().streamingBlocks];
-    while (blocks.length <= contentIndex) {
+    const lastBlock = blocks[blocks.length - 1];
+    // 如果最后一个已经是 open 的 thinking block，重置它
+    if (lastBlock && lastBlock.type === 'thinking' && lastBlock.is_open) {
+      blocks[blocks.length - 1] = { type: 'thinking', content: '', is_open: true };
+    } else {
       blocks.push({ type: 'thinking', content: '', is_open: true });
     }
-    blocks[contentIndex] = { type: 'thinking', content: '', is_open: true };
     set({ streamingBlocks: blocks });
   },
 
-  /** 追加思考 delta */
-  handleThinkingDelta: (contentIndex: number, delta: string) => {
+  /** 追加思考 delta —— 在 blocks 末尾找最后一个 open 的 thinking block */
+  handleThinkingDelta: (_contentIndex: number, delta: string) => {
     const blocks = [...get().streamingBlocks];
-    while (blocks.length <= contentIndex) {
-      blocks.push({ type: 'thinking', content: '', is_open: true });
+    // 从后往前找最后一个 open 的 thinking block
+    let found = false;
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      const b = blocks[i];
+      if (b.type === 'thinking' && b.is_open) {
+        blocks[i] = { type: 'thinking', content: b.content + delta, is_open: true };
+        found = true;
+        break;
+      }
     }
-    const block = blocks[contentIndex];
-    if (block.type === 'thinking') {
-      blocks[contentIndex] = {
-        ...block,
-        content: block.content + delta,
-        is_open: true,
-      };
+    if (!found) {
+      blocks.push({ type: 'thinking', content: delta, is_open: true });
     }
     set({
       streamingBlocks: blocks,
@@ -329,17 +345,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   /** 思考块结束 */
-  handleThinkingEnd: (contentIndex: number, content: string) => {
+  handleThinkingEnd: (_contentIndex: number, content: string) => {
     const blocks = [...get().streamingBlocks];
-    while (blocks.length <= contentIndex) {
-      blocks.push({ type: 'thinking', content: '', is_open: false });
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      const b = blocks[i];
+      if (b.type === 'thinking' && b.is_open) {
+        blocks[i] = { type: 'thinking', content, is_open: false };
+        set({ streamingBlocks: blocks });
+        return;
+      }
     }
-    blocks[contentIndex] = { type: 'thinking', content, is_open: false };
+    blocks.push({ type: 'thinking', content, is_open: false });
     set({ streamingBlocks: blocks });
   },
 
-  /** 流式完成：将 streamingBlocks 附加到消息 */
+  /** 流式完成：先清缓冲，再将 streamingBlocks 附加到消息 */
   handleStreamDone: () => {
+    get().flushTextBuffer();
     const { messages, streamingBlocks } = get();
     const updated = [...messages];
     const lastMsg = { ...updated[updated.length - 1] } as Message;
@@ -353,19 +375,70 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamingTokens: 0,
       streamingModelId: null,
       streamingBlocks: [],
+      pendingTextBuffer: '',
       toolApproval: null,
     });
   },
 
-  /** 流式错误：重置状态 */
+  /** 流式错误：先清缓冲再重置状态 */
   handleStreamError: (_reason: string, message: string) => {
+    get().flushTextBuffer();
     set({
       isStreaming: false,
       streamingTokens: 0,
       streamingModelId: null,
       streamingBlocks: [],
+      pendingTextBuffer: '',
       error: message,
     });
+  },
+
+  // ── P9: 平滑文本渲染 ────────────────────────────
+
+  /** 将 text_delta 入队到缓冲，等待 rAF 循环逐字消费 */
+  feedTextDelta: (delta: string) => {
+    set((s) => ({ pendingTextBuffer: s.pendingTextBuffer + delta }));
+  },
+
+  /** rAF 每帧调用：从缓冲区取 count 个字符，追加到 streamingBlocks 和 messages[last].content */
+  smoothTextDelta: (count: number) => {
+    const { pendingTextBuffer, messages, streamingBlocks } = get();
+    if (pendingTextBuffer.length === 0) return;
+
+    const chars = pendingTextBuffer.slice(0, count);
+    const rest = pendingTextBuffer.slice(count);
+
+    // 更新最后一条消息的 content（用于持久化）
+    const updated = [...messages];
+    const lastMsg = { ...updated[updated.length - 1] } as Message;
+    lastMsg.content = (lastMsg.content || '') + chars;
+    updated[updated.length - 1] = lastMsg;
+
+    // 增量追加到 streamingBlocks（不完全 parseThinkFromText，避免 O(n²)）
+    const blocks = [...streamingBlocks];
+    const lastBlock = blocks[blocks.length - 1];
+    if (lastBlock && lastBlock.type === 'text') {
+      blocks[blocks.length - 1] = { ...lastBlock, content: lastBlock.content + chars };
+    } else {
+      if (lastBlock && lastBlock.type === 'thinking' && lastBlock.is_open) {
+        blocks[blocks.length - 1] = { ...lastBlock, is_open: false };
+      }
+      blocks.push({ type: 'text', content: chars });
+    }
+
+    set({
+      pendingTextBuffer: rest,
+      messages: updated,
+      streamingBlocks: blocks,
+      streamingTokens: get().streamingTokens + 1,
+    });
+  },
+
+  /** 将缓冲区剩余字符全部推入（done/error 前调用，防止丢字） */
+  flushTextBuffer: () => {
+    const { pendingTextBuffer } = get();
+    if (pendingTextBuffer.length === 0) return;
+    get().smoothTextDelta(pendingTextBuffer.length);
   },
 
   /** 流式生成完成后的收尾工作 */
