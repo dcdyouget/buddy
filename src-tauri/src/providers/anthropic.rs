@@ -55,47 +55,71 @@ impl AnthropicProvider {
     /// 入参 `messages: &[Message]` 是 `&[Message]`：不可变借用 Message 切片
     /// ≈ Java 的 `List<Message>` 不可变视图
     fn convert_messages(messages: &[Message]) -> Vec<Value> {
+        // 收集所有 assistant 消息中有效的 tool_use id
+        let valid_tool_use_ids: std::collections::HashSet<&str> = messages
+            .iter()
+            .filter(|m| m.role == MessageRole::Assistant)
+            .filter_map(|m| m.tool_calls.as_ref())
+            .flat_map(|calls| calls.iter().map(|tc| tc.id.as_str()))
+            .collect();
+
         messages
             .iter()
-            .map(|m| match m.role {
-                MessageRole::User => {
-                    json!({ "role": "user", "content": m.content })
-                }
-                MessageRole::Assistant => {
-                    let mut obj = json!({ "role": "assistant" });
-                    if let Some(calls) = &m.tool_calls {
-                        let mut content: Vec<Value> = if m.content.is_empty() {
-                            vec![]
-                        } else {
-                            vec![json!({"type": "text", "text": m.content})]
-                        };
-                        for tc in calls {
-                            let args: Value = serde_json::from_str(&tc.arguments).unwrap_or(Value::Null);
-                            content.push(json!({
-                                "type": "tool_use",
-                                "id": tc.id,
-                                "name": tc.name,
-                                "input": args,
-                            }));
-                        }
-                        obj["content"] = json!(content);
-                    } else {
-                        obj["content"] = json!(m.content);
-                    }
-                    obj
-                }
-                MessageRole::Tool => {
+            .filter_map(|m| {
+                // 孤儿 tool 消息：有 tool_use_id 但找不到对应的 assistant tool_use
+                // 整条过滤掉，不发给 API
+                if m.role == MessageRole::Tool {
                     let id = m.tool_call_id.as_deref().unwrap_or("");
-                    json!({
-                        "role": "user",
-                        "content": [{
-                            "type": "tool_result",
-                            "tool_use_id": id,
-                            "content": m.content,
-                            "is_error": m.is_error.unwrap_or(false),
-                        }]
-                    })
+                    if !id.is_empty() && !valid_tool_use_ids.contains(id) {
+                        warn!(
+                            "[anthropic::convert_messages] 过滤孤儿 tool 消息, tool_use_id='{}' 找不到对应的 assistant tool_use",
+                            id
+                        );
+                        return None;
+                    }
                 }
+
+                let result = match m.role {
+                    MessageRole::User => {
+                        json!({ "role": "user", "content": m.content })
+                    }
+                    MessageRole::Assistant => {
+                        let mut obj = json!({ "role": "assistant" });
+                        if let Some(calls) = &m.tool_calls {
+                            let mut content: Vec<Value> = if m.content.is_empty() {
+                                vec![]
+                            } else {
+                                vec![json!({"type": "text", "text": m.content})]
+                            };
+                            for tc in calls {
+                                let args: Value = serde_json::from_str(&tc.arguments).unwrap_or(Value::Null);
+                                content.push(json!({
+                                    "type": "tool_use",
+                                    "id": tc.id,
+                                    "name": tc.name,
+                                    "input": args,
+                                }));
+                            }
+                            obj["content"] = json!(content);
+                        } else {
+                            obj["content"] = json!(m.content);
+                        }
+                        obj
+                    }
+                    MessageRole::Tool => {
+                        let id = m.tool_call_id.as_deref().unwrap_or("");
+                        json!({
+                            "role": "user",
+                            "content": [{
+                                "type": "tool_result",
+                                "tool_use_id": id,
+                                "content": m.content,
+                                "is_error": m.is_error.unwrap_or(false),
+                            }]
+                        })
+                    }
+                };
+                Some(result)
             })
             .collect()
     }
@@ -219,6 +243,30 @@ impl LlmProvider for AnthropicProvider {
             );
             info!("[anthropic::stream_chat] 开始请求: model={}, url={}", model, url);
 
+            // ── DEBUG: 打印完整请求体(用于排查 tool_use_id 问题) ──
+            for (i, m) in anthropic_messages.iter().enumerate() {
+                let role = m["role"].as_str().unwrap_or("?");
+                let content_info = if m["content"].is_array() {
+                    let types: Vec<&str> = m["content"]
+                        .as_array()
+                        .map(|arr| arr.iter().filter_map(|c| c["type"].as_str()).collect())
+                        .unwrap_or_default();
+                    format!(" content_types={:?}", types)
+                } else {
+                    let preview: String = m["content"].as_str().unwrap_or("?").chars().take(80).collect();
+                    format!(" content='{}'", preview)
+                };
+                info!(
+                    "[anthropic::debug] msg[{}] role={}{}",
+                    i, role, content_info,
+                );
+            }
+            info!(
+                "[anthropic::debug] 总计 {} 条消息, body 大小≈{} bytes",
+                anthropic_messages.len(),
+                body.to_string().len(),
+            );
+
             // ── 5. 发送 POST 请求 ──
             // client.post(&url)          链式调用，返回 RequestBuilder
             // .header("x-api-key", api_key)  添加请求头
@@ -255,13 +303,11 @@ impl LlmProvider for AnthropicProvider {
             let status = response.status();
             info!("[anthropic::stream_chat] 收到响应: status={}", status.as_u16());
             if !status.is_success() {
-                // 读取错误响应体（最多 500 字符预览）
                 let body_text = response.text().await.unwrap_or_default();
-                let preview: String = body_text.chars().take(500).collect();
                 warn!(
-                    "[anthropic::stream_chat] HTTP {} 错误响应: {}",
+                    "[anthropic::stream_chat] HTTP {} 完整错误响应: {}",
                     status.as_u16(),
-                    preview
+                    body_text,
                 );
                 let api_msg = super::extract_error_message(&body_text);
                 // match 表达式按 HTTP 状态码分类：
@@ -343,7 +389,7 @@ impl LlmProvider for AnthropicProvider {
                                 "用户取消",
                                 &full_response,
                             );
-                            return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![] });
+                            return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![], had_stream_error: true });
                         }
                         continue;  // 还没取消，继续下一轮循环
                     }
@@ -364,7 +410,7 @@ impl LlmProvider for AnthropicProvider {
                                     "读取超时",
                                     &full_response,
                                 );
-                                return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![] });
+                                return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![], had_stream_error: true });
                             }
                         }
                     }
@@ -537,8 +583,8 @@ impl LlmProvider for AnthropicProvider {
                                                             chunk_count, token_count, full_response.len()
                                                         );
                                                         let calls = flush_tool_calls(&mut tool_calls, emitter);
-                                                        emitter.done(StopReason::Stop, &full_response);
-                                                        return Ok(StreamOutcome { full_text: full_response, tool_calls: calls });
+                                                        // done 事件由 commands.rs 在整轮 tool 循环结束时统一发射
+                                                        return Ok(StreamOutcome { full_text: full_response, tool_calls: calls, had_stream_error: false });
                                                     }
                                                     "error" => {
                                                         // 服务端推送的 error 事件
@@ -551,7 +597,7 @@ impl LlmProvider for AnthropicProvider {
                                                             error_msg,
                                                             &full_response,
                                                         );
-                                                        return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![] });
+                                                        return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![], had_stream_error: true });
                                                     }
                                                     _ => {}
                                                 }
@@ -582,12 +628,12 @@ impl LlmProvider for AnthropicProvider {
                             &format!("流读取错误: {}", e),
                             &full_response,
                         );
-                        return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![] });
+                        return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![], had_stream_error: true });
                     }
                     None => {
                         let calls = flush_tool_calls(&mut tool_calls, emitter);
-                        emitter.done(StopReason::Stop, &full_response);
-                        return Ok(StreamOutcome { full_text: full_response, tool_calls: calls });
+                        // done 事件由 commands.rs 在整轮 tool 循环结束时统一发射
+                        return Ok(StreamOutcome { full_text: full_response, tool_calls: calls, had_stream_error: false });
                     }
                 }
             }

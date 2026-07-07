@@ -44,13 +44,35 @@ impl OpenAICompatibleProvider {
     ///
     /// 与 Anthropic 转换器几乎一致（都是 role + content 数组）
     fn convert_messages(messages: &[Message]) -> Vec<Value> {
+        // 第一遍：收集所有 assistant 消息中有效的 tool_call.id
+        // 用于后续校验 tool 消息的 tool_call_id 是否为孤儿引用
+        let valid_tool_call_ids: std::collections::HashSet<&str> = messages
+            .iter()
+            .filter(|m| m.role == MessageRole::Assistant)
+            .filter_map(|m| m.tool_calls.as_ref())
+            .flat_map(|calls| calls.iter().map(|tc| tc.id.as_str()))
+            .collect();
+
         messages
             .iter()
-            .map(|m| {
+            .filter_map(|m| {
+                // 孤儿 tool 消息：有 tool_call_id 但找不到对应的 assistant tool_call
+                // 整条过滤掉，不发个 API（MiniMax 不允许不带 tool_call_id 的 tool 消息）
+                if m.role == MessageRole::Tool {
+                    let tc_id = m.tool_call_id.as_deref().unwrap_or("");
+                    if !tc_id.is_empty() && !valid_tool_call_ids.contains(tc_id) {
+                        warn!(
+                            "[openai::convert_messages] 过滤孤儿 tool 消息, tool_call_id='{}' 找不到对应的 assistant tool_call",
+                            tc_id
+                        );
+                        return None;
+                    }
+                }
+
                 // content: assistant 消息有 tool_calls 时 content 必须为 null
                 // (OpenAI 协议规范；MiniMax 等 Provider 严格校验此字段)
                 let has_tool_calls = m.role == MessageRole::Assistant
-                    && m.tool_calls.as_ref().map_or(false, |c| !c.is_empty());
+                    && m.tool_calls.as_ref().is_some_and(|c| !c.is_empty());
                 let content_val = if has_tool_calls {
                     json!(null)
                 } else {
@@ -69,7 +91,6 @@ impl OpenAICompatibleProvider {
                     let tc_id = m.tool_call_id.as_deref().unwrap_or("");
                     if !tc_id.is_empty() {
                         obj["tool_call_id"] = json!(tc_id);
-                        // 部分 OpenAI 兼容 API 需要 tool result 的 name 字段
                         if let Some(ref name) = m.tool_name {
                             obj["name"] = json!(name);
                         }
@@ -95,7 +116,7 @@ impl OpenAICompatibleProvider {
                         obj["tool_calls"] = json!(openai_calls);
                     }
                 }
-                obj
+                Some(obj)
             })
             .collect()
     }
@@ -195,6 +216,36 @@ impl LlmProvider for OpenAICompatibleProvider {
                 model, url, tool_names.join(", ")
             );
 
+            // ── DEBUG: 打印完整请求体(用于排查 tool_call_id 问题) ──
+            // 逐条打印消息摘要: role + 是否有 tool_calls/tool_call_id
+            for (i, m) in chat_messages.iter().enumerate() {
+                let tool_info = if m.get("tool_calls").is_some() {
+                    format!(" tool_calls={}", m["tool_calls"])
+                } else if m.get("tool_call_id").is_some() {
+                    format!(" tool_call_id={}", m["tool_call_id"])
+                } else {
+                    String::new()
+                };
+                let content_preview: String = m["content"]
+                    .as_str()
+                    .unwrap_or(if m["content"].is_null() { "<null>" } else { "<non-string>" })
+                    .chars()
+                    .take(80)
+                    .collect();
+                info!(
+                    "[openai::debug] msg[{}] role={} content='{}'{}",
+                    i,
+                    m["role"].as_str().unwrap_or("?"),
+                    content_preview,
+                    tool_info,
+                );
+            }
+            info!(
+                "[openai::debug] 总计 {} 条消息, body 大小≈{} bytes",
+                chat_messages.len(),
+                body.to_string().len(),
+            );
+
             // ── 5. 发送请求 ──
             // 与 Anthropic 不同：OpenAI 用 Authorization: Bearer <key>
             let response = client
@@ -222,11 +273,10 @@ impl LlmProvider for OpenAICompatibleProvider {
             );
             if !status.is_success() {
                 let body_text = response.text().await.unwrap_or_default();
-                let preview: String = body_text.chars().take(500).collect();
                 warn!(
-                    "[openai::stream_chat] HTTP {} 错误响应: {}",
+                    "[openai::stream_chat] HTTP {} 完整错误响应: {}",
                     status.as_u16(),
-                    preview
+                    body_text,
                 );
                 let api_msg = super::extract_error_message(&body_text);
                 match status.as_u16() {
@@ -292,7 +342,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                                 "用户取消",
                                 &full_response,
                             );
-                            return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![] });
+                            return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![], had_stream_error: true });
                         }
                         continue;
                     }
@@ -310,7 +360,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                                     "读取超时",
                                     &full_response,
                                 );
-                                return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![] });
+                                return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![], had_stream_error: true });
                             }
                         }
                     }
@@ -360,8 +410,8 @@ impl LlmProvider for OpenAICompatibleProvider {
                                         emitter.text_end(content_index, &full_response);
                                     }
                                     let calls = flush_tool_calls(&mut tool_calls, &tool_call_indexes, emitter);
-                                    emitter.done(StopReason::Stop, &full_response);
-                                    return Ok(StreamOutcome { full_text: full_response, tool_calls: calls });
+                                    // done 事件由 commands.rs 在整轮 tool 循环结束时统一发射
+                                    return Ok(StreamOutcome { full_text: full_response, tool_calls: calls, had_stream_error: false });
                                 }
                                 if data.is_empty() {
                                     continue;
@@ -425,13 +475,21 @@ impl LlmProvider for OpenAICompatibleProvider {
                                                         emitter.tool_call_start(new_id, name.as_deref().unwrap_or(""), idx);
                                                     }
                                                 }
+                                                // Name update: when id is provided, update the name of the existing entry
                                                 if let Some(ref new_name) = name {
                                                     if let Some(ref key) = id {
                                                         if let Some(e) = tool_calls.get_mut(key) { e.name = new_name.clone(); }
                                                     }
                                                 }
+                                                // Arguments delta: id may be missing in subsequent chunks,
+                                                // fall back to reverse-lookup by index in tool_call_indexes
                                                 if !args_delta.is_empty() {
-                                                    if let Some(ref key) = id {
+                                                    let key = id.clone().or_else(|| {
+                                                        tool_call_indexes.iter()
+                                                            .find(|(_, &v)| v == idx)
+                                                            .map(|(k, _)| k.clone())
+                                                    });
+                                                    if let Some(ref key) = key {
                                                         if let Some(e) = tool_calls.get_mut(key) { e.arguments.push_str(args_delta); }
                                                         emitter.tool_call_delta(key, args_delta);
                                                     }
@@ -450,7 +508,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                             &format!("流读取错误: {}", e),
                             &full_response,
                         );
-                        return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![] });
+                        return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![], had_stream_error: true });
                     }
                     None => {
                         // 流正常结束
@@ -458,8 +516,8 @@ impl LlmProvider for OpenAICompatibleProvider {
                             emitter.text_end(content_index, &full_response);
                         }
                         let calls = flush_tool_calls(&mut tool_calls, &tool_call_indexes, emitter);
-                        emitter.done(StopReason::Stop, &full_response);
-                        return Ok(StreamOutcome { full_text: full_response, tool_calls: calls });
+                        // done 事件由 commands.rs 在整轮 tool 循环结束时统一发射
+                        return Ok(StreamOutcome { full_text: full_response, tool_calls: calls, had_stream_error: false });
                     }
                 }
             }
@@ -797,11 +855,37 @@ mod tests {
         }
     }
 
+    fn make_assistant_with_tool_call(id: &str, tc_id: &str, tc_name: &str) -> Message {
+        Message {
+            id: id.to_string(), role: MessageRole::Assistant, content: String::new(),
+            blocks: None, model_id: None, created_at: 0,
+            tool_calls: Some(vec![ToolCall {
+                id: tc_id.to_string(),
+                name: tc_name.to_string(),
+                arguments: "{}".to_string(),
+            }]),
+            tool_call_id: None, tool_name: None, is_error: None,
+        }
+    }
+
     #[test]
     fn test_convert_tool_msg_has_tool_call_id() {
-        let out = OpenAICompatibleProvider::convert_messages(&[make_tool_msg("t1", "call_x", "hi")]);
-        assert_eq!(out[0]["role"], "tool");
-        assert_eq!(out[0]["tool_call_id"], "call_x");
+        // 需要 assistant 消息中有匹配的 tool_call，否则会被校验过滤
+        let msgs = [
+            make_assistant_with_tool_call("a1", "call_x", "read_file"),
+            make_tool_msg("t1", "call_x", "hi"),
+        ];
+        let out = OpenAICompatibleProvider::convert_messages(&msgs);
+        assert_eq!(out[0]["role"], "assistant");
+        assert_eq!(out[1]["role"], "tool");
+        assert_eq!(out[1]["tool_call_id"], "call_x");
+    }
+
+    #[test]
+    fn test_convert_tool_msg_orphan_id_stripped() {
+        // 孤儿的 tool 消息（没有匹配的 assistant tool_call）应被整条过滤掉
+        let out = OpenAICompatibleProvider::convert_messages(&[make_tool_msg("t1", "orphan_id", "hi")]);
+        assert!(out.is_empty(), "孤儿 tool 消息应被整条过滤");
     }
 
     #[test]

@@ -10,6 +10,7 @@ import { InputDock } from '@/components/chat/InputDock';
 import { MessageBubble } from '@/components/chat/MessageBubble';
 import { ModelDropdown } from '@/components/chat/ModelDropdown';
 import { useDragHandle } from '@/hooks/useDragHandle';
+import { useSmoothTextRenderer } from '@/hooks/useSmoothTextRenderer';
 import type { ModelInfo } from '@/types';
 
 /**
@@ -36,6 +37,9 @@ export function ChatPage() {
   } = useChatStore();
   const { config } = useConfigStore();
   const [showDropdown, setShowDropdown] = useState(false);
+
+  // 平滑文本渲染器：rAF 循环从缓冲队列逐字消费到 streamingBlocks
+  useSmoothTextRenderer();
 
   // 当前选中的模型
   const selectedModel: ModelInfo | null =
@@ -136,12 +140,15 @@ export function ChatPage() {
               开始新对话
             </div>
           )}
-          {messages.map((msg, i) => {
+          {/* tool 消息是内部消息，不展示给用户 */}
+          {messages
+            .filter((m) => m.role !== 'tool')
+            .map((msg, i, arr) => {
             const questionId =
-              msg.role === 'assistant' && i > 0 && messages[i - 1].role === 'user'
-                ? `msg-${messages[i - 1].id}`
+              msg.role === 'assistant' && i > 0 && arr[i - 1].role === 'user'
+                ? `msg-${arr[i - 1].id}`
                 : undefined;
-            const isLast = isStreaming && msg.role === 'assistant' && i === messages.length - 1;
+            const isLast = isStreaming && msg.role === 'assistant' && i === arr.length - 1;
             // 流式过程中将 live blocks 注入最后一条 assistant 消息
             const displayMsg =
               isLast && streamingBlocks.length > 0

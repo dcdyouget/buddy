@@ -40,8 +40,8 @@ export function resolveApproval(approved: boolean, approveAll: boolean) {
 
 export function useStreaming() {
   const handleTextStart = useChatStore((s) => s.handleTextStart);
-  const handleTextDelta = useChatStore((s) => s.handleTextDelta);
   const handleTextEnd = useChatStore((s) => s.handleTextEnd);
+  const feedTextDelta = useChatStore((s) => s.feedTextDelta);
   const handleThinkingStart = useChatStore((s) => s.handleThinkingStart);
   const handleThinkingDelta = useChatStore((s) => s.handleThinkingDelta);
   const handleThinkingEnd = useChatStore((s) => s.handleThinkingEnd);
@@ -79,7 +79,8 @@ export function useStreaming() {
               break;
 
             case 'text_delta':
-              handleTextDelta(e.content_index, e.delta);
+              // P9: 入队缓冲 → rAF 循环逐字渲染，避免突发 SSE chunk 导致视觉卡顿
+              feedTextDelta(e.delta);
               break;
 
             case 'text_end':

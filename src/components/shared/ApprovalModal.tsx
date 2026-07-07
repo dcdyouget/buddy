@@ -6,11 +6,22 @@
  * 本组件监听该 state，显示「允许/本次都允许/拒绝」三个按钮。
  */
 
+import { useEffect } from 'react';
 import { useChatStore } from '@/stores/chatStore';
 import { resolveApproval } from '@/hooks/useStreaming';
 
 export function ApprovalModal() {
   const approval = useChatStore((s) => s.toolApproval);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        handleDeny();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   if (!approval) return null;
 
@@ -83,9 +94,9 @@ export function ApprovalModal() {
           style={{
             flex: 1,
             padding: '8px 0',
-            border: '1px solid #3b82f6',
-            background: '#3b82f6',
-            color: '#fff',
+            border: '1px solid var(--brand, #5B5FE9)',
+            background: 'var(--brand, #5B5FE9)',
+            color: 'var(--fg-on-brand, #fff)',
             borderRadius: 8,
             cursor: 'pointer',
             fontSize: 13,
@@ -98,9 +109,9 @@ export function ApprovalModal() {
           style={{
             flex: 1,
             padding: '8px 0',
-            border: '1px solid #3b82f6',
+            border: '1px solid var(--brand, #5B5FE9)',
             background: 'transparent',
-            color: '#3b82f6',
+            color: 'var(--brand, #5B5FE9)',
             borderRadius: 8,
             cursor: 'pointer',
             fontSize: 13,

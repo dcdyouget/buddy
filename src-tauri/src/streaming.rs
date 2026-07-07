@@ -109,12 +109,17 @@ pub enum StopReason {
 /// stream_chat 的返回结果(P4 新增)
 ///
 /// 拆分 full_text + tool_calls,让 P4 的 send_message 知道本轮有没有 tool_call 需要执行
+///
+/// `had_stream_error`: provider 内部是否已发射过 error 事件。
+/// 为 true 时 commands.rs 不应再发 done，避免前端收到 error + done 的组合。
 #[derive(Debug, Clone, Default)]
 pub struct StreamOutcome {
     /// 累积的完整文本(用于持久化 + UI 展示)
     pub full_text: String,
     /// 本轮产生的 tool_calls(可能为空,表示纯文本回复)
     pub tool_calls: Vec<crate::models::ToolCall>,
+    /// provider 内部是否已通过 emitter 发射过 error 事件
+    pub had_stream_error: bool,
 }
 ///
 /// 所有 Provider 实现都输出此枚举的事件。
