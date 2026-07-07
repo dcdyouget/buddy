@@ -8,6 +8,10 @@
  *   - start → 流式开始
  *   - text_start/delta/end → 文本块生命周期
  *   - thinking_start/delta/end → 思考块生命周期
+ *   - tool_call_start/delta/end → 工具调用生命周期
+ *   - tool_executing/tool_result → 工具执行状态
+ *   - tool_approval_required → 需要用户审批
+ *   - turn_end → 本轮结束
  *   - done → 流式正常完成 → chatStore.handleStreamDone()
  *   - error → 流式错误/取消 → chatStore.handleStreamError()
  *
@@ -21,6 +25,19 @@ import { useUIStore } from '@/stores/uiStore';
 import type { Message, StreamEvent } from '@/types';
 import { isBrowser } from '@/utils/mock';
 
+/** 审批 modal 状态栈：前端用 zustand style 管理 */
+let approvalResolve: ((approved: boolean, approveAll: boolean) => void) | null = null;
+let approvalId: string | null = null;
+
+/** 从外部触发审批（供 ApprovalModal 组件调用） */
+export function resolveApproval(approved: boolean, approveAll: boolean) {
+  if (approvalResolve && approvalId) {
+    approvalResolve(approved, approveAll);
+    approvalResolve = null;
+    approvalId = null;
+  }
+}
+
 export function useStreaming() {
   const handleTextStart = useChatStore((s) => s.handleTextStart);
   const handleTextDelta = useChatStore((s) => s.handleTextDelta);
@@ -28,6 +45,12 @@ export function useStreaming() {
   const handleThinkingStart = useChatStore((s) => s.handleThinkingStart);
   const handleThinkingDelta = useChatStore((s) => s.handleThinkingDelta);
   const handleThinkingEnd = useChatStore((s) => s.handleThinkingEnd);
+  const handleToolCallStart = useChatStore((s) => s.handleToolCallStart);
+  const handleToolCallDelta = useChatStore((s) => s.handleToolCallDelta);
+  const handleToolCallEnd = useChatStore((s) => s.handleToolCallEnd);
+  const handleToolExecuting = useChatStore((s) => s.handleToolExecuting);
+  const handleToolResult = useChatStore((s) => s.handleToolResult);
+  const handleToolApprovalRequired = useChatStore((s) => s.handleToolApprovalRequired);
   const handleStreamDone = useChatStore((s) => s.handleStreamDone);
   const handleStreamError = useChatStore((s) => s.handleStreamError);
   const saveMessage = useChatStore((s) => s.saveMessage);
@@ -44,7 +67,6 @@ export function useStreaming() {
     import('@tauri-apps/api/event').then(async ({ listen }) => {
       if (epoch !== epochRef.current) return;
 
-      // ── v2.0 统一事件协议 ────────────────────────────
       unlisteners.push(
         await listen<StreamEvent>('stream-event', (event) => {
           const e = event.payload;
@@ -76,13 +98,56 @@ export function useStreaming() {
               handleThinkingEnd(e.content_index, e.content);
               break;
 
+            // ── Tool 事件 ────────────────────────────────
+            case 'tool_call_start':
+              handleToolCallStart(e.id, e.name, e.content_index);
+              break;
+
+            case 'tool_call_delta':
+              handleToolCallDelta(e.id, e.arguments_delta);
+              break;
+
+            case 'tool_call_end':
+              handleToolCallEnd(e.id, e.name, e.arguments);
+              break;
+
+            case 'tool_executing':
+              handleToolExecuting(e.id, e.name);
+              break;
+
+            case 'tool_result':
+              handleToolResult(e.id, e.name, e.content, e.is_error);
+              break;
+
+            case 'tool_approval_required': {
+              handleToolApprovalRequired(e.id, e.name, e.arguments, e.reason);
+              // 阻塞等待用户审批
+              import('@tauri-apps/api/core').then(async ({ invoke }) => {
+                const doApprove = await new Promise<{ approved: boolean; approveAll: boolean }>((resolve) => {
+                  approvalResolve = (approved: boolean, approveAll: boolean) =>
+                    resolve({ approved, approveAll });
+                  approvalId = e.id;
+                });
+                await invoke('approve_tool_call', {
+                  id: e.id,
+                  approved: doApprove.approved,
+                  approveAll: doApprove.approveAll,
+                }).catch(() => {});
+                approvalId = null;
+              });
+              break;
+            }
+
+            case 'turn_end':
+              // model 本轮结束，tool_calls_pending 非零时后端还在循环
+              break;
+
             case 'done':
               handleStreamDone();
               setPage('conversation');
               break;
 
             case 'error': {
-              // 用户主动取消：正常收尾
               if (e.reason === 'aborted') {
                 handleStreamDone();
                 setPage('conversation');
@@ -92,7 +157,6 @@ export function useStreaming() {
               handleStreamError(e.reason, e.message);
               useUIStore.getState().setError(e.message);
 
-              // 根据错误类型进行不同处理
               if (e.message.includes('401') || e.message.includes('unauthorized')) {
                 setPage('noapikey');
               } else if (e.message.includes('429') || e.message.includes('quota')) {
@@ -108,7 +172,6 @@ export function useStreaming() {
                 saveMessage(warningMsg);
                 setPage('conversation');
               } else if (e.message.includes('HTTP 5') || e.message.includes('server_error')) {
-                // 服务端错误：直接展示 API 返回的具体错误信息（如"当前服务集群负载较高，请稍后重试"）
                 const chatState = useChatStore.getState();
                 const retryMsg: Message = {
                   id: 'err-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 9),

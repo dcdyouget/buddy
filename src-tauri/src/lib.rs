@@ -1,16 +1,18 @@
 // 应用入口模块：窗口创建、快捷键注册、系统托盘、毛玻璃效果及圆角等核心初始化逻辑
 
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use tauri::Manager;
 use tauri_plugin_global_shortcut::Shortcut;
 
 mod commands;
 mod hotkey;
+mod mcp;
 mod models;
 mod platform;
 mod providers;
 mod storage;
 mod streaming;
+mod tools;
 mod tray;
 mod window;
 
@@ -31,16 +33,17 @@ pub fn run() {
         .manage(CancelState {
             sender: Mutex::new(None),
         })
+        .manage(commands::ApprovalState {
+            pending: Mutex::new(Vec::new()),
+            approve_all_for_turn: std::sync::atomic::AtomicBool::new(false),
+        })
         .manage(hotkey::HotkeyState {
             current: Mutex::new(None),
         })
-        .manage(SavedWindowPositions(Mutex::new(std::collections::HashMap::new())))
         .setup(|app| {
             // 加载配置
             let config = storage::get_config(app.handle())
                 .unwrap_or_else(|_| models::AppConfig::default());
-
-            // 注册全局快捷键
             let shortcut: Shortcut = config
                 .hotkey
                 .parse()
@@ -49,9 +52,7 @@ pub fn run() {
             app.state::<hotkey::HotkeyState>()
                 .current
                 .lock()
-                .unwrap()
                 .replace(shortcut);
-
             hotkey::register(app.handle(), shortcut);
 
             // 创建系统托盘
@@ -68,6 +69,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::send_message,
             commands::stop_generation,
+            commands::approve_tool_call,
             commands::get_config,
             commands::save_config,
             commands::fetch_models,

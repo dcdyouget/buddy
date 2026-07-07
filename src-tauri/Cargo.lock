@@ -113,7 +113,7 @@ dependencies = [
  "objc2-foundation",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
  "x11rb",
 ]
 
@@ -127,6 +127,17 @@ dependencies = [
  "compression-core",
  "pin-project-lite",
  "tokio",
+]
+
+[[package]]
+name = "async-trait"
+version = "0.1.89"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -270,6 +281,7 @@ name = "buddy"
 version = "1.0.0"
 dependencies = [
  "arboard",
+ "async-trait",
  "chrono",
  "core-graphics 0.23.2",
  "env_logger",
@@ -279,6 +291,7 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
+ "parking_lot",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -287,6 +300,8 @@ dependencies = [
  "tauri-plugin-autostart",
  "tauri-plugin-global-shortcut",
  "tauri-plugin-shell",
+ "tempfile",
+ "thiserror 1.0.69",
  "tokio",
  "uuid",
  "window-vibrancy",

@@ -25,35 +25,51 @@ import { parseThinkBlocks } from '@/utils/thinkParser';
 
 /** ChatStore 状态和操作定义 */
 interface ChatState {
-  messages: Message[];            // 消息列表（按时间排序）
-  draftInput: string;             // 输入框草稿文本
-  isStreaming: boolean;           // 是否正在流式生成中
-  streamingTokens: number;        // 当前流式生成已接收的 token 数
-  streamingModelId: string | null; // 当前正在生成的模型 ID
-  streamingBlocks: ContentBlock[]; // 流式中正在构建的内容块
-  error: string | null;           // 最近的错误信息
+  messages: Message[];
+  draftInput: string;
+  isStreaming: boolean;
+  streamingTokens: number;
+  streamingModelId: string | null;
+  streamingBlocks: ContentBlock[];
+  error: string | null;
+
+  // P8: Tool 审批状态
+  toolApproval: {
+    id: string;
+    name: string;
+    arguments: string;
+    reason: string;
+  } | null;
 
   // ── 操作 ──
-  setDraftInput: (text: string) => void;                        // 设置输入草稿
-  sendMessage: (content: string, modelId: string) => Promise<void>; // 发送消息
-  stopGeneration: () => Promise<void>;                          // 停止生成
-  appendToken: (token: string) => void;                         // 追加 token（兼容旧格式）
-  appendTextToken: (token: string) => void;                     // 追加文本 token
-  appendThinkingToken: (token: string) => void;                 // 追加思考 token
-  handleTextStart: (contentIndex: number) => void;              // 文本块开始
-  handleTextDelta: (contentIndex: number, delta: string) => void; // 文本增量
-  handleTextEnd: (contentIndex: number, content: string) => void; // 文本块结束
-  handleThinkingStart: (contentIndex: number) => void;           // 思考块开始
-  handleThinkingDelta: (contentIndex: number, delta: string) => void; // 思考增量
-  handleThinkingEnd: (contentIndex: number, content: string) => void; // 思考块结束
-  handleStreamDone: () => void;                                  // 流式完成
-  handleStreamError: (reason: string, message: string) => void;  // 流式错误
-  finalizeMessage: () => void;                                  // 完成流式消息（兼容）
-  saveMessage: (message: Message) => Promise<void>;             // 持久化单条消息
-  loadMessages: (offset?: number, limit?: number) => Promise<void>; // 加载历史消息
-  clearMessages: () => void;                                    // 清空消息
-  setMessages: (messages: Message[]) => void;                   // 设置完整消息列表
-  setError: (error: string | null) => void;                     // 设置错误信息
+  setDraftInput: (text: string) => void;
+  sendMessage: (content: string, modelId: string) => Promise<void>;
+  stopGeneration: () => Promise<void>;
+  appendToken: (token: string) => void;
+  appendTextToken: (token: string) => void;
+  appendThinkingToken: (token: string) => void;
+  handleTextStart: (contentIndex: number) => void;
+  handleTextDelta: (contentIndex: number, delta: string) => void;
+  handleTextEnd: (contentIndex: number, content: string) => void;
+  handleThinkingStart: (contentIndex: number) => void;
+  handleThinkingDelta: (contentIndex: number, delta: string) => void;
+  handleThinkingEnd: (contentIndex: number, content: string) => void;
+  // P8: Tool handlers
+  handleToolCallStart: (id: string, name: string, contentIndex: number) => void;
+  handleToolCallDelta: (id: string, argumentsDelta: string) => void;
+  handleToolCallEnd: (id: string, name: string, args: string) => void;
+  handleToolExecuting: (id: string, name: string) => void;
+  handleToolResult: (id: string, name: string, content: string, isError: boolean) => void;
+  handleToolApprovalRequired: (id: string, name: string, args: string, reason: string) => void;
+  setToolApproval: (approval: ChatState['toolApproval']) => void;
+  handleStreamDone: () => void;
+  handleStreamError: (reason: string, message: string) => void;
+  finalizeMessage: () => void;
+  saveMessage: (message: Message) => Promise<void>;
+  loadMessages: (offset?: number, limit?: number) => Promise<void>;
+  clearMessages: () => void;
+  setMessages: (messages: Message[]) => void;
+  setError: (error: string | null) => void;
 }
 
 /**
@@ -75,11 +91,12 @@ function generateId(): string {
  * 此处统一转换为 store 使用的 { type: 'thinking', content, is_open } 格式。
  */
 function parseThinkFromText(text: string): ContentBlock[] {
-  return parseThinkBlocks(text).map((seg) => {
+  const segments = parseThinkBlocks(text);
+  return segments.map((seg) => {
     if (seg.type === 'think') {
-      return { type: 'thinking', content: seg.content, is_open: seg.isOpen };
+      return { type: 'thinking' as const, content: seg.content, is_open: seg.isOpen };
     }
-    return { type: 'text', content: seg.content };
+    return { type: 'text' as const, content: seg.content };
   });
 }
 
@@ -92,7 +109,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   streamingModelId: null,
   streamingBlocks: [],
   error: null,
-
+  toolApproval: null,
   /** 设置输入框草稿文本（用于接收外部选中的文本） */
   setDraftInput: (text: string) => {
     set({ draftInput: text });
@@ -336,6 +353,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamingTokens: 0,
       streamingModelId: null,
       streamingBlocks: [],
+      toolApproval: null,
     });
   },
 
@@ -407,7 +425,48 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  /** 清空所有消息和草稿 */
+
+  // ── P8: Tool 事件处理 ────────────────────────────────
+  // 注意: 不再将 tool 状态文本拼入 assistant.content，防止污染对话历史
+  // 导致模型看到 "[create_file 结果]:" 等文本后产生幻觉、不再调用工具
+  handleToolCallStart: (_id: string, _name: string, _contentIndex: number) => {
+    // 工具调用状态由 toolApproval + UI 层展示
+  },
+
+  handleToolCallDelta: (_id: string, _argumentsDelta: string) => {
+    // 增量实时:暂时只更新 toolApproval 不刷 UI(后端循环速度很快)
+  },
+
+  handleToolCallEnd: (_id: string, _name: string, _args: string) => {
+    // tool_call 参数完整
+  },
+
+  handleToolExecuting: (_id: string, _name: string) => {
+    // 后端开始执行
+  },
+
+  handleToolResult: (_id: string, name: string, content: string, isError: boolean) => {
+    // 工具结果以独立 tool 消息插入，保持与后端一致的数据结构
+    const toolMsg: Message = {
+      id: 'tool-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 9),
+      role: 'tool' as const,
+      content,
+      model_id: null,
+      created_at: Math.floor(Date.now() / 1000),
+      tool_call_id: _id,
+      tool_name: name,
+      is_error: isError,
+    };
+    set({ messages: [...get().messages, toolMsg] });
+  },
+
+  handleToolApprovalRequired: (id: string, name: string, args: string, reason: string) => {
+    set({ toolApproval: { id, name, arguments: args, reason } });
+  },
+
+  setToolApproval: (approval) => {
+    set({ toolApproval: approval });
+  },
   clearMessages: () => {
     set({ messages: [], draftInput: '', error: null });
   },

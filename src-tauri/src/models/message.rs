@@ -43,9 +43,24 @@ pub struct ModelInfo {
     pub display_name: String,        // 在 UI 上展示给用户看的人类可读名
     pub context_window: u32,         // 上下文窗口大小（token 数）；u32 = 32 位无符号整数
     pub latency_ms: Option<u32>,     // 测得的延迟（毫秒）；Option<T> 表示"可能没有值"
-                                     //   - Some(120) = 有值 120
-                                     //   - None      = 缺测
-                                     //   这是 Rust 代替 null 的方式，类型系统强制你处理空值
+                                    //   - Some(120) = 有值 120
+                                    //   - None      = 缺测
+                                    //   这是 Rust 代替 null 的方式，类型系统强制你处理空值
+}
+
+
+/// 一次工具调用的标识
+///
+/// 来自 assistant 消息的 `tool_calls` 字段。
+/// `id` 由模型提供（OpenAI 是 `call_xxx`，Anthropic 是 `toolu_xxx`），
+/// `name` 是被调用的工具名，`arguments` 是原始 JSON 字符串
+/// （流式拼接得到，结构完整性由执行方校验）。
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    /// 原始 JSON 参数（流式拼装时可能不完整；执行时再 `serde_json::from_str` 校验）
+    pub arguments: String,
 }
 
 
@@ -63,6 +78,21 @@ pub struct Message {
     pub blocks: Option<Vec<ContentBlock>>,
     pub model_id: Option<String>,
     pub created_at: u64,    // u64 = 64 位无符号；这里存放 Unix 时间戳（秒）
+
+    // ── Tool 协议相关字段 ──
+    // 都是 Option + skip_serializing_if, 老消息没有这些字段也能正常加载
+    /// assistant 消息携带的 tool_calls
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+    /// tool 消息携带:对应的 tool_call.id
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    /// tool 消息携带:工具名（调试/显示用）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    /// tool 消息携带:执行是否出错（false = 成功，true = 错误）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_error: Option<bool>,
 }
 
 
@@ -78,10 +108,12 @@ pub struct Message {
 //   告诉 serde 把 Rust 的 PascalCase 变体名序列化成全小写字符串：
 //     User       ↔  "user"
 //     Assistant  ↔  "assistant"
+//     Tool       ↔  "tool"
 //   这样 JSON 里就是 `"role": "user"` 而不是 `"role": "User"`
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum MessageRole {
     User,        // 用户消息
     Assistant,   // AI 回复消息
+    Tool,        // 工具执行结果（携带 tool_call_id 指回对应的 tool_call）
 }

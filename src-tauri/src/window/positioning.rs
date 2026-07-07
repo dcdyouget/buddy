@@ -1,7 +1,7 @@
 // 多屏窗口定位模块
 
 use log::info;
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use tauri::Manager;
 
 /// 记录用户拖拽后的窗口位置（物理像素），key 为显示器 (x,y)，value 为窗口 (x,y)
@@ -62,7 +62,8 @@ pub fn reposition_to_cursor_monitor(window: &tauri::WebviewWindow) {
         let saved = window
             .app_handle()
             .try_state::<SavedWindowPositions>()
-            .and_then(|s| s.0.lock().ok().and_then(|map| map.get(&(m_pos.x, m_pos.y)).copied()));
+            .map(|s| s.0.lock().get(&(m_pos.x, m_pos.y)).copied())
+            .flatten();
         if let Some((sx, sy)) = saved {
             let sxf = sx as f64 / scale;
             let syf = sy as f64 / scale;

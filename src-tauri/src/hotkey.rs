@@ -12,7 +12,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 /// 使用 Mutex 包裹以支持跨线程安全访问。
 /// 当用户修改热键配置时，update_hotkey 先从此状态读取旧热键并注销，再注册新热键并更新此状态。
 pub struct HotkeyState {
-    pub current: std::sync::Mutex<Option<Shortcut>>,
+    pub current: parking_lot::Mutex<Option<Shortcut>>,
 }
 
 /// 注册全局热键并绑定窗口 toggle 行为
@@ -92,7 +92,7 @@ pub fn update_hotkey(app: &tauri::AppHandle, hotkey_str: &str) {
     // 先注销旧热键
     {
         let state = app.state::<HotkeyState>();
-        let mut current = state.current.lock().unwrap();
+        let mut current = state.current.lock();
         if let Some(old) = current.take() {
             unregister(app, old);
         }
@@ -105,6 +105,5 @@ pub fn update_hotkey(app: &tauri::AppHandle, hotkey_str: &str) {
     app.state::<HotkeyState>()
         .current
         .lock()
-        .unwrap()
         .replace(shortcut);
 }
