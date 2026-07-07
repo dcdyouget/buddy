@@ -1,4 +1,6 @@
+// ============================================================================
 // Anthropic Messages API Provider
+// ============================================================================
 //
 // 实现 Anthropic Messages API 的流式对话，将 Anthropic 特有的 SSE 事件格式
 // 转换为统一的 StreamEvent 协议。
@@ -12,18 +14,22 @@
 // - message_stop        → 消息结束
 //
 // 参考：https://docs.anthropic.com/en/api/messages-streaming
+// ============================================================================
 
+// ─── use 语句（= Java 的 import） ───
+// super::* 导入父模块（providers::mod）的所有 pub 项（ApiError, LlmProvider, extract_error_message）
 use super::{ApiError, LlmProvider};
 use crate::models::{get_context_window, CompatConfig, Message, MessageRole, ModelInfo};
 use crate::streaming::{StopReason, StreamEventEmitter};
-use futures_util::StreamExt;
-use log::{error, info, warn};
-use reqwest::Client;
-use serde_json::Value;
-use std::pin::Pin;
-use std::time::Duration;
-use tokio::sync::watch;
-use tokio::time::timeout;
+use futures_util::StreamExt;                          // 为 Stream trait 提供 .next() 等适配器
+use log::{error, info, warn};                         // 日志门面（log crate）
+use reqwest::Client;                                 // HTTP 客户端
+use serde_json::Value;                               // 通用 JSON 值类型
+use std::pin::Pin;                                    // 用于 Pin<Box<...>>
+use std::time::Duration;                             // 时间段
+use tokio::sync::watch;                              // watch channel（取消信号）
+use tokio::time::timeout;                             // 给异步操作加超时
+
 
 /// Anthropic API 版本（固定）
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -31,19 +37,40 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 /// 单次字节块读取超时
 const CHUNK_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Anthropic Provider
+
+// ============================================================================
+// AnthropicProvider —— Anthropic 适配器
+// ============================================================================
+//
+// Rust `struct` 没有构造函数（除了字段初始化语法），所有"初始化逻辑"
+// 都通过关联函数（associated function，类似 Java 的 static method）实现，
+// 或者直接在 impl 块里挂方法。
+// ============================================================================
 pub struct AnthropicProvider;
 
 impl AnthropicProvider {
     /// 将内部消息格式转换为 Anthropic API 格式
+    ///
+    /// 入参 `messages: &[Message]` 是 `&[Message]`：不可变借用 Message 切片
+    /// ≈ Java 的 `List<Message>` 不可变视图
     fn convert_messages(messages: &[Message]) -> Vec<Value> {
+        // 迭代器链式调用（类似 Java Stream，但 Rust 是惰性的）：
+        //   .iter()    借用每个元素 → Iterator<Item = &Message>
+        //   .map(|m| ...) 对每个元素做转换 → Iterator<Item = Value>
+        //   .collect() 消费迭代器，组装成 Vec<Value>
+        //
+        // |m| {...} 是闭包（lambda），m 是闭包参数
         messages
             .iter()
             .map(|m| {
+                // 内部 match 块：将枚举映射到字符串
+                // Java 17 的 switch 表达式也能这样写，但 Rust 强制穷举
                 let role = match m.role {
                     MessageRole::User => "user",
                     MessageRole::Assistant => "assistant",
                 };
+                // serde_json::json!({...}) 是过程宏，把字面 JSON 风格的代码编译成 Value
+                // ≈ Java 的 Map.of("role", role, "content", m.content) 但内联更简洁
                 serde_json::json!({
                     "role": role,
                     "content": m.content,
@@ -55,20 +82,28 @@ impl AnthropicProvider {
     /// 解析 Anthropic SSE 事件行
     ///
     /// 返回 (event_type, data) 或 None（非完整事件行）。
+    ///
+    /// 关键 Rust 语法点：
+    /// - `Option<T>` = "可能没有值" 的容器；Some(x) / None
+    /// - 函数返回 `Option<(String, String)>`：可能没有值，或返回二元组
     fn parse_sse_line(line: &str) -> Option<(String, String)> {
-        let line = line.trim();
+        let line = line.trim();        // 去掉首尾空白
         if line.is_empty() {
             return None;
         }
-        // 注释行（以 : 开头）
+        // 注释行（以 : 开头）—— SSE 协议规定的心跳
         if line.starts_with(':') {
             return None;
         }
 
         // 解析 "field: value" 格式
+        // `if let Some(...) = ... { ... }` 是模式匹配，绑定内部值给代码块
         if let Some(colon_pos) = line.find(':') {
-            let field = line[..colon_pos].trim();
-            let value = line[colon_pos + 1..].trim();
+            // 字符串切片 line[..colon_pos]：从开头切到冒号位置
+            // 注意：字符串切片按字节边界；安全的前提是冒号是 ASCII
+            let field = line[..colon_pos].trim();         // &str
+            let value = line[colon_pos + 1..].trim();     // &str
+            // Some((s1.to_string(), s2.to_string()))：把 &str 转为堆分配的 String
             Some((field.to_string(), value.to_string()))
         } else {
             None
@@ -76,6 +111,14 @@ impl AnthropicProvider {
     }
 }
 
+
+// ============================================================================
+// impl LlmProvider for AnthropicProvider
+// ============================================================================
+//
+// 这是 trait 实现块（类似 Java 的 `class AnthropicProvider implements LlmProvider`）
+// 在块内必须实现 trait 中声明的所有方法。
+// ============================================================================
 impl LlmProvider for AnthropicProvider {
     fn stream_chat<'a>(
         &'a self,
@@ -87,19 +130,44 @@ impl LlmProvider for AnthropicProvider {
         mut cancel_rx: watch::Receiver<bool>,
         compat: Option<&'a CompatConfig>,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<String, ApiError>> + Send + 'a>> {
+        // Box::pin(async move { ... })：
+        //   - async move {...} 创建一个 async 块（Future 实现）
+        //     - `move` 关键字把块内用到的外部变量"move 进"块，使其所有权转移到 Future 内
+        //     - 不加 move 的话，闭包/Future 会"借用"外部变量；但 async 块的存活期与签名 'a 一致，
+        //       可能比外部变量久，所以必须 move
+        //   - Box::pin 把 Future 装箱到堆并 Pin 住（自引用安全）
+        //     ≈ Java 的 CompletableFuture.supplyAsync(...).get() 返回的对象
         Box::pin(async move {
             // 解析 compat 配置
+            // Option<&T>::map(...)   = Option 上挂的链式方法
+            //   Some(x) → Some(f(x))
+            //   None    → None
+            // .unwrap_or(true)        = None 时返回默认值
             let _supports_temperature = compat.map(|c| c.supports_temperature()).unwrap_or(true);
             // 注意: Anthropic API 默认不发送 temperature 字段。
             // 当 supports_temperature=false (如 Claude Opus 4.7+)，保持不发送即可。
 
+            // ── 1. 创建 HTTP 客户端 ──
+            // Client::builder()  构造器模式（Builder pattern），每一步返回 self
+            // .timeout(...).build() 链式调用
+            // .map_err(|e| ApiError::NetworkError(e.to_string()))?
+            //   - Client::build() 返回 Result<Client, reqwest::Error>
+            //   - map_err 把错误类型转成 ApiError（Java 没有此语法）
+            //   - `?` 是"早返回"运算符：
+            //       * 若 Result 是 Ok(v)，解包出 v
+            //       * 若 Result 是 Err(e)，从当前函数返回 Err(转换后的 e)
+            //     ≈ Java 的 throws 机制但写法更紧凑
             let client = Client::builder()
                 .timeout(Duration::from_secs(120))
                 .build()
                 .map_err(|e| ApiError::NetworkError(e.to_string()))?;
 
+            // ── 2. 转换消息格式 ──
             let anthropic_messages = Self::convert_messages(messages);
 
+            // ── 3. 构造请求体 JSON ──
+            // serde_json::json!({...}) 宏：写起来像 JSON，编译后是 Value
+            // 与 Python 中 f-string 不同，它是静态字面量 + 占位符的混合体
             let body = serde_json::json!({
                 "model": model,
                 "max_tokens": 4096,
@@ -107,12 +175,27 @@ impl LlmProvider for AnthropicProvider {
                 "stream": true,
             });
 
+            // ── 4. 拼接 URL ──
+            // format!("{}/v1/messages", ...) ≈ Java 的 String.format("%s/v1/messages", baseUrl)
+            // trim_end_matches('/') 移除结尾的 '/'，防止出现 "//v1"
             let url = format!(
                 "{}/v1/messages",
                 base_url.trim_end_matches('/')
             );
             info!("[anthropic::stream_chat] 开始请求: model={}, url={}", model, url);
 
+            // ── 5. 发送 POST 请求 ──
+            // client.post(&url)          链式调用，返回 RequestBuilder
+            // .header("x-api-key", api_key)  添加请求头
+            // .header("anthropic-version", ANTHROPIC_VERSION)
+            // .header("Content-Type", "application/json")
+            // .json(&body)              设置 JSON body
+            // .send().await              真正发起请求
+            //   - send() 返回 Future<Result<Response, Error>>
+            //   - .await 是 Rust 异步的关键字：
+            //       挂起当前 Future，等 send 的 Future 完成
+            //       完成后取回 Result
+            //     ≈ Java 的 CompletableFuture.get() 或 Kotlin 的 suspend fun
             let response = client
                 .post(&url)
                 .header("x-api-key", api_key)
@@ -122,6 +205,8 @@ impl LlmProvider for AnthropicProvider {
                 .send()
                 .await
                 .map_err(|e| {
+                    // `e.is_timeout()` / `e.is_connect()` 是 reqwest::Error 的判定方法
+                    // 这里把所有错误都映射成 NetworkError（简化处理）
                     if e.is_timeout() {
                         ApiError::NetworkError("timeout".into())
                     } else if e.is_connect() {
@@ -131,9 +216,11 @@ impl LlmProvider for AnthropicProvider {
                     }
                 })?;
 
+            // ── 6. 检查 HTTP 状态码 ──
             let status = response.status();
             info!("[anthropic::stream_chat] 收到响应: status={}", status.as_u16());
             if !status.is_success() {
+                // 读取错误响应体（最多 500 字符预览）
                 let body_text = response.text().await.unwrap_or_default();
                 let preview: String = body_text.chars().take(500).collect();
                 warn!(
@@ -142,6 +229,11 @@ impl LlmProvider for AnthropicProvider {
                     preview
                 );
                 let api_msg = super::extract_error_message(&body_text);
+                // match 表达式按 HTTP 状态码分类：
+                //   401 → 未授权
+                //   429 → 配额
+                //   >=500 → 服务端错误
+                //   其他 → 网络错误
                 match status.as_u16() {
                     401 => return Err(ApiError::Unauthorized),
                     429 => return Err(ApiError::QuotaExceeded),
@@ -156,25 +248,43 @@ impl LlmProvider for AnthropicProvider {
                 }
             }
 
-            // 开始解析 SSE 流
+            // ── 7. 开始解析 SSE 流 ──
+            // response.bytes_stream() 把 HTTP 响应体转成字节流（Stream）
+            //   - Stream<Item = Result<Bytes, Error>>
+            //   - 类似 Java 的 InputStream，但包装成 Future/Stream API
             let mut byte_stream = response.bytes_stream();
+            // buffer 累积"未完整行"，SSE 按行解析，必须自己组行
             let mut buffer = String::new();
 
-            // 流式状态追踪
-            let mut full_response = String::new(); // 累积完整回复文本
-            let mut current_event: Option<String> = None;
-            let mut content_index: usize = 0; // 内容块索引
-            let mut _has_started = false;
+            // 流式状态追踪变量（mut 表示可变）
+            let mut full_response = String::new();       // 累积完整回复文本
+            let mut current_event: Option<String> = None;// 当前事件类型
+            let mut content_index: usize = 0;            // 内容块索引
+            let mut _has_started = false;                // 下划线前缀：未使用变量（Rust 会警告）
 
-            let mut chunk_count: u64 = 0;
-            let mut token_count: u64 = 0;
+            let mut chunk_count: u64 = 0;                // 接收到的字节块数
+            let mut token_count: u64 = 0;                // 已发出的文本 token 数
 
+            // 通知前端：流式开始
             emitter.start();
 
+            // ── 8. 主循环：读取流并解析 ──
+            // `loop { ... }` 是 Rust 的无限循环，Java 用 `while(true)` 或 `for(;;)`
             loop {
+                // tokio::select! 是 tokio 提供的并发等待宏：
+                //   同时等待多个异步分支，哪个先完成就跑哪个，其余取消
+                // ≈ Java 的 `CompletableFuture.anyOf(...)` 或 Kotlin 的 select 表达式
+                //
+                // 语法：
+                //   tokio::select! {
+                //     分支1 => 处理1,
+                //     分支2 => 处理2,
+                //   }
                 let chunk = tokio::select! {
+                    // 取消信号通道变化（cancel_rx 是 watch::Receiver<bool>）
                     _ = cancel_rx.changed() => {
-                        if *cancel_rx.borrow() {
+                        // changed() 返回 Future<()>，完成后调用 .borrow() 拿到当前值
+                        if *cancel_rx.borrow() {     // `*` 解引用，拿到 bool
                             info!(
                                 "[anthropic::stream_chat] 被取消: {} chunks, {} tokens",
                                 chunk_count, token_count
@@ -186,12 +296,16 @@ impl LlmProvider for AnthropicProvider {
                             );
                             return Ok(full_response);
                         }
-                        continue;
+                        continue;  // 还没取消，继续下一轮循环
                     }
+                    // 读取下一个字节块，带 30s 超时
                     result = timeout(CHUNK_TIMEOUT, byte_stream.next()) => {
+                        // timeout(d, future) 返回 Result<T, Elapsed>
+                        // byte_stream.next() 返回 Option<Result<Bytes, Error>>
+                        // 套在一起：Result<Option<Result<Bytes, Error>>, Elapsed>
                         match result {
-                            Ok(chunk) => chunk,
-                            Err(_elapsed) => {
+                            Ok(chunk) => chunk,        // 超时未发生，转发 chunk
+                            Err(_elapsed) => {          // 超时了（_ 开头表示未使用变量）
                                 error!(
                                     "[anthropic::stream_chat] 读取超时: {} chunks, {} tokens",
                                     chunk_count, token_count
@@ -207,10 +321,16 @@ impl LlmProvider for AnthropicProvider {
                     }
                 };
 
+                // 匹配 chunk 的三种可能：
+                //   Some(Ok(bytes))   正常收到一段字节
+                //   Some(Err(e))      网络错误
+                //   None              流正常结束
                 match chunk {
                     Some(Ok(bytes)) => {
                         chunk_count += 1;
+                        // from_utf8_lossy 把字节转成 &str，UTF-8 非法字符替换为 �
                         let text = String::from_utf8_lossy(&bytes);
+                        // 前 3 个块做预览日志
                         if chunk_count <= 3 {
                             let preview: String = text.chars().take(500).collect();
                             info!(
@@ -220,37 +340,52 @@ impl LlmProvider for AnthropicProvider {
                                 preview
                             );
                         }
+                        // 把新字节追加到 buffer
                         buffer.push_str(&text);
 
-                        // 逐行解析 SSE
+                        // 逐行解析：SSE 是行分隔的协议
+                        // while let Some(pos) = buffer.find('\n') { ... }
+                        //   - 找换行位置
+                        //   - 切出一行
+                        //   - 处理完，把 buffer 切成剩余部分
                         while let Some(pos) = buffer.find('\n') {
                             let line = buffer[..pos].to_string();
                             buffer = buffer[pos + 1..].to_string();
 
-                            // 尝试解析 SSE 行
+                            // 尝试解析 SSE 字段行（"field: value"）
                             if let Some((field, value)) = Self::parse_sse_line(&line) {
                                 match field.as_str() {
                                     "event" => {
+                                        // 记录事件类型，下一行 data 会用到
                                         current_event = Some(value);
                                     }
                                     "data" => {
+                                        // event_type 取 current_event，没设过就给空串
                                         let event_type =
                                             current_event.as_deref().unwrap_or("");
-                                        // 解析 data JSON
+                                        // 解析 data 字段为 JSON
                                         match serde_json::from_str::<Value>(&value) {
                                             Ok(json) => {
+                                                // 按事件类型分派处理
                                                 match event_type {
                                                     "message_start" => {
                                                         _has_started = true;
-                                                        // 提取 input_tokens（usage 在 message.message.usage 或直接 message.usage）
+                                                        // 提取 input_tokens
+                                                        // .as_object()    Option<&Map>
+                                                        // .or_else(...)   若为 None，用后备分支
+                                                        //   类似 Java Optional.orElse
                                                         let usage = json["message"]["usage"].as_object()
                                                             .or_else(|| json["usage"].as_object());
                                                         if let Some(u) = usage {
+                                                            // u.get("input_tokens") 拿 Option<&Value>
+                                                            // .and_then(|v| v.as_u64())  Option<&Value> → Option<u64>
+                                                            // .unwrap_or(0)             None 时给默认值 0
                                                             let input = u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
                                                             info!("[anthropic] message_start: input_tokens={}", input);
                                                         }
                                                     }
                                                     "content_block_start" => {
+                                                        // 内容块开始，区分 text/thinking 块
                                                         let block = &json["content_block"];
                                                         let block_type =
                                                             block["type"].as_str().unwrap_or("");
@@ -261,19 +396,22 @@ impl LlmProvider for AnthropicProvider {
                                                             "thinking" | "redacted_thinking" => {
                                                                 emitter.thinking_start(content_index);
                                                             }
-                                                            _ => {}
+                                                            _ => {}  // 其他类型（tool_use 等）暂不处理
                                                         }
                                                     }
                                                     "content_block_delta" => {
+                                                        // 增量内容（最常见的事件）
                                                         let delta = &json["delta"];
                                                         let delta_type =
                                                             delta["type"].as_str().unwrap_or("");
                                                         match delta_type {
                                                             "text_delta" => {
+                                                                // 文本增量
                                                                 let text =
                                                                     delta["text"].as_str().unwrap_or("");
                                                                 if !text.is_empty() {
                                                                     token_count += 1;
+                                                                    // push_str(&str) 追加字符串
                                                                     full_response.push_str(text);
                                                                     emitter.text_delta(
                                                                         content_index,
@@ -282,6 +420,7 @@ impl LlmProvider for AnthropicProvider {
                                                                 }
                                                             }
                                                             "thinking_delta" => {
+                                                                // 思考增量
                                                                 let thinking =
                                                                     delta["thinking"].as_str().unwrap_or("");
                                                                 if !thinking.is_empty() {
@@ -301,17 +440,13 @@ impl LlmProvider for AnthropicProvider {
                                                         }
                                                     }
                                                     "content_block_stop" => {
+                                                        // 块结束：递增索引
                                                         let _block = &json.get("content_block");
-                                                        // content_block_stop 中可能包含 content_block 信息
-                                                        // 也可能直接通过 index 知道是哪个块
                                                         let index = json["index"].as_u64().unwrap_or(content_index as u64) as usize;
-
-                                                        // 根据之前记录的 block 类型发送 end 事件
-                                                        // 简化处理：检查是否有 text 或 thinking 内容
-                                                        // 实际上我们需要追踪 block 类型，这里简化逻辑
                                                         content_index = index + 1;
                                                     }
                                                     "message_delta" => {
+                                                        // 消息级增量（含 stop_reason）
                                                         let delta = &json["delta"];
                                                         let stop_reason =
                                                             delta["stop_reason"].as_str().unwrap_or("");
@@ -324,13 +459,14 @@ impl LlmProvider for AnthropicProvider {
                                                         );
                                                     }
                                                     "message_stop" => {
-                                                        // 消息流结束，但我们需要确保所有 content_blocK_stop 都已处理
+                                                        // 流结束
                                                         info!(
                                                             "[anthropic::stream_chat] message_stop: {} chunks, {} tokens, {} chars",
                                                             chunk_count, token_count, full_response.len()
                                                         );
                                                     }
                                                     "error" => {
+                                                        // 服务端推送的 error 事件
                                                         let error_msg = json["error"]["message"]
                                                             .as_str()
                                                             .unwrap_or("未知错误");
@@ -346,6 +482,7 @@ impl LlmProvider for AnthropicProvider {
                                                 }
                                             }
                                             Err(e) => {
+                                                // JSON 解析失败：日志告警，但继续（可能是 partial chunk）
                                                 warn!(
                                                     "[anthropic] JSON 解析失败: {}, data={}",
                                                     e,
@@ -354,7 +491,7 @@ impl LlmProvider for AnthropicProvider {
                                             }
                                         }
                                     }
-                                    _ => {}
+                                    _ => {}  // 其他字段（id: 等）忽略
                                 }
                             }
                             // 空行表示一个 SSE 事件的结束，重置 event 类型
@@ -364,6 +501,7 @@ impl LlmProvider for AnthropicProvider {
                         }
                     }
                     Some(Err(e)) => {
+                        // 网络错误
                         emitter.error(
                             StopReason::Error,
                             &format!("流读取错误: {}", e),
@@ -372,7 +510,7 @@ impl LlmProvider for AnthropicProvider {
                         return Ok(full_response);
                     }
                     None => {
-                        // 流正常结束
+                        // 流正常结束（Stream 返回 None 表示 EOF）
                         emitter.done(StopReason::Stop, &full_response);
                         return Ok(full_response);
                     }
@@ -394,6 +532,7 @@ impl LlmProvider for AnthropicProvider {
                 base_url.trim_end_matches('/')
             );
 
+            // 超时设置更短（10s 连接，15s 总超时）—— 列表请求不应该阻塞太久
             let client = Client::builder()
                 .connect_timeout(Duration::from_secs(10))
                 .timeout(Duration::from_secs(15))
@@ -408,8 +547,8 @@ impl LlmProvider for AnthropicProvider {
                 .await
                 .map_err(|e| format!("请求模型列表失败: {}", e))?;
 
+            // 如果 /v1/models 端点不可用（Anthropic 通常如此），回退到内置列表
             if !response.status().is_success() {
-                // 如果 /v1/models 端点不可用，返回硬编码的 Anthropic 模型列表
                 info!(
                     "[anthropic::fetch_models] /v1/models 不可用 ({}), 使用内置模型列表",
                     response.status().as_u16()
@@ -417,15 +556,25 @@ impl LlmProvider for AnthropicProvider {
                 return Ok(builtin_anthropic_models());
             }
 
+            // 解析 JSON 响应
             let body_text = response.text().await.map_err(|e| e.to_string())?;
             let json: Value =
                 serde_json::from_str(&body_text).map_err(|e| format!("JSON 解析失败: {}", e))?;
 
+            // 遍历 json["data"] 数组，把每项转成 ModelInfo
+            // .as_array()                Option<&Vec<Value>>
+            // .unwrap_or(&vec![])        None 时给空数组引用
+            // .iter()                    Iterator<Item = &Value>
+            // .filter_map(|m| {...})     闭包返回 Option<T>：None 过滤掉，Some 保留
+            //   类似 Java Stream 的 .filter(...).map(...).collect()
+            //   但 filter_map 把两步合并成"既能过滤又能转换"
             let models: Vec<ModelInfo> = json["data"]
                 .as_array()
                 .unwrap_or(&vec![])
                 .iter()
                 .filter_map(|m| {
+                    // `m["id"].as_str()?`  ? 是"早返回 None"运算符：
+                    //   若 id 字段不是字符串，整个闭包返回 None（被 filter_map 过滤掉）
                     let id = m["id"].as_str()?;
                     Some(ModelInfo {
                         id: id.to_string(),
@@ -437,6 +586,7 @@ impl LlmProvider for AnthropicProvider {
                 })
                 .collect();
 
+            // 没解析到模型也用内置列表兜底
             if models.is_empty() {
                 Ok(builtin_anthropic_models())
             } else {
@@ -462,6 +612,8 @@ impl LlmProvider for AnthropicProvider {
                 base_url.trim_end_matches('/')
             );
 
+            // 测速请求：max_tokens=1, 非流式, 内容 "hi"
+            // 跑通这条 = 端到端通；耗时即"延迟"
             let body = serde_json::json!({
                 "model": model_id,
                 "max_tokens": 1,
@@ -469,6 +621,7 @@ impl LlmProvider for AnthropicProvider {
                 "stream": false,
             });
 
+            // Instant::now() ≈ Java 的 System.nanoTime()
             let start = std::time::Instant::now();
 
             let response = client
@@ -485,16 +638,21 @@ impl LlmProvider for AnthropicProvider {
                 return Err(format!("API returned error status: {}", response.status()));
             }
 
+            // start.elapsed() 返回 Duration；as_millis() 得到 u128；强转 u32
             let elapsed = start.elapsed().as_millis() as u32;
             Ok(elapsed)
         })
     }
 }
 
+
 /// 内置 Anthropic 模型列表
 ///
 /// 当 /v1/models 端点不可用时使用此列表。
 fn builtin_anthropic_models() -> Vec<ModelInfo> {
+    // vec![ ... ] 宏：构造 Vec<T>
+    // 每个 ModelInfo 的字段按 struct 定义顺序赋值（Rust 不支持按名字赋值在 vec! 中，
+    // 必须写 ModelInfo { ... } 字面量）
     vec![
         ModelInfo {
             id: "claude-sonnet-4-6".to_string(),
@@ -526,6 +684,7 @@ fn builtin_anthropic_models() -> Vec<ModelInfo> {
         },
     ]
 }
+
 
 #[cfg(test)]
 mod tests {

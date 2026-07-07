@@ -10,6 +10,15 @@
 //! 维护原则：新增模型时优先尝试在 `PREFIX_TABLE` 加前缀；只有在
 //! 前缀会给出错误结果时，才把该 model_id 单独加进 `EXACT_MAP`。
 
+// ============================================================================
+// use 语句 = Java 的 import
+// ============================================================================
+// - HashMap ≈ Java 的 HashMap<K, V>
+// - LazyLock 是 Rust 1.80 引入的线程安全惰性初始化包装器
+//   （之前常用 once_cell crate；现在标准库自带）
+//   等价于 Java 的：
+//     private static final Map<String, Integer> MAP = lazyInit(() -> new HashMap<>());
+// ============================================================================
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
@@ -17,7 +26,21 @@ use std::sync::LazyLock;
 ///
 /// 同值覆盖的情况已在 `PREFIX_TABLE` 中处理；本表只承担"覆盖错误前缀"
 /// 的角色。维护时新条目需通过现有测试覆盖。
+///
+/// Rust 关键字 / 语法：
+/// - `static`          = Java 的 `static final`（编译期常量或全局变量）
+/// - `LazyLock<...>`   = 第一次访问时才初始化的全局变量，且线程安全
+/// - `&'static str`    = 字符串字面量的引用；'static 是生命周期标注，
+///                       意思是"这个引用可以在程序运行的整个期间有效"
+///                       （字符串字面量本身就存放在二进制里，永久有效）
+/// - `u32`             = 32 位无符号整数
+///
+/// 对应 Java：
+///     private static final Map<String, Integer> EXACT_MAP =
+///         lazyInit(() -> Map.of("gpt-4-0125-preview", 128_000, ...));
 static EXACT_MAP: LazyLock<HashMap<&'static str, u32>> = LazyLock::new(|| {
+    // HashMap::from([...]) 是数组转 HashMap 的语法糖
+    // 类似 Java 的 Map.ofEntries(Map.entry(...), Map.entry(...))
     HashMap::from([
         // ── OpenAI 例外：gpt-4-*-preview 系列被 gpt-4 前缀误判为 8K ──
         ("gpt-4-0125-preview", 128_000),
@@ -32,6 +55,13 @@ static EXACT_MAP: LazyLock<HashMap<&'static str, u32>> = LazyLock::new(|| {
 ///
 /// **顺序很重要！** 如 "gpt-4o-mini" 必须在 "gpt-4o" 之前，
 /// "gpt-4o" 必须在 "gpt-4" 之前。
+///
+/// Rust 数组语法：
+/// - `&[...]`     = 不可变引用指向的数组字面量，存放在只读数据段（与 'static 生命周期等价）
+/// - `&'static`   = 同上，'static 是生命周期标注
+/// - `(&str, u32)` = 元组（tuple）类型，固定长度/类型的复合值，类似 Java 没有 tuple 的概念
+///                  （Java 17 之后有 record，但仅限命名 record）
+/// - `u32` 数字字面量可加下划线增加可读性（128_000 ≡ 128000），纯语法糖
 static PREFIX_TABLE: &[(&str, u32)] = &[
     // ── Anthropic（全部 200K）──
     ("claude-", 200_000),
@@ -84,22 +114,53 @@ static PREFIX_TABLE: &[(&str, u32)] = &[
 /// 1. 精确匹配（大小写不敏感）—— 仅命中 `EXACT_MAP` 中的例外条目
 /// 2. 前缀匹配（从最具体到最宽泛）
 /// 3. 返回默认值 128,000
+///
+/// Rust 函数签名：
+/// - `pub fn`          = 公开函数
+/// - `get_context_window(model_id: &str) -> u32`
+///                     - `&str` 是"字符串切片引用"，相当于 Java 的 `String`（不可变视图）
+///                       区别：&str 不可增长，String 可增长；这里只读，用 &str 即可
+/// - `-> u32`          返回 32 位无符号整数
 pub fn get_context_window(model_id: &str) -> u32 {
+    // `let lower = ...`：let 是变量绑定；默认不可变（immutable）
+    //   Java 中所有局部变量引用都可变，Rust 中需要 `let mut lower = ...` 才能再赋值
+    // `to_lowercase()` 返回 String，等价于 Java 的 `modelId.toLowerCase()`
     let lower = model_id.to_lowercase();
 
-    // 1. 精确匹配
+    // ── 1. 精确匹配 ──
+    // `if let Some(...) = ... { ... }` 是 Rust 的模式匹配（pattern matching）
+    // 配合 Option<T> 使用：
+    //   - Some(x) 表示有值，绑定 x 给代码块用
+    //   - None    表示无值，整个 if 块不执行
+    //
+    // Java 等价写法（假设存在 getOrNull）：
+    //     Integer v = EXACT_MAP.get(lower);
+    //     if (v != null) return v;
+    //
+    // `&` 在模式里表示"取引用"；`&` 紧跟值表示"取引用"；
+    // 这里 `Some(&ctx)` 把 HashMap 里值的引用解出来。
+    //   *EXACT_MAP.get(...) 返回 Option<&u32>（值的引用，避免拷贝）
+    //   `&ctx` 进一步"重新借用"成 &u32，从而能匹配 Some(&u32)
     if let Some(&ctx) = EXACT_MAP.get(lower.as_str()) {
-        return ctx;
+        return ctx;  // `return` 从当前函数返回；Rust 也常用尾部表达式隐式 return
     }
 
-    // 2. 前缀匹配
+    // ── 2. 前缀匹配 ──
+    // `for (prefix, ctx) in PREFIX_TABLE`：
+    //   PREFIX_TABLE 是 &[(&str, u32)]，迭代时每个元素是 &(&str, u32)
+    //   模式 (prefix, ctx) 自动解引用，把内部字段绑定为 prefix: &&str, ctx: &u32
+    // Java 等价：
+    //     for (Entry<String, Integer> e : PREFIX_TABLE) { ... }
     for (prefix, ctx) in PREFIX_TABLE {
+        // `lower.starts_with(prefix)` ≈ `lower.startsWith(prefix)`
+        // `return *ctx`：`*` 是解引用运算符；ctx 是 &u32，*ctx 得到 u32 的拷贝
         if lower.starts_with(prefix) {
             return *ctx;
         }
     }
 
-    // 3. 默认
+    // ── 3. 默认 ──
+    // 注意：Rust 函数末尾的表达式（无分号）就是返回值，不需要写 return
     128_000
 }
 
