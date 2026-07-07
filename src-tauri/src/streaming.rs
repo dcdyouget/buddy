@@ -106,7 +106,16 @@ pub enum StopReason {
     Aborted,
 }
 
-/// 统一流式事件
+/// stream_chat 的返回结果(P4 新增)
+///
+/// 拆分 full_text + tool_calls,让 P4 的 send_message 知道本轮有没有 tool_call 需要执行
+#[derive(Debug, Clone, Default)]
+pub struct StreamOutcome {
+    /// 累积的完整文本(用于持久化 + UI 展示)
+    pub full_text: String,
+    /// 本轮产生的 tool_calls(可能为空,表示纯文本回复)
+    pub tool_calls: Vec<crate::models::ToolCall>,
+}
 ///
 /// 所有 Provider 实现都输出此枚举的事件。
 /// 前端通过监听 Tauri 事件来处理流式响应。
@@ -157,6 +166,66 @@ pub enum StreamEvent {
         message: String,
         /// 已累积的部分回复文本（用于持久化）
         partial_text: String,
+    },
+
+    // ── Tool 调用相关事件（tool_calls 协议） ──
+    // 一个 assistant 响应可以包含 0~N 个 tool_call,每个 tool_call 都有
+    // start / delta / end 三个事件;同一轮(turn)内可能多 tool_call 并行拼接
+
+    /// Tool 调用开始
+    /// 前端收到后应创建占位 UI,显示 "正在调用 tool_name"
+    ToolCallStart {
+        /// 模型提供的 tool_call id (OpenAI: call_xxx, Anthropic: toolu_xxx)
+        id: String,
+        /// 工具名
+        name: String,
+        /// 同一 assistant 消息内的 tool_call 索引(0-based)
+        content_index: usize,
+    },
+    /// Tool 调用参数增量
+    /// OpenAI 是 partial JSON,Anthropic 是 partial input_json
+    /// 拼装到 ToolCall.arguments 原始字符串
+    ToolCallDelta {
+        id: String,
+        /// 增量(原始 JSON 片段)
+        arguments_delta: String,
+    },
+    /// Tool 调用参数完整
+    ToolCallEnd {
+        id: String,
+        name: String,
+        /// 完整参数(JSON 字符串)
+        arguments: String,
+    },
+    /// 后端开始执行 tool(已通过审批,或 read-only 不需审批)
+    ToolExecuting {
+        id: String,
+        name: String,
+    },
+    /// Tool 执行结果
+    /// OpenAI 协议以 role:"tool" 消息塞回 messages;这里的事件用于前端实时显示
+    ToolResult {
+        id: String,
+        name: String,
+        /// 结果内容
+        content: String,
+        /// true=执行出错(让 model 看到错误并重试)
+        is_error: bool,
+    },
+    /// 需要用户审批(只对 Write 类 tool 触发)
+    /// 前端弹 ApprovalModal,点击后 invoke('approve_tool_call', {id, approved})
+    ToolApprovalRequired {
+        id: String,
+        name: String,
+        /// 完整参数(供 UI 展示)
+        arguments: String,
+        /// 审批原因(写文件时是 "write to <path>")
+        reason: String,
+    },
+    /// 一轮 assistant 完成,统计待处理 tool_call 数
+    /// tool_calls_pending == 0 时整次 send_message 也将结束
+    TurnEnd {
+        tool_calls_pending: usize,
     },
 }
 
@@ -238,6 +307,60 @@ impl StreamEventEmitter {
             message: message.to_string(),
             partial_text: partial_text.to_string(),
         });
+    }
+
+    // ── Tool 事件便捷方法 ──
+
+    pub fn tool_call_start(&self, id: &str, name: &str, content_index: usize) {
+        self.emit(&StreamEvent::ToolCallStart {
+            id: id.to_string(),
+            name: name.to_string(),
+            content_index,
+        });
+    }
+
+    pub fn tool_call_delta(&self, id: &str, arguments_delta: &str) {
+        self.emit(&StreamEvent::ToolCallDelta {
+            id: id.to_string(),
+            arguments_delta: arguments_delta.to_string(),
+        });
+    }
+
+    pub fn tool_call_end(&self, id: &str, name: &str, arguments: &str) {
+        self.emit(&StreamEvent::ToolCallEnd {
+            id: id.to_string(),
+            name: name.to_string(),
+            arguments: arguments.to_string(),
+        });
+    }
+
+    pub fn tool_executing(&self, id: &str, name: &str) {
+        self.emit(&StreamEvent::ToolExecuting {
+            id: id.to_string(),
+            name: name.to_string(),
+        });
+    }
+
+    pub fn tool_result(&self, id: &str, name: &str, content: &str, is_error: bool) {
+        self.emit(&StreamEvent::ToolResult {
+            id: id.to_string(),
+            name: name.to_string(),
+            content: content.to_string(),
+            is_error,
+        });
+    }
+
+    pub fn tool_approval_required(&self, id: &str, name: &str, arguments: &str, reason: &str) {
+        self.emit(&StreamEvent::ToolApprovalRequired {
+            id: id.to_string(),
+            name: name.to_string(),
+            arguments: arguments.to_string(),
+            reason: reason.to_string(),
+        });
+    }
+
+    pub fn turn_end(&self, tool_calls_pending: usize) {
+        self.emit(&StreamEvent::TurnEnd { tool_calls_pending });
     }
 }
 

@@ -38,13 +38,15 @@ export const MOCK_CONFIG: AppConfig = {
       provider_type: 'openai_compatible',
     },
   ],
+  allowed_paths: [],
+  mcp_servers: [],
   models: [
     {
       id: 'deepseek-chat',
       provider_id: 'deepseek',
       display_name: 'DeepSeek-Chat',
       context_window: 128000,
-      latency_ms: 320, // 模拟延迟
+      latency_ms: 320,
     },
     {
       id: 'deepseek-reasoner',

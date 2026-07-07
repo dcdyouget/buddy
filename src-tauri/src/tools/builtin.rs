@@ -1,0 +1,607 @@
+// ============================================================================
+// 内置 file tool 实现
+// ============================================================================
+//
+// 四个 tool:
+//   - read_file      (ReadOnly) — 读取文本文件内容
+//   - create_file    (Write)    — 创建新文件,目标必须不存在
+//   - overwrite_file (Write)    — 覆盖现有文件,目标必须存在
+//   - append_file    (Write)    — 追加或创建
+//
+// 路径安全(Q3 决策):write 类必须以 AppConfig.allowed_paths 某条为前缀;
+//                   allowed_paths 为空时不限制;
+//                   read 类不做路径限制。
+//
+// 路径规范:
+//   - 用户传入的 path 可以是绝对路径或相对路径
+//   - 相对路径相对 cwd 处理(注:buddy 是 Tauri 应用,启动时 cwd 是 app bundle 目录,
+//     实际使用中 model 通常传绝对路径,这里按"原样使用"处理,不强制 canonicalize)
+//   - 不做符号链接解析(避免 TOCTOU),写入时直接覆盖
+// ============================================================================
+
+use super::{Tool, ToolContext, ToolError, ToolOutput, ToolSafety};
+use async_trait::async_trait;
+use serde_json::{json, Value};
+use std::path::{Path, PathBuf};
+use tokio::fs;
+use tokio::io::AsyncWriteExt;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 路径检查工具
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// 检查 write 类路径是否在 allowed_paths 白名单内
+///
+/// allowed_paths 为空 → 返回 Ok(不限制)
+/// 否则要求 path 至少有一条前缀匹配(prefix match,不要求完全相等)
+fn check_write_allowed(path: &Path, allowed_paths: &[String]) -> Result<(), ToolError> {
+    if allowed_paths.is_empty() {
+        return Ok(());
+    }
+
+    let path_str = path.to_string_lossy();
+
+    for allowed in allowed_paths {
+        // 允许前缀是目录的情况: "/foo" 接受 "/foo/bar.txt"
+        // 也接受完全相等
+        if path_str == allowed.as_str() {
+            return Ok(());
+        }
+
+        // 标准化前缀,确保以 "/" 结尾(防止 "/foo-bar" 误匹配 "/foo")
+        let allowed_with_sep = if allowed.ends_with('/') {
+            allowed.clone()
+        } else {
+            format!("{}/", allowed)
+        };
+
+        if path_str.starts_with(&allowed_with_sep) {
+            return Ok(());
+        }
+    }
+
+    Err(ToolError::PermissionDenied(format!(
+        "路径 {} 不在 allowed_paths 白名单中",
+        path_str
+    )))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 公共 schema 辅助
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn path_property() -> Value {
+    json!({
+        "type": "string",
+        "description": "目标文件路径,绝对路径(如 /Users/me/foo.txt)或相对路径"
+    })
+}
+
+fn content_property() -> Value {
+    json!({
+        "type": "string",
+        "description": "要写入的完整内容"
+    })
+}
+
+/// 抽取 args.path 字段
+fn extract_path(args: &Value) -> Result<PathBuf, ToolError> {
+    let p = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ToolError::InvalidArgs("缺少 'path' 字段或不是字符串".to_string()))?;
+    if p.is_empty() {
+        return Err(ToolError::InvalidArgs("'path' 不能为空".to_string()));
+    }
+    Ok(PathBuf::from(p))
+}
+
+/// 抽取 args.content 字段(若缺失/非 string 返回空串)
+fn extract_content(args: &Value) -> String {
+    args.get("content")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// read_file
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub struct ReadFileTool;
+
+#[async_trait]
+impl Tool for ReadFileTool {
+    fn name(&self) -> &str { "read_file" }
+    fn description(&self) -> &str {
+        "读取本地文本文件的内容。返回 UTF-8 解码后的文本;二进制文件返回 is_error。"
+    }
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "path": path_property()
+            },
+            "required": ["path"]
+        })
+    }
+    fn safety(&self) -> ToolSafety { ToolSafety::ReadOnly }
+
+    async fn execute(&self, args: Value, _ctx: ToolContext) -> Result<ToolOutput, ToolError> {
+        let path = extract_path(&args)?;
+        let content = fs::read_to_string(&path).await.map_err(|e| {
+            ToolError::Io(match e.kind() {
+                std::io::ErrorKind::NotFound => std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("文件不存在: {}", path.display()),
+                ),
+                _ => e,
+            })
+        })?;
+        Ok(ToolOutput::ok(content))
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// create_file
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub struct CreateFileTool {
+    pub allowed_paths: Vec<String>,
+}
+
+#[async_trait]
+impl Tool for CreateFileTool {
+    fn name(&self) -> &str { "create_file" }
+    fn description(&self) -> &str {
+        "创建新文件。目标文件必须不存在,存在则报错。仅在 allowed_paths 白名单内允许。"
+    }
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "path": path_property(),
+                "content": content_property()
+            },
+            "required": ["path", "content"]
+        })
+    }
+    fn safety(&self) -> ToolSafety { ToolSafety::Write }
+
+    async fn execute(&self, args: Value, _ctx: ToolContext) -> Result<ToolOutput, ToolError> {
+        let path = extract_path(&args)?;
+        check_write_allowed(&path, &self.allowed_paths)?;
+
+        if fs::metadata(&path).await.is_ok() {
+            return Err(ToolError::InvalidArgs(format!(
+                "文件已存在: {} (请用 overwrite_file 或 append_file)",
+                path.display()
+            )));
+        }
+
+        // 自动创建父目录
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent).await?;
+            }
+        }
+
+        let content = extract_content(&args);
+        let mut f = fs::File::create(&path).await?;
+        f.write_all(content.as_bytes()).await?;
+        f.sync_all().await?;
+
+        Ok(ToolOutput::ok(format!(
+            "已创建文件: {} ({} 字节)",
+            path.display(),
+            content.len()
+        )))
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// overwrite_file
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub struct OverwriteFileTool {
+    pub allowed_paths: Vec<String>,
+}
+
+#[async_trait]
+impl Tool for OverwriteFileTool {
+    fn name(&self) -> &str { "overwrite_file" }
+    fn description(&self) -> &str {
+        "覆盖现有文件。目标文件必须存在,不存在则报错。仅在 allowed_paths 白名单内允许。"
+    }
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "path": path_property(),
+                "content": content_property()
+            },
+            "required": ["path", "content"]
+        })
+    }
+    fn safety(&self) -> ToolSafety { ToolSafety::Write }
+
+    async fn execute(&self, args: Value, _ctx: ToolContext) -> Result<ToolOutput, ToolError> {
+        let path = extract_path(&args)?;
+        check_write_allowed(&path, &self.allowed_paths)?;
+
+        if fs::metadata(&path).await.is_err() {
+            return Err(ToolError::InvalidArgs(format!(
+                "文件不存在: {} (请用 create_file 或 append_file)",
+                path.display()
+            )));
+        }
+
+        let content = extract_content(&args);
+        let tmp = path.with_extension("tmp_buddy_overwrite");
+        {
+            let mut f = fs::File::create(&tmp).await?;
+            f.write_all(content.as_bytes()).await?;
+            f.sync_all().await?;
+        }
+        // 原子 rename;失败时清理 tmp
+        if let Err(e) = fs::rename(&tmp, &path).await {
+            let _ = fs::remove_file(&tmp).await;
+            return Err(ToolError::Io(e));
+        }
+
+        Ok(ToolOutput::ok(format!(
+            "已覆盖文件: {} ({} 字节)",
+            path.display(),
+            content.len()
+        )))
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// append_file
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub struct AppendFileTool {
+    pub allowed_paths: Vec<String>,
+}
+
+#[async_trait]
+impl Tool for AppendFileTool {
+    fn name(&self) -> &str { "append_file" }
+    fn description(&self) -> &str {
+        "追加内容到现有文件,或创建新文件。仅在 allowed_paths 白名单内允许。"
+    }
+    fn parameters_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "path": path_property(),
+                "content": content_property()
+            },
+            "required": ["path", "content"]
+        })
+    }
+    fn safety(&self) -> ToolSafety { ToolSafety::Write }
+
+    async fn execute(&self, args: Value, _ctx: ToolContext) -> Result<ToolOutput, ToolError> {
+        let path = extract_path(&args)?;
+        check_write_allowed(&path, &self.allowed_paths)?;
+
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent).await?;
+            }
+        }
+
+        let existed = fs::metadata(&path).await.is_ok();
+        let content = extract_content(&args);
+
+        let mut f = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .await?;
+        f.write_all(content.as_bytes()).await?;
+        f.sync_all().await?;
+
+        Ok(ToolOutput::ok(format!(
+        "{}文件: {} (追加 {} 字节)",
+            if existed { "已追加到" } else { "已创建" },
+            path.display(),
+            content.len()
+        )))
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 工厂 + 单元测试
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// 用当前 AppConfig.allowed_paths 构造全部内置 tool
+pub fn builtin_tools(allowed_paths: Vec<String>) -> Vec<std::sync::Arc<dyn Tool>> {
+    use std::sync::Arc;
+    vec![
+        Arc::new(ReadFileTool),
+        Arc::new(CreateFileTool { allowed_paths: allowed_paths.clone() }),
+        Arc::new(OverwriteFileTool { allowed_paths: allowed_paths.clone() }),
+        Arc::new(AppendFileTool { allowed_paths }),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use tempfile::TempDir;
+
+    // 临时目录路径辅助
+    fn tmp_paths(tmp: &TempDir) -> Vec<String> {
+        vec![tmp.path().to_string_lossy().to_string()]
+    }
+
+    // ── check_write_allowed ──
+
+    #[test]
+    fn test_check_write_allowed_empty_means_unrestricted() {
+        let p = Path::new("/etc/passwd");
+        assert!(check_write_allowed(p, &[]).is_ok());
+    }
+
+    #[test]
+    fn test_check_write_allowed_prefix_match() {
+        let allowed = vec!["/Users/me/projects".to_string()];
+        let p = Path::new("/Users/me/projects/subdir/foo.txt");
+        assert!(check_write_allowed(p, &allowed).is_ok());
+    }
+
+    #[test]
+    fn test_check_write_allowed_exact_match() {
+        let allowed = vec!["/Users/me/foo.txt".to_string()];
+        let p = Path::new("/Users/me/foo.txt");
+        assert!(check_write_allowed(p, &allowed).is_ok());
+    }
+
+    #[test]
+    fn test_check_write_allowed_rejects_similar_prefix() {
+        // "/foo-bar" 不能匹配 "/foo"
+        let allowed = vec!["/foo".to_string()];
+        let p = Path::new("/foo-bar/x.txt");
+        assert!(check_write_allowed(p, &allowed).is_err());
+    }
+
+    #[test]
+    fn test_check_write_allowed_rejects_outside() {
+        let allowed = vec!["/Users/me/projects".to_string()];
+        let p = Path::new("/etc/passwd");
+        assert!(check_write_allowed(p, &allowed).is_err());
+    }
+
+    // ── read_file ──
+
+    #[tokio::test]
+    async fn test_read_file_success() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("hello.txt");
+        tokio::fs::write(&p, "hello world").await.unwrap();
+        let tool = ReadFileTool;
+        let out = tool
+            .execute(json!({ "path": p.to_string_lossy() }), ToolContext::default())
+            .await
+            .unwrap();
+        assert_eq!(out.content, "hello world");
+        assert!(!out.is_error);
+    }
+
+    #[tokio::test]
+    async fn test_read_file_missing() {
+        let tool = ReadFileTool;
+        let out = tool
+            .execute(json!({ "path": "/nonexistent_xyz_9999.txt" }), ToolContext::default())
+            .await;
+        assert!(matches!(out, Err(ToolError::Io(_))));
+    }
+
+    #[tokio::test]
+    async fn test_read_file_no_path_arg() {
+        let tool = ReadFileTool;
+        let out = tool.execute(json!({}), ToolContext::default()).await;
+        assert!(matches!(out, Err(ToolError::InvalidArgs(_))));
+    }
+
+    // ── create_file ──
+
+    #[tokio::test]
+    async fn test_create_file_success() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("new.txt");
+        let tool = CreateFileTool { allowed_paths: tmp_paths(&tmp) };
+        let out = tool
+            .execute(
+                json!({ "path": p.to_string_lossy(), "content": "abc" }),
+                ToolContext::default(),
+            )
+            .await
+            .unwrap();
+        assert!(!out.is_error);
+        assert_eq!(tokio::fs::read_to_string(&p).await.unwrap(), "abc");
+    }
+
+    #[tokio::test]
+    async fn test_create_file_rejects_existing() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("exists.txt");
+        tokio::fs::write(&p, "old").await.unwrap();
+        let tool = CreateFileTool { allowed_paths: tmp_paths(&tmp) };
+        let out = tool
+            .execute(
+                json!({ "path": p.to_string_lossy(), "content": "new" }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(matches!(out, Err(ToolError::InvalidArgs(_))));
+        // 原文件未动
+        assert_eq!(tokio::fs::read_to_string(&p).await.unwrap(), "old");
+    }
+
+    #[tokio::test]
+    async fn test_create_file_rejects_outside_allowed() {
+        let tmp = TempDir::new().unwrap();
+        let tool = CreateFileTool { allowed_paths: tmp_paths(&tmp) };
+        let out = tool
+            .execute(
+                json!({ "path": "/etc/evil.txt", "content": "x" }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(matches!(out, Err(ToolError::PermissionDenied(_))));
+    }
+
+    #[tokio::test]
+    async fn test_create_file_no_allowed_means_unrestricted() {
+        // allowed_paths 为空 → 不限制
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("free.txt");
+        let tool = CreateFileTool { allowed_paths: vec![] };
+        let out = tool
+            .execute(
+                json!({ "path": p.to_string_lossy(), "content": "ok" }),
+                ToolContext::default(),
+            )
+            .await
+            .unwrap();
+        assert!(!out.is_error);
+    }
+
+    #[tokio::test]
+    async fn test_create_file_creates_parent_dirs() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("a/b/c.txt");
+        let tool = CreateFileTool { allowed_paths: tmp_paths(&tmp) };
+        tool.execute(
+            json!({ "path": p.to_string_lossy(), "content": "x" }),
+            ToolContext::default(),
+        )
+        .await
+        .unwrap();
+        assert!(p.exists());
+    }
+
+    // ── overwrite_file ──
+
+    #[tokio::test]
+    async fn test_overwrite_file_success() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("file.txt");
+        tokio::fs::write(&p, "old").await.unwrap();
+        let tool = OverwriteFileTool { allowed_paths: tmp_paths(&tmp) };
+        let out = tool
+            .execute(
+                json!({ "path": p.to_string_lossy(), "content": "new" }),
+                ToolContext::default(),
+            )
+            .await
+            .unwrap();
+        assert!(!out.is_error);
+        assert_eq!(tokio::fs::read_to_string(&p).await.unwrap(), "new");
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_file_rejects_missing() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("nope.txt");
+        let tool = OverwriteFileTool { allowed_paths: tmp_paths(&tmp) };
+        let out = tool
+            .execute(
+                json!({ "path": p.to_string_lossy(), "content": "x" }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(matches!(out, Err(ToolError::InvalidArgs(_))));
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_file_rejects_outside_allowed() {
+        let tmp = TempDir::new().unwrap();
+        let tool = OverwriteFileTool { allowed_paths: tmp_paths(&tmp) };
+        let out = tool
+            .execute(
+                json!({ "path": "/etc/passwd", "content": "x" }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(matches!(out, Err(ToolError::PermissionDenied(_))));
+    }
+
+    // ── append_file ──
+
+    #[tokio::test]
+    async fn test_append_file_creates_when_missing() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("new.txt");
+        let tool = AppendFileTool { allowed_paths: tmp_paths(&tmp) };
+        let out = tool
+            .execute(
+                json!({ "path": p.to_string_lossy(), "content": "abc" }),
+                ToolContext::default(),
+            )
+            .await
+            .unwrap();
+        assert!(out.content.contains("已创建"));
+        assert_eq!(tokio::fs::read_to_string(&p).await.unwrap(), "abc");
+    }
+
+    #[tokio::test]
+    async fn test_append_file_appends_when_exists() {
+        let tmp = TempDir::new().unwrap();
+        let p = tmp.path().join("ex.txt");
+        tokio::fs::write(&p, "line1\n").await.unwrap();
+        let tool = AppendFileTool { allowed_paths: tmp_paths(&tmp) };
+        tool.execute(
+            json!({ "path": p.to_string_lossy(), "content": "line2\n" }),
+            ToolContext::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            tokio::fs::read_to_string(&p).await.unwrap(),
+            "line1\nline2\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_append_file_rejects_outside_allowed() {
+        let tmp = TempDir::new().unwrap();
+        let tool = AppendFileTool { allowed_paths: tmp_paths(&tmp) };
+        let out = tool
+            .execute(
+                json!({ "path": "/etc/passwd", "content": "x" }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(matches!(out, Err(ToolError::PermissionDenied(_))));
+    }
+
+    // ── builtin_tools 工厂 + 重复名检查 ──
+
+    #[test]
+    fn test_builtin_tools_have_unique_names() {
+        let tools = builtin_tools(vec![]);
+        let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
+        let unique: HashSet<&str> = names.iter().copied().collect();
+        assert_eq!(unique.len(), names.len(), "tool 名重复: {:?}", names);
+    }
+
+    #[test]
+    fn test_builtin_safety_classification() {
+        let tools = builtin_tools(vec![]);
+        for t in &tools {
+            match t.name() {
+                "read_file" => assert_eq!(t.safety(), ToolSafety::ReadOnly),
+                "create_file" | "overwrite_file" | "append_file" => {
+                    assert_eq!(t.safety(), ToolSafety::Write)
+                }
+                _ => panic!("unexpected tool: {}", t.name()),
+            }
+        }
+    }
+}

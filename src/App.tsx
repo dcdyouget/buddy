@@ -21,9 +21,9 @@ import { NoApiKeyPage } from '@/pages/NoApiKeyPage';
 import { ChatPage } from '@/pages/ChatPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { SlideInPanel } from '@/components/shared/SlideInPanel';
+import { ApprovalModal } from '@/components/shared/ApprovalModal';
 
 /**
- * 页面渲染器 — 根据 currentPage 状态返回对应页面组件
  * 这是一个轻量级的页面路由器，避免引入 react-router 增加包体积
  *
  * 关键：当 currentPage === 'settings' 时，不要卸载背景层，而是
@@ -175,6 +175,8 @@ function App() {
           />
         )}
       </SlideInPanel>
+      {/* Tool 审批弹窗 */}
+      <ApprovalModal />
     </motion.div>
   );
 }

@@ -27,8 +27,9 @@ arboard = "3"
 log = "0.4"
 env_logger = "0.11"
 image = { version = "0.25", default-features = false, features = ["png"] }
-
-[target.'cfg(target_os = "macos")'.dependencies]
+async-trait = "0.1"
+thiserror = "1"
+parking_lot = "0.12"
 window-vibrancy = "0.6"
 objc2 = "0.6"
 objc2-app-kit = "0.3"
@@ -38,3 +39,4 @@ core-graphics = "0.23"
 [dev-dependencies]
 # uuid 仅在 commands.rs 的测试模块中使用(message id 生成),生产代码用 chrono 时间戳
 uuid = { version = "1", features = ["v4"] }
+tempfile = "3"

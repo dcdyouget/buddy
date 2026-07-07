@@ -26,7 +26,8 @@ pub mod openai_compatible;  // 声明并公开 openai_compatible 子模块（位
 // use 语句 —— 导入外部项
 // ============================================================================
 use crate::models::{CompatConfig, Message, ModelInfo};  // 引用本 crate 的 models 模块
-use crate::streaming::StreamEventEmitter;              // 引用本 crate 的 streaming 模块
+use crate::streaming::{StreamEventEmitter, StreamOutcome};  // 引用本 crate 的 streaming 模块
+use crate::tools::ToolDefinition;                      // 引用本 crate 的 tools 模块
 use std::future::Future;                               // 标准库的 Future trait
 use tokio::sync::watch;                                // tokio 异步运行时的 watch channel
 
@@ -172,8 +173,6 @@ impl ProviderType {
 // `: Send + Sync` 是 trait bound，要求实现者必须同时实现 Send 和 Sync（线程安全标记）
 //   - Send：可以跨线程移动所有权
 //   - Sync：可以跨线程共享引用 &T
-//   ≈ Java 的 "线程安全" 标记，但 Rust 在类型系统层强制保证
-// ============================================================================
 pub trait LlmProvider: Send + Sync {
     /// 发起流式对话
     ///
@@ -185,37 +184,20 @@ pub trait LlmProvider: Send + Sync {
     /// - `emitter`: 统一事件发射器
     /// - `cancel_rx`: 取消信号接收端
     /// - `compat`: 兼容性配置（可选，None 时使用默认行为）
+    /// - `tools`: 可用 tool 列表（空切片 = 不传 tool 字段，行为与无 tool 时一致）
     ///
     /// 返回累积的完整 AI 回复文本。
-    ///
-    /// ─── 重点：签名解读 ───
-    /// `fn stream_chat<'a>(...)` 是"显式生命周期参数"，相当于给编译器一个名字 'a
-    ///   让编译器知道：所有这些引用（&str / &Message / &StreamEventEmitter）的
-    ///   存活时间至少和 'a 一样长。
-    /// Java 没有显式生命周期，靠 GC 自动追踪引用可达性。
-    ///
-    /// 返回类型：
-    ///   Pin<Box<dyn Future<Output = Result<String, ApiError>> + Send + 'a>>
-    ///   解读：
-    ///     Future<Output=...>     一个异步任务，输出为 Result<String, ApiError>
-    ///     dyn Future              动态分发（运行时多态），dyn = dynamic
-    ///     Box<dyn Future>         堆分配装箱（trait 对象不能直接放栈，必须 Box）
-    ///                            ≈ Java 的 `Future<Object>` 这种"装起来"的写法
-    ///     Pin<Box<...>>           Pin 锁住 Box 不让移动；async/await 需要自引用结构，
-    ///                            Pin 保证 self 引用始终有效，类似 C++ 的 std::pin
-    ///                            对 Java 开发者基本透明：async 函数的返回值类型就是 Pin<Box<...>>
-    ///     Send                    可以在线程间转移
-    ///     'a                     生命周期约束：与所有入参引用共存
     fn stream_chat<'a>(
-        &'a self,                       // &self：不可变借用 self，Java 中是隐式的
-        base_url: &'a str,              // &str：不可变借用字符串切片
+        &'a self,
+        base_url: &'a str,
         api_key: &'a str,
         model: &'a str,
-        messages: &'a [Message],        // &[Message]：不可变借用 Message 切片（类似 List 视图）
+        messages: &'a [Message],
         emitter: &'a StreamEventEmitter,
         cancel_rx: watch::Receiver<bool>,
-        compat: Option<&'a CompatConfig>, // Option<&T>：可能为 None 的引用
-    ) -> std::pin::Pin<Box<dyn Future<Output = Result<String, ApiError>> + Send + 'a>>;
+        compat: Option<&'a CompatConfig>,
+        tools: &'a [ToolDefinition],
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<StreamOutcome, ApiError>> + Send + 'a>>;
 
     /// 获取可用模型列表
     fn fetch_models<'a>(

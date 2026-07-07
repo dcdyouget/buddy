@@ -17,6 +17,7 @@ pub mod config;            // 声明并公开子模块 config（位于 ./config.
 pub mod message;           // 声明并公开子模块 message（位于 ./message.rs）
 pub mod model_context;     // 声明并公开子模块 model_context（位于 ./model_context.rs）
 pub mod storage;           // 声明并公开子模块 storage（位于 ./storage.rs）
+pub mod mcp;               // MCP server 配置（位于 ./mcp.rs）
 
 // ============================================================================
 // re-export（重导出）

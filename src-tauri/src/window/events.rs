@@ -21,17 +21,16 @@ pub fn setup_window_event_handler(
                 let mp = mon.position();
                 if let Some(state) = window
                     .app_handle()
-                    .try_state::<crate::window::positioning::SavedWindowPositions>(
-                ) {
-                    if let Ok(mut map) = state.0.lock() {
-                        map.insert((mp.x, mp.y), (pos.x, pos.y));
-                        info!(
-                            "[on_window_event] Focused(false), saved pos=({},{}) for monitor=({},{})",
-                            pos.x, pos.y, mp.x, mp.y
-                        );
-                    }
-                }
+                    .try_state::<crate::window::positioning::SavedWindowPositions>()
+                {
+                let mut map = state.0.lock();
+                map.insert((mp.x, mp.y), (pos.x, pos.y));
+                info!(
+                    "[on_window_event] Focused(false), saved pos=({},{}) for monitor=({},{})",
+                    pos.x, pos.y, mp.x, mp.y
+                );
             }
+        }
         }
     }
 }

@@ -14,6 +14,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::mcp::McpServerConfig;
+
 
 /// 应用全局配置（持久化到磁盘的根 JSON 对象）
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -25,6 +27,16 @@ pub struct AppConfig {
     pub models: Vec<super::message::ModelInfo>, // 已知模型列表（含 context_window 等）
     pub selected_model_id: String,             // UI 当前选中的模型 ID
     pub auto_start: bool,                      // 开机自启动
+
+    // ── Tool / MCP 相关字段 ──
+    // 缺省时使用 vec![] —— 老 config.json 无这些字段也能正常加载
+    /// write 类 tool 允许写入的路径前缀列表（白名单）
+    /// 空数组 = 不限制（向后兼容）
+    #[serde(default)]
+    pub allowed_paths: Vec<String>,
+    /// MCP server 配置列表
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerConfig>,
 }
 
 // 给 AppConfig 提供默认值；新建配置文件时使用
@@ -32,13 +44,13 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             theme: Theme::Light,
-            hotkey: "CmdOrCtrl+J".into(),  // "字符串".into() 是 From 转换的语法糖
-                                           //   = String::from("CmdOrCtrl+J")
-                                           //   ≈ Java 的 String.valueOf("CmdOrCtrl+J")
-            providers: vec![],             // vec![] 是 Vec 的宏，等价于 Vec::new() / new ArrayList<>()
+            hotkey: "CmdOrCtrl+J".into(),
+            providers: vec![],
             models: vec![],
             selected_model_id: String::new(),
             auto_start: false,
+            allowed_paths: vec![],
+            mcp_servers: vec![],
         }
     }
 }
@@ -112,6 +124,8 @@ pub struct CompatConfig {
     pub supports_developer_role: Option<bool>,
     #[serde(default)]
     pub supports_temperature: Option<bool>,
+    #[serde(default)]
+    pub supports_tools: Option<bool>,
 }
 
 // impl 块：给 CompatConfig 添加方法（类似 Java 的 getter）
@@ -137,6 +151,7 @@ impl CompatConfig {
     }
 
     /// 是否支持 `reasoning_effort` 参数(推理模型)
+    #[allow(dead_code)] // 将来推理模型配置中使用
     pub fn supports_reasoning_effort(&self) -> bool {
         self.supports_reasoning_effort.unwrap_or(true)
     }
@@ -144,6 +159,10 @@ impl CompatConfig {
     /// 是否发送 `temperature` 参数(某些推理模型会拒绝)
     pub fn supports_temperature(&self) -> bool {
         self.supports_temperature.unwrap_or(true)
+    }
+
+    pub fn supports_tools(&self) -> bool {
+        self.supports_tools.unwrap_or(true)
     }
 }
 
@@ -158,6 +177,7 @@ impl Default for CompatConfig {
             supports_store: None,
             supports_developer_role: None,
             supports_temperature: None,
+            supports_tools: None,
         }
     }
 }

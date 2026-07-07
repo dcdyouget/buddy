@@ -14,12 +14,13 @@
 // ============================================================================
 
 use super::{ApiError, LlmProvider};
-use crate::models::{get_context_window, CompatConfig, Message, MessageRole, ModelInfo};
-use crate::streaming::{StopReason, StreamEventEmitter};
+use crate::models::{get_context_window, CompatConfig, Message, MessageRole, ModelInfo, ToolCall};
+use crate::streaming::{StopReason, StreamEventEmitter, StreamOutcome};
+use crate::tools::ToolDefinition;
 use futures_util::StreamExt;                    // Stream trait 扩展（提供 .next() 等）
 use log::{error, info, warn};                   // 日志门面
 use reqwest::Client;                           // 异步 HTTP 客户端
-use serde_json::Value;                         // 通用 JSON 值
+use serde_json::{json, Value};                         // 通用 JSON 值
 use std::pin::Pin;                             // 自引用指针固定
 use std::time::Duration;                       // 时间段
 use tokio::sync::watch;                        // watch channel（取消信号）
@@ -46,16 +47,55 @@ impl OpenAICompatibleProvider {
         messages
             .iter()
             .map(|m| {
-                // 注意：这里 match 直接写进 json!({...}) 里，作为表达式的值
-                // Rust 的 match 是表达式（每个分支返回同一类型的值）
-                // ≈ Java 14+ 的 switch expression
-                serde_json::json!({
+                // content: assistant 消息有 tool_calls 时 content 必须为 null
+                // (OpenAI 协议规范；MiniMax 等 Provider 严格校验此字段)
+                let has_tool_calls = m.role == MessageRole::Assistant
+                    && m.tool_calls.as_ref().map_or(false, |c| !c.is_empty());
+                let content_val = if has_tool_calls {
+                    json!(null)
+                } else {
+                    json!(m.content)
+                };
+
+                let mut obj = json!({
                     "role": match m.role {
                         MessageRole::User => "user",
                         MessageRole::Assistant => "assistant",
+                        MessageRole::Tool => "tool",
                     },
-                    "content": m.content,
-                })
+                    "content": content_val,
+                });
+                if matches!(m.role, MessageRole::Tool) {
+                    let tc_id = m.tool_call_id.as_deref().unwrap_or("");
+                    if !tc_id.is_empty() {
+                        obj["tool_call_id"] = json!(tc_id);
+                        // 部分 OpenAI 兼容 API 需要 tool result 的 name 字段
+                        if let Some(ref name) = m.tool_name {
+                            obj["name"] = json!(name);
+                        }
+                    }
+                }
+                if matches!(m.role, MessageRole::Assistant) {
+                    if let Some(calls) = &m.tool_calls {
+                        // 转换为 OpenAI 兼容的 tool_calls 格式：
+                        //   [{id, type:"function", function:{name, arguments}}]
+                        let openai_calls: Vec<Value> = calls
+                            .iter()
+                            .map(|tc| {
+                                json!({
+                                    "id": tc.id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": tc.name,
+                                        "arguments": tc.arguments,
+                                    }
+                                })
+                            })
+                            .collect();
+                        obj["tool_calls"] = json!(openai_calls);
+                    }
+                }
+                obj
             })
             .collect()
     }
@@ -122,7 +162,8 @@ impl LlmProvider for OpenAICompatibleProvider {
         emitter: &'a StreamEventEmitter,
         mut cancel_rx: watch::Receiver<bool>,
         compat: Option<&'a CompatConfig>,
-    ) -> Pin<Box<dyn std::future::Future<Output = Result<String, ApiError>> + Send + 'a>> {
+        tools: &'a [ToolDefinition],
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<StreamOutcome, ApiError>> + Send + 'a>> {
         Box::pin(async move {
             // ── 1. 创建 HTTP 客户端 ──
             let client = Client::builder()
@@ -135,16 +176,23 @@ impl LlmProvider for OpenAICompatibleProvider {
 
             // ── 3. 应用 compat 配置构造请求体 ──
             // 这个函数在文件末尾定义，处理不同厂商的差异（max_tokens 字段名、thinking 参数等）
-            let body = build_openai_request_body(model, &chat_messages, compat);
+            let body = build_openai_request_body(
+                model,
+                &chat_messages,
+                compat,
+                if tools.is_empty() { None } else { Some(tools) },
+            );
 
             // ── 4. 拼接 URL（OpenAI 兼容都是 /chat/completions） ──
             let url = format!(
                 "{}/chat/completions",
                 base_url.trim_end_matches('/')
             );
+            // P8: 日志打印 tool 列表(帮助验证 tool 是否到了 LLM)
+            let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
             info!(
-                "[openai::stream_chat] 开始请求: model={}, url={}",
-                model, url
+                "[openai::stream_chat] 开始请求: model={}, url={}, tools=[{}]",
+                model, url, tool_names.join(", ")
             );
 
             // ── 5. 发送请求 ──
@@ -207,10 +255,28 @@ impl LlmProvider for OpenAICompatibleProvider {
             let mut chunk_count: u64 = 0;
             let mut token_count: u64 = 0;
 
-            // OpenAI 兼容格式只有一个文本块（content_index = 0）
-            // 与 Anthropic 的多 content_block 不同
             let content_index: usize = 0;
             let mut text_started = false;
+
+            use std::collections::HashMap;
+            let mut tool_calls: HashMap<String, ToolCall> = HashMap::new();
+            let mut tool_call_indexes: HashMap<String, usize> = HashMap::new();
+
+            let flush_tool_calls = |tc: &mut HashMap<String, ToolCall>,
+                                   tci: &HashMap<String, usize>,
+                                   em: &StreamEventEmitter| -> Vec<ToolCall> {
+                let mut ordered: Vec<(usize, ToolCall)> = tc.drain()
+                    .map(|(id, mut t)| {
+                        let idx = tci.get(&id).copied().unwrap_or(0);
+                        if t.arguments.is_empty() { t.arguments = "{}".to_string(); }
+                        (idx, t)
+                    }).collect();
+                ordered.sort_by_key(|(i, _)| *i);
+                let p = ordered.len();
+                for (_, t) in &ordered { em.tool_call_end(&t.id, &t.name, &t.arguments); }
+                em.turn_end(p);
+                ordered.into_iter().map(|(_, t)| t).collect()
+            };
 
             loop {
                 let chunk = tokio::select! {
@@ -226,7 +292,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                                 "用户取消",
                                 &full_response,
                             );
-                            return Ok(full_response);
+                            return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![] });
                         }
                         continue;
                     }
@@ -244,7 +310,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                                     "读取超时",
                                     &full_response,
                                 );
-                                return Ok(full_response);
+                                return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![] });
                             }
                         }
                     }
@@ -293,8 +359,9 @@ impl LlmProvider for OpenAICompatibleProvider {
                                     if text_started {
                                         emitter.text_end(content_index, &full_response);
                                     }
+                                    let calls = flush_tool_calls(&mut tool_calls, &tool_call_indexes, emitter);
                                     emitter.done(StopReason::Stop, &full_response);
-                                    return Ok(full_response);
+                                    return Ok(StreamOutcome { full_text: full_response, tool_calls: calls });
                                 }
                                 if data.is_empty() {
                                     continue;
@@ -335,8 +402,44 @@ impl LlmProvider for OpenAICompatibleProvider {
                                             full_response.push_str(delta);
                                             emitter.text_delta(content_index, delta);
                                         }
+
+                                        if let Some(calls) = json["choices"]
+                                            .get(0)
+                                            .and_then(|c| c["delta"]["tool_calls"].as_array())
+                                        {
+                                            for tc in calls {
+                                                let idx = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                                                let id = tc.get("id").and_then(|v| v.as_str()).map(String::from);
+                                                let name = tc.get("function")
+                                                    .and_then(|f| f.get("name")).and_then(|v| v.as_str()).map(String::from);
+                                                let args_delta = tc.get("function")
+                                                    .and_then(|f| f.get("arguments")).and_then(|v| v.as_str()).unwrap_or("");
+                                                if let Some(ref new_id) = id {
+                                                    if !tool_calls.contains_key(new_id) {
+                                                        tool_calls.insert(new_id.clone(), ToolCall {
+                                                            id: new_id.clone(),
+                                                            name: name.clone().unwrap_or_default(),
+                                                            arguments: String::new(),
+                                                        });
+                                                        tool_call_indexes.insert(new_id.clone(), idx);
+                                                        emitter.tool_call_start(new_id, name.as_deref().unwrap_or(""), idx);
+                                                    }
+                                                }
+                                                if let Some(ref new_name) = name {
+                                                    if let Some(ref key) = id {
+                                                        if let Some(e) = tool_calls.get_mut(key) { e.name = new_name.clone(); }
+                                                    }
+                                                }
+                                                if !args_delta.is_empty() {
+                                                    if let Some(ref key) = id {
+                                                        if let Some(e) = tool_calls.get_mut(key) { e.arguments.push_str(args_delta); }
+                                                        emitter.tool_call_delta(key, args_delta);
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
-                                    Err(_) => continue,   // 解析失败：跳过
+                                    Err(_) => continue,
                                 }
                             }
                         }
@@ -347,15 +450,16 @@ impl LlmProvider for OpenAICompatibleProvider {
                             &format!("流读取错误: {}", e),
                             &full_response,
                         );
-                        return Ok(full_response);
+                        return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![] });
                     }
                     None => {
                         // 流正常结束
                         if text_started {
                             emitter.text_end(content_index, &full_response);
                         }
+                        let calls = flush_tool_calls(&mut tool_calls, &tool_call_indexes, emitter);
                         emitter.done(StopReason::Stop, &full_response);
-                        return Ok(full_response);
+                        return Ok(StreamOutcome { full_text: full_response, tool_calls: calls });
                     }
                 }
             }
@@ -555,21 +659,34 @@ fn build_openai_request_body(
     model: &str,
     messages: &[serde_json::Value],
     compat: Option<&CompatConfig>,
+    tools: Option<&[ToolDefinition]>,
 ) -> serde_json::Value {
-    // 用 json!({...}) 创建初始 body
     let mut body = serde_json::json!({
         "model": model,
         "messages": messages,
         "stream": true,
     });
 
-    // 解析 compat 配置（使用默认值回退）
-    // 同样的 Option::map(...).unwrap_or(default) 套路
+    let send_tools = compat.map(|c| c.supports_tools()).unwrap_or(true);
+    if send_tools {
+        if let Some(tools) = tools {
+            if !tools.is_empty() {
+                let openai_tools: Vec<Value> = tools.iter().map(|t| json!({
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": ensure_object_schema(&t.parameters),
+                    }
+                })).collect();
+                body["tools"] = json!(openai_tools);
+                body["tool_choice"] = json!("auto");
+            }
+        }
+    }
     let thinking_format = compat.map(|c| c.thinking_format()).unwrap_or("openai");
     let max_tokens_field = compat.map(|c| c.max_tokens_field()).unwrap_or("max_tokens");
     let supports_stream_usage = compat.map(|c| c.supports_stream_options_usage()).unwrap_or(true);
-    let _supports_reasoning_effort = compat.map(|c| c.supports_reasoning_effort()).unwrap_or(true);
-
     // ── 根据字段名配置决定用哪个 key ──
     // OpenAI 新模型用 max_completion_tokens，老模型用 max_tokens
     match max_tokens_field {
@@ -623,4 +740,73 @@ fn build_openai_request_body(
     }
 
     body   // 函数末尾的表达式作为返回值（无分号）
+}
+
+fn ensure_object_schema(schema: &Value) -> Value {
+    if schema.is_object() {
+        let mut s = schema.clone();
+        if let Some(obj) = s.as_object_mut() {
+            if !obj.contains_key("type") {
+                obj.insert("type".to_string(), json!("object"));
+            }
+            if !obj.contains_key("properties") {
+                obj.insert("properties".to_string(), json!({}));
+            }
+        }
+        s
+    } else {
+        json!({ "type": "object", "properties": {} })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::MessageRole;
+    use crate::tools::ToolSafety;
+
+    fn dummy_tool(name: &str) -> ToolDefinition {
+        ToolDefinition {
+            name: name.to_string(),
+            description: format!("test {name}"),
+            parameters: json!({"type": "object", "properties": {"path": {"type": "string"}}}),
+            safety: ToolSafety::Write,
+        }
+    }
+
+    #[test]
+    fn test_build_request_no_tools_omits_field() {
+        let body = build_openai_request_body("gpt-4", &[], None, None);
+        assert!(body.get("tools").is_none());
+    }
+
+    #[test]
+    fn test_build_request_with_tools() {
+        let tools = vec![dummy_tool("read_file"), dummy_tool("create_file")];
+        let body = build_openai_request_body("gpt-4", &[], None, Some(&tools));
+        assert_eq!(body["tools"].as_array().unwrap().len(), 2);
+        assert_eq!(body["tool_choice"], "auto");
+    }
+
+    fn make_tool_msg(id: &str, tc_id: &str, content: &str) -> Message {
+        Message {
+            id: id.to_string(), role: MessageRole::Tool, content: content.to_string(),
+            blocks: None, model_id: None, created_at: 0,
+            tool_calls: None, tool_call_id: Some(tc_id.to_string()),
+            tool_name: Some("read_file".to_string()), is_error: Some(false),
+        }
+    }
+
+    #[test]
+    fn test_convert_tool_msg_has_tool_call_id() {
+        let out = OpenAICompatibleProvider::convert_messages(&[make_tool_msg("t1", "call_x", "hi")]);
+        assert_eq!(out[0]["role"], "tool");
+        assert_eq!(out[0]["tool_call_id"], "call_x");
+    }
+
+    #[test]
+    fn test_ensure_object_schema() {
+        let s = ensure_object_schema(&json!({"properties": {}}));
+        assert_eq!(s["type"], "object");
+    }
 }

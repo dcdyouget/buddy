@@ -7,11 +7,12 @@ use crate::models::*;
 use crate::providers::{self, ProviderType};
 use crate::streaming::{ContentBlock, StopReason, StreamEventEmitter};
 use crate::storage;
+use crate::tools::ToolRegistry;
 use log::{info, warn};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use parking_lot::Mutex;
 use tauri::State;
-use tokio::sync::watch;
-
+use tokio::sync::{oneshot, watch};
 /// 取消状态：跨命令共享的取消通道
 ///
 /// 使用 watch channel 实现：send_message 创建发送端，
@@ -21,6 +22,45 @@ pub struct CancelState {
     pub sender: Mutex<Option<watch::Sender<bool>>>,
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Tool 审批状态(共享)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// send_message 遇到 write 类 tool 时:
+//   1. 发射 ToolApprovalRequired 事件(前端弹 modal)
+//   2. 创建 oneshot channel,把 receiver 存进 ApprovalState
+//   3. await receiver → 拿到用户的批准(approved=true)或拒绝(approved=false)
+//   4. 前端调用 approve_tool_call(id, approved) → 通过 oneshot sender 推送
+//
+// "本次都允许" 标志:
+//   - ApprovalState 持有 `approve_all_for_turn: AtomicBool`
+//   - send_message 在审批循环开头读,如果是 true 就跳过 ToolApprovalRequired
+//   - 前端点"本次都允许"时设为 true(P4 通过单独 command 触发;实现见 P4 后端)
+// ─────────────────────────────────────────────────────────────────────────────
+
+
+/// 一次 tool 调用审批的等待槽位
+#[allow(dead_code)] // 字段在 send_message 中构造并通过 oneshot 传递
+pub struct ApprovalSlot {
+    /// tool_call.id
+    pub id: String,
+    /// tool 名(仅显示)
+    pub name: String,
+    /// 参数(供 UI 展示)
+    pub arguments: String,
+    /// 审批原因("write to /path" 等)
+    pub reason: String,
+    /// oneshot sender:前端 invoke('approve_tool_call', {id, approved}) 通过这里推回结果
+    pub tx: Option<oneshot::Sender<bool>>,
+}
+
+/// 共享审批状态
+pub struct ApprovalState {
+    /// 当前挂起待审批的 slot 列表
+    pub pending: Mutex<Vec<ApprovalSlot>>,
+    /// "本次都允许"标志:send_message 进入审批循环时检查,跳过所有 ToolApprovalRequired
+    pub approve_all_for_turn: AtomicBool,
+}
 // ── 滑动窗口辅助函数 ──
 
 /// 估算文本的 token 数量（字符级启发式算法）
@@ -91,6 +131,7 @@ fn compute_window_start(messages: &[Message], token_budget: u32) -> usize {
 pub async fn send_message(
     app: tauri::AppHandle,
     state: State<'_, CancelState>,
+    approval: State<'_, ApprovalState>,
     messages: Vec<Message>,
     model_id: String,
 ) -> Result<(), String> {
@@ -160,76 +201,295 @@ pub async fn send_message(
 
     // 创建取消通道
     let (cancel_tx, cancel_rx) = watch::channel(false);
-    *state.sender.lock().unwrap() = Some(cancel_tx);
+    *state.sender.lock() = Some(cancel_tx);
 
     // 创建统一事件发射器
     let emitter = StreamEventEmitter::new(app.clone());
 
     // 根据 Provider 类型创建对应的适配器
     let llm_provider = providers::create_provider(&provider_type);
-
-    // 获取 compat 配置引用
     let compat = provider.compat.as_ref();
 
-    // 发起流式请求
-    match llm_provider
-        .stream_chat(
-            &provider.base_url,
-            &provider.api_key,
-            &model_id,
-            windowed_messages,
-            &emitter,
-            cancel_rx,
-            compat,
-        )
-        .await
-    {
-        Ok(full_response) => {
-            info!(
-                "[send_message] 流式结束，回复长度={} chars",
-                full_response.len()
-            );
-            if !full_response.is_empty() {
-                // 解析 <think> 标签为结构化 blocks
-                let blocks = ContentBlock::parse_from_text(&full_response);
-                let assistant_msg = Message {
-                    id: format!("a-{}", chrono::Utc::now().timestamp_millis()),
-                    role: MessageRole::Assistant,
-                    content: full_response,
-                    blocks: Some(blocks),
-                    model_id: Some(model_id),
-                    created_at: chrono::Utc::now().timestamp() as u64,
-                };
-                let app_handle = app.clone();
-                tokio::task::spawn_blocking(move || {
-                    storage::append_message(&app_handle, &assistant_msg).ok();
+    // ── P4: 构造 ToolRegistry(只包含内置 tool,MCP tool 由 P7 注入) ──
+    let registry = ToolRegistry::new(crate::tools::builtin::builtin_tools(
+        config.allowed_paths.clone(),
+    ));
+    // P7 会在此追加 mcp tool
+
+    // 把 messages 拷成可变的 Vec,tool 循环会往里 push assistant(tool_calls) + tool(result)
+    let mut conv_messages: Vec<Message> = messages.clone();
+
+    // 工具循环上限(防止 model 死循环):最多 5 轮 tool 调用
+    const MAX_TOOL_TURNS: usize = 5;
+    let mut turn: usize = 0;
+
+    let outcome: Result<crate::streaming::StreamOutcome, _> = loop {
+        turn += 1;
+        if turn > MAX_TOOL_TURNS {
+            warn!("[send_message] 达到 tool 轮数上限 {}", MAX_TOOL_TURNS);
+            break Err(crate::providers::ApiError::NetworkError(
+                format!("达到 tool 轮数上限 {}", MAX_TOOL_TURNS),
+            ));
+        }
+
+        // 滑动窗口(每轮都算)
+        let budget = ((model.context_window as f64) * 0.7_f64) as u32;
+        let start_idx = compute_window_start(&conv_messages, budget);
+        let windowed = &conv_messages[start_idx..];
+
+        let tools = registry.all_definitions();
+        let outcome = llm_provider
+            .stream_chat(
+                &provider.base_url,
+                &provider.api_key,
+                &model_id,
+                windowed,
+                &emitter,
+                cancel_rx.clone(),
+                compat,
+                &tools,
+            )
+            .await;
+
+        let out = match outcome {
+            Ok(o) => o,
+            Err(e) => break Err(e),
+        };
+
+        // 持久化本轮 assistant 消息
+        if !out.full_text.is_empty() || !out.tool_calls.is_empty() {
+            let blocks = ContentBlock::parse_from_text(&out.full_text);
+            let assistant_msg = Message {
+                id: format!("a-{}-{}", turn, chrono::Utc::now().timestamp_millis()),
+                role: MessageRole::Assistant,
+                content: out.full_text.clone(),
+                blocks: Some(blocks),
+                model_id: Some(model_id.clone()),
+                created_at: chrono::Utc::now().timestamp() as u64,
+                tool_calls: if out.tool_calls.is_empty() { None } else { Some(out.tool_calls.clone()) },
+                tool_call_id: None,
+                tool_name: None,
+                is_error: None,
+            };
+            let app_handle = app.clone();
+            let to_persist = assistant_msg.clone();
+            tokio::task::spawn_blocking(move || {
+                storage::append_message(&app_handle, &to_persist).ok();
+            });
+            conv_messages.push(assistant_msg.clone());
+        }
+
+        // 没 tool_calls → 正常结束
+        if out.tool_calls.is_empty() {
+            break Ok(out);
+        }
+
+        // 有 tool_calls → 顺序执行(并发=1;P4 决定),再调 stream_chat
+        info!("[send_message] turn {} 收到 {} 个 tool_call,开始执行",
+            turn, out.tool_calls.len());
+        for call in &out.tool_calls {
+            let tool = match registry.get(&call.name) {
+                Some(t) => t,
+                None => {
+                    let content = format!("tool '{}' 未在 ToolRegistry 中注册", call.name);
+                    emitter.tool_result(&call.id, &call.name, &content, true);
+                    let tool_msg = Message {
+                        id: format!("t-{}-{}", turn, chrono::Utc::now().timestamp_millis()),
+                        role: MessageRole::Tool,
+                        content,
+                        blocks: None,
+                        model_id: None,
+                        created_at: chrono::Utc::now().timestamp() as u64,
+                        tool_calls: None,
+                        tool_call_id: Some(call.id.clone()),
+                        tool_name: Some(call.name.clone()),
+                        is_error: Some(true),
+                    };
+                    let app_handle = app.clone();
+                    let to_persist = tool_msg.clone();
+                    tokio::task::spawn_blocking(move || {
+                        storage::append_message(&app_handle, &to_persist).ok();
+                    });
+                    conv_messages.push(tool_msg.clone());
+                    continue;
+                }
+            };
+
+            // Write 类且本轮未"本次都允许":弹审批
+            if tool.safety() == crate::tools::ToolSafety::Write
+                && !approval.approve_all_for_turn.load(Ordering::Relaxed)
+            {
+                let reason = format!("{} 调用 {}", call.name, call.arguments);
+                emitter.tool_approval_required(&call.id, &call.name, &call.arguments, &reason);
+                let (tx, rx) = oneshot::channel::<bool>();
+                approval.pending.lock().push(ApprovalSlot {
+                    id: call.id.clone(),
+                    name: call.name.clone(),
+                    arguments: call.arguments.clone(),
+                    reason: reason.clone(),
+                    tx: Some(tx),
                 });
+                let approved = match rx.await {
+                    Ok(b) => b,
+                    Err(_) => {
+                        warn!("[send_message] 审批 oneshot 失败,按拒绝处理");
+                        false
+                    }
+                };
+                if !approved {
+                    let content = "用户拒绝执行".to_string();
+                    emitter.tool_result(&call.id, &call.name, &content, true);
+                    let tool_msg = Message {
+                        id: format!("t-{}-{}", turn, chrono::Utc::now().timestamp_millis()),
+                        role: MessageRole::Tool,
+                        content,
+                        blocks: None,
+                        model_id: None,
+                        created_at: chrono::Utc::now().timestamp() as u64,
+                        tool_calls: None,
+                        tool_call_id: Some(call.id.clone()),
+                        tool_name: Some(call.name.clone()),
+                        is_error: Some(true),
+                    };
+                    let app_handle = app.clone();
+                    let to_persist = tool_msg.clone();
+                    tokio::task::spawn_blocking(move || {
+                        storage::append_message(&app_handle, &to_persist).ok();
+                    });
+                    conv_messages.push(tool_msg.clone());
+                    continue;
+                }
             }
+
+            // 执行
+            emitter.tool_executing(&call.id, &call.name);
+            let args_value: serde_json::Value = match serde_json::from_str(&call.arguments) {
+                Ok(v) => v,
+                Err(e) => {
+                    let content = format!("参数解析失败: {}", e);
+                    emitter.tool_result(&call.id, &call.name, &content, true);
+                    let tool_msg = Message {
+                        id: format!("t-{}-{}", turn, chrono::Utc::now().timestamp_millis()),
+                        role: MessageRole::Tool,
+                        content,
+                        blocks: None,
+                        model_id: None,
+                        created_at: chrono::Utc::now().timestamp() as u64,
+                        tool_calls: None,
+                        tool_call_id: Some(call.id.clone()),
+                        tool_name: Some(call.name.clone()),
+                        is_error: Some(true),
+                    };
+                    let app_handle = app.clone();
+                    let to_persist = tool_msg.clone();
+                    tokio::task::spawn_blocking(move || {
+                        storage::append_message(&app_handle, &to_persist).ok();
+                    });
+                    conv_messages.push(tool_msg.clone());
+                    continue;
+                }
+            };
+            let ctx = crate::tools::ToolContext {
+                approve_all_for_turn: approval.approve_all_for_turn.load(Ordering::Relaxed),
+            };
+            let result = tool.execute(args_value, ctx).await;
+            let (content, is_error) = match &result {
+                Ok(o) => (o.content.clone(), o.is_error),
+                Err(e) => (format!("执行失败: {}", e), true),
+            };
+            info!("[send_message] turn {} tool '{}' 执行结果: is_error={}, content_len={}",
+                turn, call.name, is_error, content.len());
+            emitter.tool_result(&call.id, &call.name, &content, is_error);
+            let tool_msg = Message {
+                id: format!("t-{}-{}", turn, chrono::Utc::now().timestamp_millis()),
+                role: MessageRole::Tool,
+                content,
+                blocks: None,
+                model_id: None,
+                created_at: chrono::Utc::now().timestamp() as u64,
+                tool_calls: None,
+                tool_call_id: Some(call.id.clone()),
+                tool_name: Some(call.name.clone()),
+                is_error: Some(is_error),
+            };
+            let app_handle = app.clone();
+            let to_persist = tool_msg.clone();
+            tokio::task::spawn_blocking(move || {
+                storage::append_message(&app_handle, &to_persist).ok();
+            });
+            conv_messages.push(tool_msg.clone());
         }
-        Err(e) => {
-            warn!("[send_message] 请求失败: {}", e);
-            // 使用统一事件发射器发送错误（前端监听 stream-event）
-            // 当前所有 ApiError 变体均映射为 StopReason::Error —— 类型穷举性在编译期保证
-            let error_emitter = StreamEventEmitter::new(app.clone());
-            let msg = e.to_string();
-            error_emitter.error(StopReason::Error, &msg, "");
-        }
+        // 继续下一轮:重新调 stream_chat(把 tool result 给 model)
+    };
+
+    // 错误 → 单独发 error 事件
+    if let Err(e) = &outcome {
+        warn!("[send_message] 最终错误: {}", e);
+        let error_emitter = StreamEventEmitter::new(app.clone());
+        // 若在 tool 循环中失败(turn>1) → 附加提示信息
+        let error_msg = if turn > 1 {
+            format!(
+                "{} (工具调用后请求失败, 可能是 Provider 不支持 tool 回传格式)",
+                e
+            )
+        } else {
+            e.to_string()
+        };
+        error_emitter.error(StopReason::Error, &error_msg, "");
     }
 
-    // 清理取消通道
-    state.sender.lock().unwrap().take();
+    // 清理:取消通道 + 重置 "本次都允许" 标志(P5 一次性,下次 send_message 重新开始)
+    state.sender.lock().take();
+    approval.approve_all_for_turn.store(false, Ordering::Relaxed);
     Ok(())
 }
 
-/// 停止生成命令
-///
-/// 设置取消信号为 true，触发 stream_chat 中的 cancel_rx 检测，
-/// 从而实现中途停止 AI 回复。
 #[tauri::command]
 pub async fn stop_generation(state: State<'_, CancelState>) -> Result<(), String> {
-    if let Some(sender) = state.sender.lock().unwrap().as_ref() {
+    if let Some(sender) = state.sender.lock().as_ref() {
         info!("[stop_generation] 用户取消生成");
         sender.send(true).ok();
+    }
+    Ok(())
+}
+
+/// Tool 审批命令
+///
+/// 前端在用户点击"允许"/"拒绝"后调用。
+/// - approve_all=true → 本轮剩余所有 write tool 都自动批准
+/// - approve_all=false → 只批准这一个(approved=true)或拒绝这一个(approved=false)
+///
+/// 后端通过 oneshot::Sender 把结果推回 send_message 的 await 点。
+#[tauri::command]
+pub async fn approve_tool_call(
+    approval: State<'_, ApprovalState>,
+    id: String,
+    approved: bool,
+    approve_all: bool,
+) -> Result<(), String> {
+    info!(
+        "[approve_tool_call] id={}, approved={}, approve_all={}",
+        id, approved, approve_all
+    );
+
+    if approve_all && approved {
+        // 设置"本次都允许"标志,后续 write tool 自动放行
+        approval.approve_all_for_turn.store(true, Ordering::Relaxed);
+    }
+
+    // 找到对应 id 的 slot,取走它的 sender,推送结果
+    let mut pending = approval.pending.lock();
+    let idx = match pending.iter().position(|s| s.id == id) {
+        Some(i) => i,
+        None => {
+            warn!("[approve_tool_call] 找不到 id={} 的 slot(可能已超时)", id);
+            return Err(format!("approval slot {} not found", id));
+        }
+    };
+    let mut slot = pending.remove(idx);
+    if let Some(tx) = slot.tx.take() {
+        // 忽略 send 错误:意味着 receiver 已被 drop(send_message 中途崩了)
+        let _ = tx.send(approved);
     }
     Ok(())
 }
@@ -332,6 +592,10 @@ mod tests {
             blocks: None,
             model_id: None,
             created_at: 0,
+            tool_calls: None,
+            tool_call_id: None,
+            tool_name: None,
+            is_error: None,
         }
     }
 

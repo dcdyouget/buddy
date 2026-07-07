@@ -19,12 +19,13 @@
 // ─── use 语句（= Java 的 import） ───
 // super::* 导入父模块（providers::mod）的所有 pub 项（ApiError, LlmProvider, extract_error_message）
 use super::{ApiError, LlmProvider};
-use crate::models::{get_context_window, CompatConfig, Message, MessageRole, ModelInfo};
-use crate::streaming::{StopReason, StreamEventEmitter};
+use crate::models::{get_context_window, CompatConfig, Message, MessageRole, ModelInfo, ToolCall};
+use crate::streaming::{StopReason, StreamEventEmitter, StreamOutcome};
+use crate::tools::ToolDefinition;
 use futures_util::StreamExt;                          // 为 Stream trait 提供 .next() 等适配器
 use log::{error, info, warn};                         // 日志门面（log crate）
 use reqwest::Client;                                 // HTTP 客户端
-use serde_json::Value;                               // 通用 JSON 值类型
+use serde_json::{json, Value};                               // 通用 JSON 值类型
 use std::pin::Pin;                                    // 用于 Pin<Box<...>>
 use std::time::Duration;                             // 时间段
 use tokio::sync::watch;                              // watch channel（取消信号）
@@ -54,27 +55,47 @@ impl AnthropicProvider {
     /// 入参 `messages: &[Message]` 是 `&[Message]`：不可变借用 Message 切片
     /// ≈ Java 的 `List<Message>` 不可变视图
     fn convert_messages(messages: &[Message]) -> Vec<Value> {
-        // 迭代器链式调用（类似 Java Stream，但 Rust 是惰性的）：
-        //   .iter()    借用每个元素 → Iterator<Item = &Message>
-        //   .map(|m| ...) 对每个元素做转换 → Iterator<Item = Value>
-        //   .collect() 消费迭代器，组装成 Vec<Value>
-        //
-        // |m| {...} 是闭包（lambda），m 是闭包参数
         messages
             .iter()
-            .map(|m| {
-                // 内部 match 块：将枚举映射到字符串
-                // Java 17 的 switch 表达式也能这样写，但 Rust 强制穷举
-                let role = match m.role {
-                    MessageRole::User => "user",
-                    MessageRole::Assistant => "assistant",
-                };
-                // serde_json::json!({...}) 是过程宏，把字面 JSON 风格的代码编译成 Value
-                // ≈ Java 的 Map.of("role", role, "content", m.content) 但内联更简洁
-                serde_json::json!({
-                    "role": role,
-                    "content": m.content,
-                })
+            .map(|m| match m.role {
+                MessageRole::User => {
+                    json!({ "role": "user", "content": m.content })
+                }
+                MessageRole::Assistant => {
+                    let mut obj = json!({ "role": "assistant" });
+                    if let Some(calls) = &m.tool_calls {
+                        let mut content: Vec<Value> = if m.content.is_empty() {
+                            vec![]
+                        } else {
+                            vec![json!({"type": "text", "text": m.content})]
+                        };
+                        for tc in calls {
+                            let args: Value = serde_json::from_str(&tc.arguments).unwrap_or(Value::Null);
+                            content.push(json!({
+                                "type": "tool_use",
+                                "id": tc.id,
+                                "name": tc.name,
+                                "input": args,
+                            }));
+                        }
+                        obj["content"] = json!(content);
+                    } else {
+                        obj["content"] = json!(m.content);
+                    }
+                    obj
+                }
+                MessageRole::Tool => {
+                    let id = m.tool_call_id.as_deref().unwrap_or("");
+                    json!({
+                        "role": "user",
+                        "content": [{
+                            "type": "tool_result",
+                            "tool_use_id": id,
+                            "content": m.content,
+                            "is_error": m.is_error.unwrap_or(false),
+                        }]
+                    })
+                }
             })
             .collect()
     }
@@ -129,7 +150,8 @@ impl LlmProvider for AnthropicProvider {
         emitter: &'a StreamEventEmitter,
         mut cancel_rx: watch::Receiver<bool>,
         compat: Option<&'a CompatConfig>,
-    ) -> Pin<Box<dyn std::future::Future<Output = Result<String, ApiError>> + Send + 'a>> {
+        tools: &'a [ToolDefinition],
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<StreamOutcome, ApiError>> + Send + 'a>> {
         // Box::pin(async move { ... })：
         //   - async move {...} 创建一个 async 块（Future 实现）
         //     - `move` 关键字把块内用到的外部变量"move 进"块，使其所有权转移到 Future 内
@@ -168,12 +190,25 @@ impl LlmProvider for AnthropicProvider {
             // ── 3. 构造请求体 JSON ──
             // serde_json::json!({...}) 宏：写起来像 JSON，编译后是 Value
             // 与 Python 中 f-string 不同，它是静态字面量 + 占位符的混合体
-            let body = serde_json::json!({
+            // P5: request body with tools (Anthropic format)
+            let mut body = serde_json::json!({
                 "model": model,
                 "max_tokens": 4096,
                 "messages": anthropic_messages,
                 "stream": true,
             });
+            if !tools.is_empty() {
+                let anthropic_tools: Vec<Value> = tools
+                    .iter()
+                    .map(|t| json!({
+                        "name": t.name,
+                        "description": t.description,
+                        "input_schema": t.parameters,
+                    }))
+                    .collect();
+                body["tools"] = json!(anthropic_tools);
+                body["tool_choice"] = json!({"type": "auto"});
+            }
 
             // ── 4. 拼接 URL ──
             // format!("{}/v1/messages", ...) ≈ Java 的 String.format("%s/v1/messages", baseUrl)
@@ -265,9 +300,23 @@ impl LlmProvider for AnthropicProvider {
             let mut chunk_count: u64 = 0;                // 接收到的字节块数
             let mut token_count: u64 = 0;                // 已发出的文本 token 数
 
+            // P5: tool_call 流式追踪 (key=index, Anthropic 用 index 区分 block)
+            use std::collections::HashMap;
+            let mut tool_calls: HashMap<usize, ToolCall> = HashMap::new();
+            let flush_tool_calls = |tc: &mut HashMap<usize, ToolCall>,
+                                   em: &StreamEventEmitter| -> Vec<ToolCall> {
+                let mut ordered: Vec<(usize, ToolCall)> = tc.drain().collect();
+                ordered.sort_by_key(|(i, _)| *i);
+                let pending = ordered.len();
+                for (_, t) in &ordered {
+                    em.tool_call_end(&t.id, &t.name, &t.arguments);
+                }
+                em.turn_end(pending);
+                ordered.into_iter().map(|(_, t)| t).collect()
+            };
+
             // 通知前端：流式开始
             emitter.start();
-
             // ── 8. 主循环：读取流并解析 ──
             // `loop { ... }` 是 Rust 的无限循环，Java 用 `while(true)` 或 `for(;;)`
             loop {
@@ -294,7 +343,7 @@ impl LlmProvider for AnthropicProvider {
                                 "用户取消",
                                 &full_response,
                             );
-                            return Ok(full_response);
+                            return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![] });
                         }
                         continue;  // 还没取消，继续下一轮循环
                     }
@@ -315,7 +364,7 @@ impl LlmProvider for AnthropicProvider {
                                     "读取超时",
                                     &full_response,
                                 );
-                                return Ok(full_response);
+                                return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![] });
                             }
                         }
                     }
@@ -389,14 +438,26 @@ impl LlmProvider for AnthropicProvider {
                                                         let block = &json["content_block"];
                                                         let block_type =
                                                             block["type"].as_str().unwrap_or("");
+                                                        let idx = json["index"].as_u64().unwrap_or(0) as usize;
                                                         match block_type {
                                                             "text" => {
-                                                                emitter.text_start(content_index);
+                                                                emitter.text_start(idx);
                                                             }
                                                             "thinking" | "redacted_thinking" => {
-                                                                emitter.thinking_start(content_index);
+                                                                emitter.thinking_start(idx);
                                                             }
-                                                            _ => {}  // 其他类型（tool_use 等）暂不处理
+                                                            "tool_use" => {
+                                                                let block = &json["content_block"];
+                                                                let id = block["id"].as_str().unwrap_or("");
+                                                                let n = block["name"].as_str().unwrap_or("");
+                                                                tool_calls.insert(idx, ToolCall {
+                                                                    id: id.to_string(),
+                                                                    name: n.to_string(),
+                                                                    arguments: String::new(),
+                                                                });
+                                                                emitter.tool_call_start(id, n, idx);
+                                                            }
+                                                            _ => {}
                                                         }
                                                     }
                                                     "content_block_delta" => {
@@ -434,7 +495,19 @@ impl LlmProvider for AnthropicProvider {
                                                                 // 思考签名增量，暂不处理（用于多轮对话连续性）
                                                             }
                                                             "input_json_delta" => {
-                                                                // 工具调用 JSON，暂不处理
+                                                                let partial = delta["partial_json"].as_str().unwrap_or("");
+                                                                let ij_idx = json["index"].as_u64().unwrap_or(0) as usize;
+                                                                if !partial.is_empty() {
+                                                                    if let Some(tc) = tool_calls.get_mut(&ij_idx) {
+                                                                        tc.arguments.push_str(partial);
+                                                                    }
+                                                                    let fid = tool_calls.get(&ij_idx)
+                                                                        .map(|tc| tc.id.clone())
+                                                                        .unwrap_or_default();
+                                                                    if !fid.is_empty() {
+                                                                        emitter.tool_call_delta(&fid, partial);
+                                                                    }
+                                                                }
                                                             }
                                                             _ => {}
                                                         }
@@ -459,11 +532,13 @@ impl LlmProvider for AnthropicProvider {
                                                         );
                                                     }
                                                     "message_stop" => {
-                                                        // 流结束
                                                         info!(
                                                             "[anthropic::stream_chat] message_stop: {} chunks, {} tokens, {} chars",
                                                             chunk_count, token_count, full_response.len()
                                                         );
+                                                        let calls = flush_tool_calls(&mut tool_calls, emitter);
+                                                        emitter.done(StopReason::Stop, &full_response);
+                                                        return Ok(StreamOutcome { full_text: full_response, tool_calls: calls });
                                                     }
                                                     "error" => {
                                                         // 服务端推送的 error 事件
@@ -476,7 +551,7 @@ impl LlmProvider for AnthropicProvider {
                                                             error_msg,
                                                             &full_response,
                                                         );
-                                                        return Ok(full_response);
+                                                        return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![] });
                                                     }
                                                     _ => {}
                                                 }
@@ -507,12 +582,12 @@ impl LlmProvider for AnthropicProvider {
                             &format!("流读取错误: {}", e),
                             &full_response,
                         );
-                        return Ok(full_response);
+                        return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![] });
                     }
                     None => {
-                        // 流正常结束（Stream 返回 None 表示 EOF）
+                        let calls = flush_tool_calls(&mut tool_calls, emitter);
                         emitter.done(StopReason::Stop, &full_response);
-                        return Ok(full_response);
+                        return Ok(StreamOutcome { full_text: full_response, tool_calls: calls });
                     }
                 }
             }
