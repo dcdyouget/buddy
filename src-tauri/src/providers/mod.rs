@@ -1,19 +1,35 @@
-// Provider 模块
+// ============================================================================
+// Provider 模块（多模型提供商抽象层）
+// ============================================================================
 //
-// 定义多模型提供商抽象层，灵感来源于 pi-agent 的 Provider/Model/Api 架构。
+// 灵感来源：pi-agent 的 Provider/Model/Api 架构
 //
-// 核心 trait：LlmProvider
-// - stream_chat(): 发起流式对话，返回统一格式的 StreamEvent
-// - fetch_models(): 获取可用模型列表
-// - test_latency(): 测试端点延迟
+// 核心思路：所有模型提供商（OpenAI / Anthropic / DeepSeek / GLM / Kimi...）
+// 都实现同一个 trait（接口），上层业务只跟 trait 打交道，不关心具体协议。
+//
+// Java 对比：
+//   trait LlmProvider ≈ Java 8 的 interface LlmProvider
+//   实现 trait ≈ class AnthropicProvider implements LlmProvider
+//   Box<dyn LlmProvider> ≈ LlmProvider provider = new AnthropicProvider();
+//                           （dyn = dynamic，运行时多态）
+//
+// 三大 trait 方法：
+//   stream_chat() —— 发起流式对话，返回统一格式的 StreamEvent
+//   fetch_models() —— 获取可用模型列表
+//   test_latency() —— 测试端点延迟
+// ============================================================================
 
-pub mod anthropic;
-pub mod openai_compatible;
+pub mod anthropic;          // 声明并公开 anthropic 子模块（位于 ./anthropic.rs）
+pub mod openai_compatible;  // 声明并公开 openai_compatible 子模块（位于 ./openai_compatible.rs）
 
-use crate::models::{CompatConfig, Message, ModelInfo};
-use crate::streaming::StreamEventEmitter;
-use std::future::Future;
-use tokio::sync::watch;
+// ============================================================================
+// use 语句 —— 导入外部项
+// ============================================================================
+use crate::models::{CompatConfig, Message, ModelInfo};  // 引用本 crate 的 models 模块
+use crate::streaming::StreamEventEmitter;              // 引用本 crate 的 streaming 模块
+use std::future::Future;                               // 标准库的 Future trait
+use tokio::sync::watch;                                // tokio 异步运行时的 watch channel
+
 
 /// 从 API 错误响应 JSON 中提取人类可读的错误消息
 ///
@@ -21,16 +37,35 @@ use tokio::sync::watch;
 /// - `{"error": {"message": "..."}}`（OpenAI/MiniMax/DeepSeek 等）
 /// - `{"error": {"error": {"message": "..."}}}`（Anthropic）
 /// - 解析失败时回退到截断的原始文本
+///
+/// 函数签名解析：
+/// - `pub fn`               公开函数
+/// - `extract_error_message(body_text: &str) -> String`
+///                          - 入参 `&str` 是字符串切片（不可变借用），≈ Java 的 `String` 视图
+///                          - 返回 `String`（堆分配的、拥有所有权）
 pub fn extract_error_message(body_text: &str) -> String {
+    // `if let Ok(json) = serde_json::from_str::<serde_json::Value>(body_text) { ... }`
+    //
+    // Rust 语法点：
+    // - `serde_json::from_str::<T>` 显式指定泛型类型参数；Java 用 `fromStr<T>(...)`
+    // - `from_str` 返回 `Result<T, E>` 类型：
+    //     Ok(value) 解析成功；Err(e) 解析失败
+    //   这是 Rust 代替异常的方式（无 try/catch、无检查异常）
+    // - `if let Ok(...) = ...` 是模式匹配：只关心 Ok 分支，Err 分支跳过
+    //   Java 等价：if (parseJson(body) instanceof Result.Ok) { var json = ...; }
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(body_text) {
-        // 尝试 error.message（OpenAI 兼容格式）
+        // ── json["error"]["message"] 这种索引语法是 serde_json::Value 的运算符重载 ──
+        // - json["error"]     返回 Value；不存在该字段时返回 Value::Null
+        // - .as_str()         尝试转成 &str；类型不对时返回 None
+        // - 两层 Some(...)    因为索引也返回 Value（可能 Null），必须再 .as_str() 才能拿到 Option<&str>
         if let Some(msg) = json["error"]["message"].as_str() {
+            // `msg.trim()` 返回 &str（仍借用 json 内部），`.to_string()` 转为新分配的 String
             let trimmed = msg.trim();
             if !trimmed.is_empty() {
                 return trimmed.to_string();
             }
         }
-        // 尝试 error.error.message（Anthropic 格式）
+        // Anthropic 错误格式：error.error.message（双层 error）
         if let Some(msg) = json["error"]["error"]["message"].as_str() {
             let trimmed = msg.trim();
             if !trimmed.is_empty() {
@@ -39,6 +74,9 @@ pub fn extract_error_message(body_text: &str) -> String {
         }
     }
     // 回退：截断原始文本
+    // `body_text.chars().take(200)` 字符迭代器取前 200 个字符
+    //   - 注意 chars() 才是按 Unicode 码点取，bytes() 才是字节
+    //   - Java 的 substring 在 Rust 没有等价的（字符串切片按字节边界）
     let preview: String = body_text.chars().take(200).collect();
     if preview.is_empty() {
         "未知错误".to_string()
@@ -47,7 +85,21 @@ pub fn extract_error_message(body_text: &str) -> String {
     }
 }
 
+
 /// API 错误类型
+///
+/// Rust enum 携带数据（variant）：
+/// - `Unauthorized`     = 无关联数据（unit variant），类似 Java 的 `enum ApiError { Unauthorized }`
+/// - `ServerError(u16, String)` = 元组 variant，携带 HTTP 状态码 + 消息
+/// - `NetworkError(String)`     = 携带错误消息
+///
+/// Java 等价（用 sealed class 模拟）：
+///     public sealed interface ApiError {
+///         record Unauthorized() implements ApiError {}
+///         record QuotaExceeded() implements ApiError {}
+///         record ServerError(int code, String msg) implements ApiError {}
+///         record NetworkError(String msg) implements ApiError {}
+///     }
 #[derive(Debug)]
 pub enum ApiError {
     /// 401 未授权
@@ -60,8 +112,12 @@ pub enum ApiError {
     NetworkError(String),
 }
 
+// Display trait ≈ Java 的 toString()
+// 实现 Display 后就可以用 println!("{}", err) 或 format!("{}", err) 输出
 impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // match 必须穷举所有 variant（编译器强制检查）
+        // 等价于 Java 21 之后的 switch pattern matching
         match self {
             ApiError::Unauthorized => write!(f, "401 Unauthorized"),
             ApiError::QuotaExceeded => write!(f, "429 Quota Exceeded"),
@@ -71,7 +127,10 @@ impl std::fmt::Display for ApiError {
     }
 }
 
-/// Provider 类型枚举
+
+/// Provider 类型枚举（业务层用哪个变体去 dispatch 到对应实现）
+///
+/// 没有 #[serde] 属性，因此不会序列化；纯运行时分类用
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderType {
     /// OpenAI 兼容 API（/v1/chat/completions SSE）
@@ -80,6 +139,7 @@ pub enum ProviderType {
     Anthropic,
 }
 
+// impl 块可以挂在任何类型上 —— 给 ProviderType 加方法
 impl ProviderType {
     /// 从字符串解析 ProviderType（兼容旧配置，默认 OpenAI 兼容）
     ///
@@ -87,6 +147,10 @@ impl ProviderType {
     /// 解析时大小写不识别小写以外的大小写变体，未匹配的一律回落到 OpenAI 兼容模式以
     /// 向后兼容历史配置。
     pub fn from_str(s: &str) -> Self {
+        // `match` 关键字是 Rust 的 switch：
+        //   match 值 { 模式 => 表达式, ... }
+        // `s.to_lowercase().as_str()` 把 String 转成 &str 才能在 match 中模式匹配
+        // `_ => ...` 是通配分支，类似 Java 的 `default:`
         match s.to_lowercase().as_str() {
             "anthropic" => ProviderType::Anthropic,
             _ => ProviderType::OpenAICompatible, // 默认和向后兼容
@@ -94,12 +158,22 @@ impl ProviderType {
     }
 }
 
-/// LlmProvider trait：所有模型提供商的统一接口
-///
-/// 每个 Provider 实现负责：
-/// 1. 将自身 API 的流式响应解析为统一的 StreamEvent
-/// 2. 从自身 API 获取模型列表
-/// 3. 测试端点延迟
+
+// ============================================================================
+// LlmProvider trait —— 所有模型提供商的统一接口
+// ============================================================================
+//
+// Rust trait ≈ Java 8 的 interface（但更强大）
+// 关键差异：
+//   - 默认 trait 方法可以有默认实现（default fn ...），类似 Java 8 的 default 方法
+//   - 关联类型（associated type）类似 Java 的泛型接口
+//   - 没有继承，但可以通过 trait + trait bound 做组合
+//
+// `: Send + Sync` 是 trait bound，要求实现者必须同时实现 Send 和 Sync（线程安全标记）
+//   - Send：可以跨线程移动所有权
+//   - Sync：可以跨线程共享引用 &T
+//   ≈ Java 的 "线程安全" 标记，但 Rust 在类型系统层强制保证
+// ============================================================================
 pub trait LlmProvider: Send + Sync {
     /// 发起流式对话
     ///
@@ -113,15 +187,34 @@ pub trait LlmProvider: Send + Sync {
     /// - `compat`: 兼容性配置（可选，None 时使用默认行为）
     ///
     /// 返回累积的完整 AI 回复文本。
+    ///
+    /// ─── 重点：签名解读 ───
+    /// `fn stream_chat<'a>(...)` 是"显式生命周期参数"，相当于给编译器一个名字 'a
+    ///   让编译器知道：所有这些引用（&str / &Message / &StreamEventEmitter）的
+    ///   存活时间至少和 'a 一样长。
+    /// Java 没有显式生命周期，靠 GC 自动追踪引用可达性。
+    ///
+    /// 返回类型：
+    ///   Pin<Box<dyn Future<Output = Result<String, ApiError>> + Send + 'a>>
+    ///   解读：
+    ///     Future<Output=...>     一个异步任务，输出为 Result<String, ApiError>
+    ///     dyn Future              动态分发（运行时多态），dyn = dynamic
+    ///     Box<dyn Future>         堆分配装箱（trait 对象不能直接放栈，必须 Box）
+    ///                            ≈ Java 的 `Future<Object>` 这种"装起来"的写法
+    ///     Pin<Box<...>>           Pin 锁住 Box 不让移动；async/await 需要自引用结构，
+    ///                            Pin 保证 self 引用始终有效，类似 C++ 的 std::pin
+    ///                            对 Java 开发者基本透明：async 函数的返回值类型就是 Pin<Box<...>>
+    ///     Send                    可以在线程间转移
+    ///     'a                     生命周期约束：与所有入参引用共存
     fn stream_chat<'a>(
-        &'a self,
-        base_url: &'a str,
+        &'a self,                       // &self：不可变借用 self，Java 中是隐式的
+        base_url: &'a str,              // &str：不可变借用字符串切片
         api_key: &'a str,
         model: &'a str,
-        messages: &'a [Message],
+        messages: &'a [Message],        // &[Message]：不可变借用 Message 切片（类似 List 视图）
         emitter: &'a StreamEventEmitter,
         cancel_rx: watch::Receiver<bool>,
-        compat: Option<&'a CompatConfig>,
+        compat: Option<&'a CompatConfig>, // Option<&T>：可能为 None 的引用
     ) -> std::pin::Pin<Box<dyn Future<Output = Result<String, ApiError>> + Send + 'a>>;
 
     /// 获取可用模型列表
@@ -140,9 +233,23 @@ pub trait LlmProvider: Send + Sync {
     ) -> std::pin::Pin<Box<dyn Future<Output = Result<u32, String>> + Send + 'a>>;
 }
 
+
 /// 根据 ProviderType 创建对应的 Provider 实例
+///
+/// 工厂函数（Factory Method 模式）
+///
+/// 返回 `Box<dyn LlmProvider>`：
+///   - Box：堆装箱；dyn：动态分发；LlmProvider：trait 类型
+///   ≈ Java 的 `LlmProvider provider = switch (type) { case A -> new AImpl(); case B -> new BImpl(); }`
+///
+/// 为什么用 Box<dyn ...> 而不是直接返回具体类型？
+///   - 因为 ProviderType::OpenAICompatible 和 ProviderType::Anthropic 是不相关的具体类型
+///   - 要返回"任意一种"，必须有共同抽象（trait 对象） + 装箱（Box）才能编译通过
+///   - Java 里靠继承 + 多态直接 `return new XxxProvider();` 即可（接口返回）
 pub fn create_provider(provider_type: &ProviderType) -> Box<dyn LlmProvider> {
     match provider_type {
+        // Box::new(...) 把栈上的具体值搬到堆上
+        // 不写 Box::new 的话返回类型不匹配（编译器会提示 size mismatch）
         ProviderType::OpenAICompatible => Box::new(openai_compatible::OpenAICompatibleProvider),
         ProviderType::Anthropic => Box::new(anthropic::AnthropicProvider),
     }
