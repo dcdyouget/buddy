@@ -309,37 +309,29 @@ function AskUserCard({ toolCall, hasResult }: { toolCall: ToolCall; hasResult: b
           {parsed.question}
         </div>
       )}
-      {/* options */}
+      {/* options — 横向排列,与 QuestionModal 保持一致 */}
       {parsed.options && parsed.options.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
           {parsed.options.map((opt, i) => (
-            <div key={i} style={{
-              display: 'flex', alignItems: 'flex-start', gap: 8,
-              padding: '6px 10px', border: '1px solid var(--border-subtle)',
-              borderRadius: 'var(--radius-sm)', background: 'var(--bg-surface)', fontSize: 'var(--font-size-sm)',
+            <span key={i} style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5,
+              padding: '4px 10px', border: '1px solid var(--border-subtle)',
+              borderRadius: 'var(--radius-md)', background: 'var(--bg-surface)',
+              fontSize: 'var(--font-size-xs)', fontWeight: 500,
+              color: 'var(--text-primary)', whiteSpace: 'nowrap',
             }}>
-              <span style={{ color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
-                {i + 1}.
-              </span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                  <span style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{opt.label}</span>
-                  {opt.requires_input && (
-                    <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 'var(--radius-full)', background: 'var(--bg-sunken)', color: 'var(--text-tertiary)', fontWeight: 600 }}>
-                      input
-                    </span>
-                  )}
-                </div>
-                {opt.description && (
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>{opt.description}</div>
-                )}
-                {opt.requires_input && opt.input_placeholder && (
-                  <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 2, fontFamily: 'var(--font-mono)' }}>
-                    ↳ {opt.input_placeholder}
-                  </div>
-                )}
-              </div>
-            </div>
+              {opt.label}
+              {opt.requires_input && (
+                <span style={{ fontSize: 9, padding: '0px 4px', borderRadius: 'var(--radius-full)', background: 'var(--bg-sunken)', color: 'var(--text-tertiary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                  input
+                </span>
+              )}
+              {opt.description && (
+                <span style={{ color: 'var(--text-muted)', fontWeight: 400 }} title={opt.description}>
+                  — {opt.description.length > 30 ? opt.description.slice(0, 30) + '…' : opt.description}
+                </span>
+              )}
+            </span>
           ))}
         </div>
       )}

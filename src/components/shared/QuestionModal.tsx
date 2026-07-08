@@ -1,11 +1,16 @@
 /**
  * QuestionModal.tsx — ask_user tool 的弹窗 UI
+ *
+ * 重新设计：
+ * - 选项按钮横向排列（flexWrap 换行）
+ * - 按钮下方显示选中选项的补充输入框
+ * - 再下方是自定义回答输入区
+ * - 弹窗位于输入框正上方，撑起回复消息（不再用 absolute 叠加）
  */
 
 import { useEffect, useState } from 'react';
 import {
-  ArrowRight,
-  CheckSquare,
+  Check,
   CornerDownRight,
   HelpCircle,
   X,
@@ -29,16 +34,16 @@ export function QuestionModal() {
 
   useEffect(() => {
     if (!pending) return;
-    const onKey = (e: Event) => {
-      if ((e as KeyboardEvent).key === 'Escape') handleSkip();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    // 不在这里监听 Esc —— App.tsx 已有 window-level Esc → 隐藏窗口。
+    // 若这里再监听并调 handleSkip(),同一次 Esc 会同时:
+    //   ① 把 question 当作『User skipped the question』发给模型
+    //   ② 隐藏窗口
+    // 违反 CLAUDE.md 硬约束 #7『Esc/click-outside closes window, does NOT stop streaming』。
+    // 用户想『跳过』请点右下角『跳过』按钮(显式)。
   }, [pending]);
 
-  if (!pending) return null;
-
   const toggleOption = (idx: number) => {
+    if (!pending) return;
     setSelected((prev) => {
       const next = new Set(prev);
       if (pending.multiSelect) {
@@ -51,18 +56,30 @@ export function QuestionModal() {
     });
   };
 
-  const missingRequiredInputs = Array.from(selected).filter(
-    (idx) => pending.options[idx]?.requiresInput && !(optionInputs[idx] || '').trim(),
-  );
+  const missingRequiredInputs = pending
+    ? Array.from(selected).filter(
+        (idx) => pending.options[idx]?.requiresInput && !(optionInputs[idx] || '').trim(),
+      )
+    : [];
+
+  // 选项分支(customText 为空)必须所有 requiresInput 都填;
+  // 或直接走 customText 分支(customText 非空)。
+  const customTrimmed = customText.trim();
   const canSubmit =
-    (selected.size > 0 && missingRequiredInputs.length === 0) ||
-    customText.trim().length > 0;
+    customTrimmed.length > 0 ||
+    (selected.size > 0 && missingRequiredInputs.length === 0);
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
-    const sel = Array.from(selected).sort((a, b) => a - b);
-    const inputs = sel.map((idx) => (optionInputs[idx] || '').trim());
-    await answerPending(sel, inputs, customText.trim() || undefined);
+    // customText 与 selected 互斥: 后端在 selected 非空时丢 custom,
+    // 提前在 UI 端决断走哪条路,避免『自定义回答』文字被静默吞掉。
+    if (customTrimmed.length > 0) {
+      await answerPending([], [], customTrimmed);
+    } else {
+      const sel = Array.from(selected).sort((a, b) => a - b);
+      const inputs = sel.map((idx) => (optionInputs[idx] || '').trim());
+      await answerPending(sel, inputs, undefined);
+    }
   };
 
   const handleSkip = () => answerPending([], [], undefined);
@@ -70,34 +87,30 @@ export function QuestionModal() {
   const setOptionInput = (idx: number, v: string) =>
     setOptionInputs((prev) => ({ ...prev, [idx]: v }));
 
+  // 选中选项的描述（单选且选中项有描述时展示）
+  const selectedWithDesc =
+    pending && selected.size > 0
+      ? Array.from(selected).filter((idx) => pending.options[idx]?.description)
+      : [];
+
   return (
     <AnimatePresence>
       {pending && (
-        <div
+        <motion.div
+          initial={{ opacity: 0, height: 0, marginBottom: 0 }}
+          animate={{ opacity: 1, height: 'auto', marginBottom: 'var(--space-2)' }}
+          exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+          transition={{ duration: 0.2, ease: 'easeOut' }}
           style={{
-            position: 'absolute',
-            bottom: 'calc(100% + var(--space-2))',
-            left: 0,
-            right: 0,
+            overflow: 'hidden',
             display: 'flex',
             justifyContent: 'center',
-            zIndex: 1001,
-            pointerEvents: 'none',
-          }}
-        >
-        <motion.div
-          initial={{ opacity: 0, y: 20, scale: 0.97 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 10, scale: 0.97 }}
-          transition={{ duration: 0.18, ease: 'easeOut' }}
-          style={{
-            width: 440,
-            maxWidth: 'calc(100vw - 32px)',
-            pointerEvents: 'auto',
           }}
         >
           <div
             style={{
+              width: 440,
+              maxWidth: '100%',
               background: 'var(--bg-elevated)',
               backdropFilter: 'blur(var(--blur-surface)) saturate(160%)',
               WebkitBackdropFilter: 'blur(var(--blur-surface)) saturate(160%)',
@@ -113,13 +126,13 @@ export function QuestionModal() {
                 display: 'flex',
                 alignItems: 'center',
                 gap: 'var(--space-3)',
-                padding: 'var(--space-4) var(--space-4) var(--space-2)',
+                padding: 'var(--space-3) var(--space-4) var(--space-2)',
               }}
             >
               <div
                 style={{
-                  width: 32,
-                  height: 32,
+                  width: 28,
+                  height: 28,
                   borderRadius: 'var(--radius-md)',
                   background: 'var(--primary-tint-soft)',
                   color: 'var(--buddy-primary)',
@@ -129,12 +142,12 @@ export function QuestionModal() {
                   flexShrink: 0,
                 }}
               >
-                <HelpCircle size={16} />
+                <HelpCircle size={14} />
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div
                   style={{
-                    fontSize: 'var(--font-size-md)',
+                    fontSize: 'var(--font-size-base)',
                     fontWeight: 600,
                     color: 'var(--text-primary)',
                     letterSpacing: 'var(--letter-spacing-tight)',
@@ -146,8 +159,8 @@ export function QuestionModal() {
               <button
                 onClick={handleSkip}
                 style={{
-                  width: 28,
-                  height: 28,
+                  width: 26,
+                  height: 26,
                   display: 'inline-flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -167,7 +180,7 @@ export function QuestionModal() {
                   e.currentTarget.style.color = 'var(--text-tertiary)';
                 }}
               >
-                <X size={15} />
+                <X size={14} />
               </button>
             </div>
 
@@ -183,25 +196,27 @@ export function QuestionModal() {
               {pending.question}
             </div>
 
-            {/* ── 选项 ── */}
+            {/* ── 选项按钮(横向排列) ── */}
             <div
               style={{
-                padding: '0 var(--space-4) var(--space-4)',
+                padding: '0 var(--space-4) var(--space-2)',
                 display: 'flex',
-                flexDirection: 'column',
+                flexWrap: 'wrap',
                 gap: 'var(--space-2)',
               }}
             >
               {pending.options.map((opt, idx) => {
                 const isSelected = selected.has(idx);
-                const showInput = opt.requiresInput && isSelected;
-                const inputVal = optionInputs[idx] || '';
-                const inputMissing = opt.requiresInput && isSelected && !inputVal.trim();
 
                 return (
-                  <div
+                  <button
                     key={idx}
+                    onClick={() => toggleOption(idx)}
                     style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 5,
+                      padding: '6px 12px',
                       border: isSelected
                         ? '1px solid var(--buddy-primary)'
                         : '1px solid var(--border-subtle)',
@@ -209,141 +224,139 @@ export function QuestionModal() {
                       background: isSelected
                         ? 'var(--primary-tint-soft)'
                         : 'var(--bg-surface)',
-                      overflow: 'hidden',
-                      transition: 'border-color 0.15s, background 0.15s',
+                      color: isSelected
+                        ? 'var(--buddy-primary)'
+                        : 'var(--text-primary)',
+                      fontSize: 'var(--font-size-sm)',
+                      fontWeight: isSelected ? 600 : 500,
+                      cursor: 'pointer',
+                      transition: 'all 0.15s',
+                      whiteSpace: 'nowrap',
                     }}
                     onMouseEnter={(e) => {
-                      if (!isSelected) e.currentTarget.style.borderColor = 'var(--border-default)';
+                      if (!isSelected) {
+                        e.currentTarget.style.borderColor = 'var(--border-default)';
+                        e.currentTarget.style.background = 'var(--bg-sunken)';
+                      }
                     }}
                     onMouseLeave={(e) => {
-                      if (!isSelected) e.currentTarget.style.borderColor = 'var(--border-subtle)';
+                      if (!isSelected) {
+                        e.currentTarget.style.borderColor = 'var(--border-subtle)';
+                        e.currentTarget.style.background = 'var(--bg-surface)';
+                      }
                     }}
                   >
-                    <button
-                      onClick={() => toggleOption(idx)}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'flex-start',
-                        gap: 'var(--space-3)',
-                        width: '100%',
-                        padding: 'var(--space-3) var(--space-3)',
-                        border: 'none',
-                        background: 'transparent',
-                        color: 'var(--text-primary)',
-                        cursor: 'pointer',
-                        textAlign: 'left',
-                        fontSize: 'var(--font-size-base)',
-                        lineHeight: 'var(--line-height-base)',
-                      }}
-                    >
-                      {/* 单选圆点 / 多选方块 */}
-                      <div
+                    {isSelected && <Check size={12} />}
+                    {opt.label}
+                    {opt.requiresInput && (
+                      <span
                         style={{
-                          width: 18,
-                          height: 18,
-                          flexShrink: 0,
-                          marginTop: 1,
-                          borderRadius: pending.multiSelect ? 'var(--radius-sm)' : 'var(--radius-full)',
-                          border: isSelected
-                            ? `5px solid var(--buddy-primary)`
-                            : '1.5px solid var(--text-tertiary)',
-                          background: isSelected ? 'var(--text-on-primary)' : 'transparent',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          transition: 'all 0.15s',
+                          fontSize: 9,
+                          padding: '0px 4px',
+                          borderRadius: 'var(--radius-full)',
+                          background: isSelected
+                            ? 'var(--buddy-primary)'
+                            : 'var(--bg-sunken)',
+                          color: isSelected
+                            ? 'var(--text-on-primary)'
+                            : 'var(--text-tertiary)',
+                          fontWeight: 700,
+                          letterSpacing: '0.03em',
+                          textTransform: 'uppercase',
+                          lineHeight: '16px',
                         }}
                       >
-                        {pending.multiSelect && isSelected && (
-                          <CheckSquare size={10} style={{ color: 'var(--buddy-primary)' }} />
-                        )}
-                      </div>
-
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 'var(--space-2)',
-                            flexWrap: 'wrap',
-                          }}
-                        >
-                          <span style={{ fontWeight: 500 }}>{opt.label}</span>
-                          {opt.requiresInput && (
-                            <span
-                              style={{
-                                fontSize: 10,
-                                padding: '1px 6px',
-                                borderRadius: 'var(--radius-full)',
-                                background: 'var(--bg-sunken)',
-                                color: 'var(--text-tertiary)',
-                                fontWeight: 600,
-                                letterSpacing: '0.03em',
-                                textTransform: 'uppercase',
-                              }}
-                            >
-                              input
-                            </span>
-                          )}
-                        </div>
-                        {opt.description && (
-                          <div
-                            style={{
-                              fontSize: 'var(--font-size-sm)',
-                              color: 'var(--text-muted)',
-                              marginTop: 3,
-                              lineHeight: 1.4,
-                            }}
-                          >
-                            {opt.description}
-                          </div>
-                        )}
-                      </div>
-
-                      {isSelected && !opt.requiresInput && (
-                        <ArrowRight
-                          size={14}
-                          style={{
-                            color: 'var(--buddy-primary)',
-                            flexShrink: 0,
-                            marginTop: 2,
-                          }}
-                        />
-                      )}
-                    </button>
-
-                    {/* per-option input */}
-                    {showInput && (
-                      <div style={{ padding: '0 var(--space-3) var(--space-3) var(--space-3)', paddingLeft: 39 }}>
-                        <input
-                          type="text"
-                          value={inputVal}
-                          onChange={(e) => setOptionInput(idx, e.target.value)}
-                          onClick={(e) => e.stopPropagation()}
-                          placeholder={opt.inputPlaceholder || '请输入...'}
-                          autoFocus
-                          style={{
-                            width: '100%',
-                            padding: '6px 10px',
-                            border: inputMissing
-                              ? '1px solid var(--state-error)'
-                              : '1px solid var(--border-default)',
-                            borderRadius: 'var(--radius-sm)',
-                            background: 'var(--bg-surface)',
-                            color: 'var(--text-primary)',
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: 'var(--font-size-sm)',
-                            lineHeight: 1.4,
-                            outline: 'none',
-                            boxSizing: 'border-box',
-                          }}
-                        />
-                      </div>
+                        input
+                      </span>
                     )}
-                  </div>
+                  </button>
                 );
               })}
             </div>
+
+            {/* ── 选中选项的描述 ── */}
+            {selectedWithDesc.length > 0 && (
+              <div
+                style={{
+                  padding: '0 var(--space-4) var(--space-2)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 2,
+                }}
+              >
+                {selectedWithDesc.map((idx) => {
+                  const opt = pending.options[idx];
+                  return (
+                    <div
+                      key={idx}
+                      style={{
+                        fontSize: 'var(--font-size-xs)',
+                        color: 'var(--text-muted)',
+                        lineHeight: 1.4,
+                        paddingLeft: 4,
+                        borderLeft: '2px solid var(--border-default)',
+                      }}
+                    >
+                      {opt.description}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* ── 选中选项的补充输入框 ── */}
+            {Array.from(selected)
+              .filter((idx) => pending.options[idx]?.requiresInput)
+              .map((idx) => {
+                const opt = pending.options[idx];
+                const inputVal = optionInputs[idx] || '';
+                const inputMissing = !inputVal.trim();
+
+                return (
+                  <div
+                    key={`input-${idx}`}
+                    style={{
+                      padding: '0 var(--space-4) var(--space-2)',
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 600,
+                        color: 'var(--text-tertiary)',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.04em',
+                        marginBottom: 4,
+                      }}
+                    >
+                      {opt.label}
+                    </div>
+                    <input
+                      type="text"
+                      value={inputVal}
+                      onChange={(e) => setOptionInput(idx, e.target.value)}
+                      onClick={(e) => e.stopPropagation()}
+                      placeholder={opt.inputPlaceholder || '请输入...'}
+                      autoFocus
+                      style={{
+                        width: '100%',
+                        padding: '7px 10px',
+                        border: inputMissing
+                          ? '1px solid var(--state-error)'
+                          : '1px solid var(--border-default)',
+                        borderRadius: 'var(--radius-sm)',
+                        background: 'var(--bg-surface)',
+                        color: 'var(--text-primary)',
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: 'var(--font-size-sm)',
+                        lineHeight: 1.4,
+                        outline: 'none',
+                        boxSizing: 'border-box',
+                      }}
+                    />
+                  </div>
+                );
+              })}
 
             {/* ── 自定义回答 ── */}
             <div
@@ -356,12 +369,12 @@ export function QuestionModal() {
                   display: 'flex',
                   alignItems: 'center',
                   gap: 4,
-                  fontSize: 'var(--font-size-xs)',
+                  fontSize: 10,
                   color: 'var(--text-tertiary)',
                   marginBottom: 4,
                   fontWeight: 600,
                   textTransform: 'uppercase',
-                  letterSpacing: '0.03em',
+                  letterSpacing: '0.04em',
                 }}
               >
                 <CornerDownRight size={11} />
@@ -395,7 +408,7 @@ export function QuestionModal() {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                padding: '0 var(--space-4) var(--space-4)',
+                padding: '0 var(--space-4) var(--space-3)',
                 gap: 'var(--space-2)',
               }}
             >
@@ -405,7 +418,7 @@ export function QuestionModal() {
                   color: 'var(--text-tertiary)',
                 }}
               >
-                Esc · 跳过
+                Esc · 关闭窗口
               </div>
               <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
                 <button
@@ -461,7 +474,6 @@ export function QuestionModal() {
             </div>
           </div>
         </motion.div>
-        </div>
       )}
     </AnimatePresence>
   );

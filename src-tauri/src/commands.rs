@@ -161,6 +161,7 @@ fn build_tool_msg(turn: usize, call: &crate::models::ToolCall, content: String, 
         tool_call_id: Some(call.id.clone()),
         tool_name: Some(call.name.clone()),
         is_error: Some(is_error),
+        parent_message_id: None,
     }
 }
 
@@ -338,6 +339,7 @@ pub async fn send_message(
                 tool_call_id: None,
                 tool_name: None,
                 is_error: None,
+                parent_message_id: None,
             };
             let app_handle = app.clone();
             let to_persist = assistant_msg.clone();
@@ -421,10 +423,23 @@ pub async fn send_message(
                 let answer = tokio::select! {
                     _ = cancel_rx.changed() => {
                         // 取消时移除 slot,按 "用户跳过" 处理
-                        if let Some(idx) = q_state.pending.lock().iter().position(|s| s.id == call.id) {
-                            q_state.pending.lock().remove(idx);
+                        // 注意: position + remove 必须在同一持锁作用域内完成,
+                        // 否则并发 answer_tool_question 可能在两次 lock 之间改动 Vec,
+                        // 让 idx 失效导致越界 panic 或误删其他 slot。
+                        let removed = {
+                            let mut pending = q_state.pending.lock();
+                            if let Some(idx) = pending.iter().position(|s| s.id == call.id) {
+                                pending.remove(idx);
+                                true
+                            } else {
+                                false
+                            }
+                        };
+                        if !removed {
+                            warn!("[send_message] ask_user 取消时找不到 slot id={} (可能已答完)", call.id);
+                        } else {
+                            warn!("[send_message] ask_user 等待被用户取消");
                         }
-                        warn!("[send_message] ask_user 等待被用户取消");
                         AskUserAnswer { selected: vec![], inputs: vec![], custom: Some("(已取消)".to_string()) }
                     }
                     result = rx => {
@@ -850,6 +865,7 @@ mod tests {
             tool_call_id: None,
             tool_name: None,
             is_error: None,
+            parent_message_id: None,
         }
     }
 

@@ -109,7 +109,13 @@ static APPEND_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 ///
 /// 线程安全:通过 `APPEND_LOCK` 串行化所有写入,防止并发 `spawn_blocking` 丢消息。
 pub fn append_message(app: &tauri::AppHandle, message: &Message) -> Result<(), String> {
-    let _guard = APPEND_LOCK.lock().map_err(|e| format!("获取写入锁失败: {}", e))?;
+    // 防止 mutex poisoning 级联失败: 若上一持锁者 panic 了,
+    // unwrap_or_else(|p| p.into_inner()) 仍拿到 guard(其内部状态反映 panic 前),
+    // 后续写盘流程照常推进 —— 持久化不会因一次 panic 永久停摆。
+    let _guard = APPEND_LOCK.lock().unwrap_or_else(|p| {
+        log::warn!("[storage::append_message] APPEND_LOCK 已 poison,恢复并继续");
+        p.into_inner()
+    });
     let dir = ensure_data_dir(app)?;
     let mut manifest = read_manifest(&dir);
 

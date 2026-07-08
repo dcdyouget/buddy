@@ -107,7 +107,11 @@ pub enum StopReason {
 }
 
 /// ask_user tool 的选项结构(用于 ToolQuestionRequired 事件 payload)
+///
+/// `#[serde(rename_all = "camelCase")]` 让 wire 格式 (`requiresInput`、`inputPlaceholder`)
+/// 与前端 `QuestionOption` 类型一致 —— 这是修复 camelCase/snake_case 不匹配的根因。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct QuestionOption {
     /// 1-5 词的简短标签
     pub label: String,

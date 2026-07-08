@@ -36,27 +36,21 @@ export function ApprovalModal() {
   return (
     <AnimatePresence>
       {approval && (
-        <div
+        <motion.div
+          initial={{ opacity: 0, height: 0, marginBottom: 0 }}
+          animate={{ opacity: 1, height: 'auto', marginBottom: 'var(--space-2)' }}
+          exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+          transition={{ duration: 0.2, ease: 'easeOut' }}
           style={{
-            position: 'absolute',
-            bottom: 'calc(100% + var(--space-2))',
-            left: 0,
-            right: 0,
+            overflow: 'hidden',
             display: 'flex',
             justifyContent: 'center',
-            zIndex: 1000,
-            pointerEvents: 'none',
           }}
         >
-        <motion.div
-          initial={{ opacity: 0, y: 20, scale: 0.97 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 10, scale: 0.97 }}
-          transition={{ duration: 0.18, ease: 'easeOut' }}
+        <div
           style={{
             width: 420,
-            maxWidth: 'calc(100vw - 32px)',
-            pointerEvents: 'auto',
+            maxWidth: '100%',
           }}
         >
           <div
@@ -244,8 +238,8 @@ export function ApprovalModal() {
               Esc · 拒绝
             </div>
           </div>
-        </motion.div>
         </div>
+        </motion.div>
       )}
     </AnimatePresence>
   );

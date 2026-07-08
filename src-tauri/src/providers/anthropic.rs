@@ -56,6 +56,7 @@ impl AnthropicProvider {
     /// ≈ Java 的 `List<Message>` 不可变视图
     fn convert_messages(messages: &[Message]) -> Vec<Value> {
         // 收集所有 assistant 消息中有效的 tool_use id
+        // (此函数只负责 messages 数组；系统提示通过请求体顶层 `system` 字段注入,见 stream_chat)
         let valid_tool_use_ids: std::collections::HashSet<&str> = messages
             .iter()
             .filter(|m| m.role == MessageRole::Assistant)
@@ -215,9 +216,12 @@ impl LlmProvider for AnthropicProvider {
             // serde_json::json!({...}) 宏：写起来像 JSON，编译后是 Value
             // 与 Python 中 f-string 不同，它是静态字面量 + 占位符的混合体
             // P5: request body with tools (Anthropic format)
+            // 注意: Anthropic 用顶层 `system` 字段(不是 messages 里的 system 消息)
+            // 注入 BUDDY_SYSTEM_PROMPT 引导模型在合适场景使用 ask_user tool
             let mut body = serde_json::json!({
                 "model": model,
                 "max_tokens": 4096,
+                "system": super::BUDDY_SYSTEM_PROMPT,
                 "messages": anthropic_messages,
                 "stream": true,
             });
