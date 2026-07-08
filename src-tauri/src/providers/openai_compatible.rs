@@ -44,6 +44,11 @@ impl OpenAICompatibleProvider {
     ///
     /// 与 Anthropic 转换器几乎一致（都是 role + content 数组）
     fn convert_messages(messages: &[Message]) -> Vec<Value> {
+        // 在最前面注入 Buddy 系统提示词,引导模型使用 ask_user tool
+        let mut result: Vec<Value> = vec![json!({
+            "role": "system",
+            "content": super::BUDDY_SYSTEM_PROMPT,
+        })];
         // 第一遍：收集所有 assistant 消息中有效的 tool_call.id
         // 用于后续校验 tool 消息的 tool_call_id 是否为孤儿引用
         let valid_tool_call_ids: std::collections::HashSet<&str> = messages
@@ -53,7 +58,7 @@ impl OpenAICompatibleProvider {
             .flat_map(|calls| calls.iter().map(|tc| tc.id.as_str()))
             .collect();
 
-        messages
+        let converted: Vec<Value> = messages
             .iter()
             .filter_map(|m| {
                 // 孤儿 tool 消息：有 tool_call_id 但找不到对应的 assistant tool_call
@@ -118,7 +123,11 @@ impl OpenAICompatibleProvider {
                 }
                 Some(obj)
             })
-            .collect()
+            .collect();
+
+        // 把 system 消息放到最前
+        result.extend(converted);
+        result
     }
 
     /// 根据 base_url 构造模型列表候选 URL
@@ -300,6 +309,7 @@ impl LlmProvider for OpenAICompatibleProvider {
             let mut byte_stream = response.bytes_stream();
             let mut buffer = String::new();
             let mut full_response = String::new();
+            let mut thinking_response = String::new();
 
             info!("[openai::stream_chat] 开始接收流式数据...");
             let mut chunk_count: u64 = 0;
@@ -342,7 +352,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                                 "用户取消",
                                 &full_response,
                             );
-                            return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![], had_stream_error: true });
+                            return Ok(StreamOutcome { full_text: full_response, thinking_text: thinking_response, tool_calls: vec![], had_stream_error: true });
                         }
                         continue;
                     }
@@ -360,7 +370,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                                     "读取超时",
                                     &full_response,
                                 );
-                                return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![], had_stream_error: true });
+                                return Ok(StreamOutcome { full_text: full_response, thinking_text: thinking_response, tool_calls: vec![], had_stream_error: true });
                             }
                         }
                     }
@@ -411,7 +421,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                                     }
                                     let calls = flush_tool_calls(&mut tool_calls, &tool_call_indexes, emitter);
                                     // done 事件由 commands.rs 在整轮 tool 循环结束时统一发射
-                                    return Ok(StreamOutcome { full_text: full_response, tool_calls: calls, had_stream_error: false });
+                                    return Ok(StreamOutcome { full_text: full_response, thinking_text: thinking_response, tool_calls: calls, had_stream_error: false });
                                 }
                                 if data.is_empty() {
                                     continue;
@@ -434,6 +444,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                                         if !reasoning.is_empty() {
                                             // reasoning_content 作为思考块发射
                                             emitter.thinking_delta(content_index, reasoning);
+                                            thinking_response.push_str(reasoning);
                                             continue;   // 跳过本行的 content 处理
                                         }
 
@@ -508,7 +519,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                             &format!("流读取错误: {}", e),
                             &full_response,
                         );
-                        return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![], had_stream_error: true });
+                        return Ok(StreamOutcome { full_text: full_response, thinking_text: thinking_response, tool_calls: vec![], had_stream_error: true });
                     }
                     None => {
                         // 流正常结束
@@ -517,7 +528,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                         }
                         let calls = flush_tool_calls(&mut tool_calls, &tool_call_indexes, emitter);
                         // done 事件由 commands.rs 在整轮 tool 循环结束时统一发射
-                        return Ok(StreamOutcome { full_text: full_response, tool_calls: calls, had_stream_error: false });
+                        return Ok(StreamOutcome { full_text: full_response, thinking_text: thinking_response, tool_calls: calls, had_stream_error: false });
                     }
                 }
             }

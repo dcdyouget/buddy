@@ -51,6 +51,7 @@ export function useStreaming() {
   const handleToolExecuting = useChatStore((s) => s.handleToolExecuting);
   const handleToolResult = useChatStore((s) => s.handleToolResult);
   const handleToolApprovalRequired = useChatStore((s) => s.handleToolApprovalRequired);
+  const setPendingQuestion = useChatStore((s) => s.setPendingQuestion);
   const handleStreamDone = useChatStore((s) => s.handleStreamDone);
   const handleStreamError = useChatStore((s) => s.handleStreamError);
   const saveMessage = useChatStore((s) => s.saveMessage);
@@ -135,6 +136,19 @@ export function useStreaming() {
                   approveAll: doApprove.approveAll,
                 }).catch(() => {});
                 approvalId = null;
+              });
+              break;
+            }
+
+            case 'tool_question_required': {
+              // 模型调用了 ask_user tool:把问题挂到 chatStore,
+              // QuestionModal 会自动弹出,answer 由 answerPendingQuestion 发起
+              setPendingQuestion({
+                id: e.id,
+                question: e.question,
+                options: e.options,
+                multiSelect: e.multi_select,
+                header: e.header,
               });
               break;
             }

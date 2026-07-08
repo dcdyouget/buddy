@@ -6,12 +6,15 @@ import { useChatStore } from '@/stores/chatStore';
 import { useConfigStore } from '@/stores/configStore';
 import { GlassPanel } from '@/components/shared/GlassPanel';
 import { IconButton } from '@/components/shared/IconButton';
+import { ApprovalModal } from '@/components/shared/ApprovalModal';
+import { QuestionModal } from '@/components/shared/QuestionModal';
 import { InputDock } from '@/components/chat/InputDock';
+import { UserResponseInput } from '@/components/chat/UserResponseInput';
 import { MessageBubble } from '@/components/chat/MessageBubble';
 import { ModelDropdown } from '@/components/chat/ModelDropdown';
 import { useDragHandle } from '@/hooks/useDragHandle';
 import { useSmoothTextRenderer } from '@/hooks/useSmoothTextRenderer';
-import type { ModelInfo } from '@/types';
+import type { Message, ModelInfo } from '@/types';
 
 /**
  * 统一聊天页组件
@@ -34,6 +37,8 @@ export function ChatPage() {
     streamingTokens,
     streamingModelId,
     streamingBlocks,
+    activeToolCalls,
+    waitingForResponse,
   } = useChatStore();
   const { config } = useConfigStore();
   const [showDropdown, setShowDropdown] = useState(false);
@@ -140,50 +145,84 @@ export function ChatPage() {
               开始新对话
             </div>
           )}
-          {/* tool 消息是内部消息，不展示给用户 */}
-          {messages
-            .filter((m) => m.role !== 'tool')
-            .map((msg, i, arr) => {
-            const questionId =
-              msg.role === 'assistant' && i > 0 && arr[i - 1].role === 'user'
-                ? `msg-${arr[i - 1].id}`
-                : undefined;
-            const isLast = isStreaming && msg.role === 'assistant' && i === arr.length - 1;
-            // 流式过程中将 live blocks 注入最后一条 assistant 消息
-            const displayMsg =
-              isLast && streamingBlocks.length > 0
-                ? { ...msg, blocks: streamingBlocks }
-                : msg;
-            return (
-              <MessageBubble
-                key={msg.id}
-                message={displayMsg}
-                isStreaming={isLast}
-                questionId={questionId}
-              />
+          {/* tool 消息是内部消息，不展示给用户;parent_message_id 非空的用户回应
+              也不在主列表渲染，而是嵌套到对应的 assistant 消息内 */}
+          {(() => {
+            // 1. 先过滤掉 tool + child response 消息
+            const visible: Message[] = messages.filter(
+              (m) => m.role !== 'tool' && !m.parent_message_id,
             );
-          })}
+            // 2. 建立 parentId -> child responses 索引
+            const childByParent = new Map<string, Message[]>();
+            for (const m of messages) {
+              if (m.parent_message_id) {
+                const arr = childByParent.get(m.parent_message_id) || [];
+                arr.push(m);
+                childByParent.set(m.parent_message_id, arr);
+              }
+            }
+            return visible.map((msg, i, arr) => {
+              const questionId =
+                msg.role === 'assistant' && i > 0 && arr[i - 1].role === 'user'
+                  ? `msg-${arr[i - 1].id}`
+                  : undefined;
+              const isLast = isStreaming && msg.role === 'assistant' && i === arr.length - 1;
+              // 流式过程中将 live blocks 注入最后一条 assistant 消息
+              const displayMsg =
+                isLast && streamingBlocks.length > 0
+                  ? { ...msg, blocks: streamingBlocks }
+                  : msg;
+              // 流式最后一条:把 chatStore 累积的 live tool_calls 注入显示
+              const liveToolCalls =
+                isLast && Object.keys(activeToolCalls).length > 0
+                  ? Object.values(activeToolCalls)
+                  : undefined;
+              const childResponses =
+                msg.role === 'assistant' ? childByParent.get(msg.id) : undefined;
+              return (
+                <MessageBubble
+                  key={msg.id}
+                  message={displayMsg}
+                  isStreaming={isLast}
+                  questionId={questionId}
+                  liveToolCalls={liveToolCalls}
+                  childResponses={childResponses}
+                />
+              );
+            });
+          })()}
         </div>
 
-        {/* 输入区域 */}
+        {/* 输入区域 + 弹窗容器:弹窗用 absolute bottom:100% 紧贴输入区上方 */}
         <div
           style={{
+            position: 'relative',
+            zIndex: 0,
             padding: messages.length === 0 ? '0 var(--space-3) var(--space-4)' : undefined,
           }}
         >
-          <InputDock
-            isStreaming={isStreaming}
-            streamingModelName={streamingModel?.display_name}
-            streamingTokens={streamingTokens}
-            selectedModel={selectedModel}
-            draftInput={draftInput}
-            onDraftChange={setDraftInput}
-            onSend={isStreaming ? () => {} : handleSend}
-            onStop={handleStop}
-            onModelPickerClick={
-              isStreaming ? () => {} : () => setShowDropdown(!showDropdown)
-            }
-          />
+          {/* Approval 弹窗(工具调用审批) */}
+          <ApprovalModal />
+          {/* ask_user 弹窗(模型问题时) */}
+          <QuestionModal />
+
+          {waitingForResponse ? (
+            <UserResponseInput />
+          ) : (
+            <InputDock
+              isStreaming={isStreaming}
+              streamingModelName={streamingModel?.display_name}
+              streamingTokens={streamingTokens}
+              selectedModel={selectedModel}
+              draftInput={draftInput}
+              onDraftChange={setDraftInput}
+              onSend={isStreaming ? () => {} : handleSend}
+              onStop={handleStop}
+              onModelPickerClick={
+                isStreaming ? () => {} : () => setShowDropdown(!showDropdown)
+              }
+            />
+          )}
         </div>
       </GlassPanel>
 

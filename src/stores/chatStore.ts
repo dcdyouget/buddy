@@ -19,7 +19,7 @@
  */
 
 import { create } from 'zustand';
-import type { Message, ContentBlock } from '@/types';
+import type { Message, ContentBlock, PendingQuestion, ToolCall, ToolCallStatus } from '@/types';
 import { isBrowser, MOCK_MESSAGES } from '@/utils/mock';
 import { parseThinkBlocks } from '@/utils/thinkParser';
 
@@ -41,6 +41,23 @@ interface ChatState {
     reason: string;
   } | null;
 
+  // P11: 当前等待回答的 ask_user 问题(后端 ToolQuestionRequired 事件触发)
+  pendingQuestion: PendingQuestion | null;
+
+  // P10: "回应模型问题"模式
+  // 当模型在一次回答末尾提出问题时(启发式:文本以 ? 或 ？ 结尾),
+  // 进入此状态。ChatPage 会用 UserResponseInput 替换 InputDock,
+  // 用户填写的回应会以 parent_message_id 指向这条 assistant 消息,
+  // 在 UI 上嵌套渲染在父消息内部。
+  waitingForResponse: {
+    parentMessageId: string;
+    question: string;
+  } | null;
+
+  // P9: 当前流式轮次中正在进行的工具调用（按 id 索引）
+  // 流式结束后会被合并到最后一条 assistant 消息的 tool_calls 字段中
+  activeToolCalls: Record<string, ToolCall>;
+
   // P9: 平滑文本渲染 —— 后端推送的文本增量先入队缓冲
   // rAF 循环再从队头逐字消费到 streamingBlocks，避免突发的 SSE chunk
   // 导致 React 批量 re-render 产生的「一卡一卡」视觉
@@ -48,7 +65,7 @@ interface ChatState {
 
   // ── 操作 ──
   setDraftInput: (text: string) => void;
-  sendMessage: (content: string, modelId: string) => Promise<void>;
+  sendMessage: (content: string, modelId: string, parentMessageId?: string) => Promise<void>;
   stopGeneration: () => Promise<void>;
   appendToken: (token: string) => void;
   appendTextToken: (token: string) => void;
@@ -60,6 +77,8 @@ interface ChatState {
   handleThinkingDelta: (contentIndex: number, delta: string) => void;
   handleThinkingEnd: (contentIndex: number, content: string) => void;
   // P8: Tool handlers
+  _ensureToolCallEntry: (id: string, name: string, status: ToolCallStatus) => ToolCall;
+  _computeInsertAfterBlockIndex: () => number;
   handleToolCallStart: (id: string, name: string, contentIndex: number) => void;
   handleToolCallDelta: (id: string, argumentsDelta: string) => void;
   handleToolCallEnd: (id: string, name: string, args: string) => void;
@@ -67,6 +86,11 @@ interface ChatState {
   handleToolResult: (id: string, name: string, content: string, isError: boolean) => void;
   handleToolApprovalRequired: (id: string, name: string, args: string, reason: string) => void;
   setToolApproval: (approval: ChatState['toolApproval']) => void;
+  // P10: 回应模型问题的状态控制
+  setWaitingForResponse: (wfr: ChatState['waitingForResponse']) => void;
+  // P11: ask_user 问题的状态控制
+  setPendingQuestion: (q: PendingQuestion | null) => void;
+  answerPendingQuestion: (selected: number[], inputs?: string[], custom?: string) => Promise<void>;
   handleStreamDone: () => void;
   handleStreamError: (reason: string, message: string) => void;
   finalizeMessage: () => void;
@@ -109,6 +133,21 @@ function parseThinkFromText(text: string): ContentBlock[] {
   });
 }
 
+/**
+ * 在 messages 数组中从尾部向前查找最后一条 role === 'assistant' 的消息索引。
+ * 返回 -1 表示没有 assistant 消息。
+ *
+ * 为什么需要这个：handleToolResult 会在数组末尾 push role='tool' 的消息,
+ * 所以直接用 `messages.length - 1` 取到的可能是 tool 消息,
+ * 而我们要把 streamingBlocks / tool_calls 写到真正的 assistant 消息上。
+ */
+function findLastAssistantIdx(messages: Message[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'assistant') return i;
+  }
+  return -1;
+}
+
 export const useChatStore = create<ChatState>((set, get) => ({
   // 浏览器模式预填充 mock 消息，方便 UI 调试
   messages: isBrowser ? [...MOCK_MESSAGES] : [],
@@ -119,6 +158,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
   streamingBlocks: [],
   error: null,
   toolApproval: null,
+  activeToolCalls: {},
+  waitingForResponse: null,
+  pendingQuestion: null,
   pendingTextBuffer: '',
   /** 设置输入框草稿文本（用于接收外部选中的文本） */
   setDraftInput: (text: string) => {
@@ -132,7 +174,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
    * 3. 浏览器模式：使用 setInterval 逐字输出 mock 回复
    * 4. Tauri 模式：调用 Rust 后端 send_message 命令
    */
-  sendMessage: async (content: string, modelId: string) => {
+  sendMessage: async (content: string, modelId: string, parentMessageId?: string) => {
     const { messages } = get();
 
     // 构建用户消息
@@ -142,6 +184,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       content,
       model_id: null,
       created_at: Math.floor(Date.now() / 1000),
+      parent_message_id: parentMessageId,
     };
 
     // 构建空的助手消息，内容将在流式过程中逐步填充
@@ -165,6 +208,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamingBlocks: [],
       pendingTextBuffer: '',
       error: null,
+      activeToolCalls: {},
+      toolApproval: null,
+      waitingForResponse: null, // 一旦开始新一轮,清除回应模式
+      pendingQuestion: null, // 清除任何挂起的 ask_user 问题
     });
 
     if (isBrowser) {
@@ -187,8 +234,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     try {
       // Tauri 模式：调用 Rust 后端发起 SSE 请求
+      const toSend = updatedMessages.slice(0, -1);
+      // ── 诊断: dump 所有 tool 相关消息 ──
+      console.warn(`[chatStore.sendMessage] 准备发送 ${toSend.length} 条消息:`);
+      toSend.forEach((m, i) => {
+        const tc = m.tool_calls ? ` tool_calls=[${m.tool_calls.map(t => t.id).join(',')}]` : '';
+        const tcid = m.tool_call_id ? ` tool_call_id=${m.tool_call_id}` : '';
+        if (m.role === 'assistant' && m.tool_calls) console.warn(`  [${i}] assistant id=${m.id}${tc}`);
+        if (m.role === 'tool') console.warn(`  [${i}] tool id=${m.id} name=${m.tool_name}${tcid} err=${m.is_error} content=${m.content.slice(0,80)}`);
+      });
       const { sendMessage: sendMsg } = await import('@/api/chat');
-      await sendMsg(updatedMessages.slice(0, -1), modelId);
+      await sendMsg(toSend, modelId);
     } catch (e) {
       set({
         isStreaming: false,
@@ -263,10 +319,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
   /** 初始化/重置 streamingBlocks */
   handleTextStart: (contentIndex: number) => {
     const blocks = [...get().streamingBlocks];
+    // 多轮情况下 text_start 会被多次调用,只在该索引位置还没有 block 时才创建
+    // 否则会覆盖前序轮的累积内容(导致"只显示最后一条"bug)
+    if (blocks.length > contentIndex) {
+      return;
+    }
     while (blocks.length <= contentIndex) {
       blocks.push({ type: 'text', content: '' });
     }
-    blocks[contentIndex] = { type: 'text', content: '' };
     set({ streamingBlocks: blocks });
   },
 
@@ -290,16 +350,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
     });
   },
 
-  /** 文本块结束：用 parseThinkFromText 重建 blocks，防止覆盖 thinking 块 */
+  /** 文本块结束 */
   handleTextEnd: (contentIndex: number, content: string) => {
-    // 对于 content_index=0（OpenAI 兼容格式的唯一块），从完整内容解析 blocks
-    // 对于 Anthropic 的多块格式，每个 text_end 只涉及对应索引的块
     if (contentIndex === 0) {
-      // 单块模式：用 parseThinkFromText 解析完整响应
-      const newBlocks = parseThinkFromText(content);
-      set({ streamingBlocks: newBlocks });
+      // OpenAI 单块模式:每个 turn 都会发 text_end(idx=0, &full_response)
+      // 其中 content 是「当前 turn」的文本,不是累积全文。
+      // 不能整体重置 streamingBlocks(会丢失前序 turn 的内容),
+      // 改为 push 一个空文本块作为轮次分隔,让 smoothTextDelta 把下一轮的字符
+      // 追加到新 block 而不是污染前序轮。
+      const blocks = [...get().streamingBlocks];
+      blocks.push({ type: 'text', content: '' });
+      set({ streamingBlocks: blocks });
     } else {
-      // 多块模式：保持现有 blocks，只更新对应索引
+      // Anthropic 多块模式:每个 text_end 只更新对应索引的 block
       const blocks = [...get().streamingBlocks];
       while (blocks.length <= contentIndex) {
         blocks.push({ type: 'text', content: '' });
@@ -362,13 +425,52 @@ export const useChatStore = create<ChatState>((set, get) => ({
   /** 流式完成：先清缓冲，再将 streamingBlocks 附加到消息 */
   handleStreamDone: () => {
     get().flushTextBuffer();
-    const { messages, streamingBlocks } = get();
+    const { messages, streamingBlocks, activeToolCalls } = get();
     const updated = [...messages];
-    const lastMsg = { ...updated[updated.length - 1] } as Message;
-    lastMsg.blocks = streamingBlocks.map((b: ContentBlock) =>
-      b.type === 'thinking' ? { ...b, is_open: false } : b,
-    );
-    updated[updated.length - 1] = lastMsg;
+    // 找到最后一条 assistant 消息 —— 它才是 streamingBlocks / tool_calls 的目标。
+    // 注意: handleToolResult 会在 messages 末尾 push role='tool' 的消息,
+    // 所以 messages 的最后一条可能是 tool 消息而不是 assistant。
+    const lastAssistantIdx = findLastAssistantIdx(updated);
+    let lastAssistant: Message | null = null;
+    if (lastAssistantIdx >= 0) {
+      lastAssistant = { ...updated[lastAssistantIdx] } as Message;
+      // 闭合所有 thinking block,并去掉尾部由 text_end 推入的空文本分隔块
+      const closedBlocks = streamingBlocks.map((b: ContentBlock) =>
+        b.type === 'thinking' ? { ...b, is_open: false } : b,
+      );
+      while (closedBlocks.length > 0) {
+        const last = closedBlocks[closedBlocks.length - 1];
+        if (last.type === 'text' && last.content === '') {
+          closedBlocks.pop();
+        } else {
+          break;
+        }
+      }
+      lastAssistant.blocks = closedBlocks;
+      // 把累积的 tool_calls 合并到最后一条 assistant 消息
+      const toolCallsList = Object.values(activeToolCalls);
+      if (toolCallsList.length > 0) {
+        lastAssistant.tool_calls = toolCallsList;
+      }
+      updated[lastAssistantIdx] = lastAssistant;
+    }
+
+    // P10: 启发式判断模型是否在"提问" —— 本轮没有 tool_call,文本以 ? 或 ？ 结尾
+    // 如果是,把状态切到 waitingForResponse,ChatPage 会切换到 UserResponseInput
+    let waitingForResponse: ChatState['waitingForResponse'] = null;
+    if (lastAssistant) {
+      const hadToolCalls = (lastAssistant.tool_calls?.length ?? 0) > 0;
+      if (!hadToolCalls) {
+        const text = (lastAssistant.content || '').trim();
+        if (text.endsWith('?') || text.endsWith('？')) {
+          waitingForResponse = {
+            parentMessageId: lastAssistant.id,
+            question: text,
+          };
+        }
+      }
+    }
+
     set({
       messages: updated,
       isStreaming: false,
@@ -377,19 +479,40 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamingBlocks: [],
       pendingTextBuffer: '',
       toolApproval: null,
+      activeToolCalls: {},
+      waitingForResponse,
+      // pendingQuestion 由 answerPendingQuestion 自身清空,这里不动
+      // (后端通过 tool_result 事件来,在此之前 modal 一直挂着)
     });
   },
 
   /** 流式错误：先清缓冲再重置状态 */
   handleStreamError: (_reason: string, message: string) => {
     get().flushTextBuffer();
+    // 错误时把仍未完成的 tool_calls 也合并到消息（标记 error），便于用户回看
+    const { messages, activeToolCalls } = get();
+    let updated = messages;
+    const lastAssistantIdx = findLastAssistantIdx(messages);
+    if (Object.keys(activeToolCalls).length > 0 && lastAssistantIdx >= 0) {
+      const lastAssistant = { ...messages[lastAssistantIdx] } as Message;
+      lastAssistant.tool_calls = Object.values(activeToolCalls).map((tc) => ({
+        ...tc,
+        status: tc.status === 'done' ? 'done' : 'error',
+        result: tc.result ?? message,
+        is_error_result: tc.is_error_result ?? true,
+      }));
+      updated = [...messages];
+      updated[lastAssistantIdx] = lastAssistant;
+    }
     set({
+      messages: updated,
       isStreaming: false,
       streamingTokens: 0,
       streamingModelId: null,
       streamingBlocks: [],
       pendingTextBuffer: '',
       error: message,
+      activeToolCalls: {},
     });
   },
 
@@ -502,35 +625,99 @@ export const useChatStore = create<ChatState>((set, get) => ({
   // ── P8: Tool 事件处理 ────────────────────────────────
   // 注意: 不再将 tool 状态文本拼入 assistant.content，防止污染对话历史
   // 导致模型看到 "[create_file 结果]:" 等文本后产生幻觉、不再调用工具
-  handleToolCallStart: (_id: string, _name: string, _contentIndex: number) => {
-    // 工具调用状态由 toolApproval + UI 层展示
+  // 状态由 activeToolCalls (id -> ToolCall) 维护,流式结束后在 handleStreamDone
+  // 时合并到最后一条 assistant 消息的 tool_calls 字段,以便持久化/重渲染
+
+  /** 找到/创建当前流式最后一条 assistant 消息的 tool_calls 数组,并返回其引用 */
+  _ensureToolCallEntry: (id: string, name: string, status: ToolCallStatus): ToolCall => {
+    const active = { ...get().activeToolCalls };
+    if (!active[id]) {
+      active[id] = { id, name, arguments: '', status };
+    } else {
+      active[id] = { ...active[id], name, status };
+    }
+    set({ activeToolCalls: active });
+    return active[id];
   },
 
-  handleToolCallDelta: (_id: string, _argumentsDelta: string) => {
-    // 增量实时:暂时只更新 toolApproval 不刷 UI(后端循环速度很快)
+  /**
+   * 计算 tool_call 应当插入到哪个 block 之后。
+   * 跳过尾部由 text_end 推入的空文本块(它们是轮次分隔符,不算内容 block)。
+   * 如果没有 block 或全是空 block,返回 -1(渲染时放在所有 block 之后)。
+   */
+  _computeInsertAfterBlockIndex: (): number => {
+    const blocks = get().streamingBlocks;
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      const b = blocks[i];
+      if (b.type === 'text' && b.content !== '') return i;
+      if (b.type === 'thinking' && b.content !== '') return i;
+    }
+    return -1;
   },
 
-  handleToolCallEnd: (_id: string, _name: string, _args: string) => {
-    // tool_call 参数完整
+  handleToolCallStart: (id: string, name: string, _contentIndex: number) => {
+    get()._ensureToolCallEntry(id, name, 'calling');
+    // 记录内联位置:tool_call 应当插入到哪个 block 之后
+    const insertAfter = get()._computeInsertAfterBlockIndex();
+    const active = { ...get().activeToolCalls };
+    if (active[id]) {
+      active[id] = { ...active[id], insertAfterBlockIndex: insertAfter };
+      set({ activeToolCalls: active });
+    }
   },
 
-  handleToolExecuting: (_id: string, _name: string) => {
-    // 后端开始执行
+  handleToolCallDelta: (id: string, argumentsDelta: string) => {
+    const active = { ...get().activeToolCalls };
+    const prev = active[id];
+    if (!prev) return; // 兜底:start 缺失时直接忽略 delta
+    active[id] = { ...prev, arguments: (prev.arguments || '') + argumentsDelta };
+    set({ activeToolCalls: active });
   },
 
-  handleToolResult: (_id: string, name: string, content: string, isError: boolean) => {
-    // 工具结果以独立 tool 消息插入，保持与后端一致的数据结构
+  handleToolCallEnd: (id: string, name: string, args: string) => {
+    const active = { ...get().activeToolCalls };
+    const prev = active[id];
+    if (prev) {
+      active[id] = { ...prev, name, arguments: args, status: 'calling' };
+    } else {
+      // start 事件丢失,直接以终态插入
+      active[id] = { id, name, arguments: args, status: 'calling' };
+    }
+    set({ activeToolCalls: active });
+  },
+
+  handleToolExecuting: (id: string, name: string) => {
+    get()._ensureToolCallEntry(id, name, 'executing');
+  },
+
+  handleToolResult: (id: string, name: string, content: string, isError: boolean) => {
+    console.warn(`[chatStore] tool_result id=${id} name=${name} err=${isError} len=${content.length} msgs_before=${get().messages.length}`);
+
+    // 用一个 set + 一个本地变量,防止两次 set 的间隙被其他事件插入
+    const state = get();
+    const active = { ...state.activeToolCalls };
+    const prev = active[id];
+    if (prev) {
+      active[id] = { ...prev, name, status: isError ? 'error' : 'done', result: content, is_error_result: isError };
+    } else {
+      active[id] = { id, name, arguments: '', status: isError ? 'error' : 'done', result: content, is_error_result: isError };
+    }
+
     const toolMsg: Message = {
       id: 'tool-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 9),
       role: 'tool' as const,
       content,
       model_id: null,
       created_at: Math.floor(Date.now() / 1000),
-      tool_call_id: _id,
+      tool_call_id: id,
       tool_name: name,
       is_error: isError,
     };
-    set({ messages: [...get().messages, toolMsg] });
+    set({
+      activeToolCalls: active,
+      messages: [...state.messages, toolMsg],
+    });
+    console.warn(`[chatStore] tool_result done msgs_after=${get().messages.length}`);
   },
 
   handleToolApprovalRequired: (id: string, name: string, args: string, reason: string) => {
@@ -540,8 +727,48 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setToolApproval: (approval) => {
     set({ toolApproval: approval });
   },
+
+  /** 设置/清除"等待用户回应"状态 */
+  setWaitingForResponse: (wfr) => {
+    set({ waitingForResponse: wfr });
+  },
+
+  /** 设置当前等待回答的 ask_user 问题 */
+  setPendingQuestion: (q) => {
+    set({ pendingQuestion: q });
+  },
+
+  /**
+   * 用户回答 ask_user:把答案发给后端,清空本地状态
+   * 后端的 send_message 阻塞 await 会收到 answer 并继续执行
+   * @param selected  选中的选项索引(单选/多选)
+   * @param inputs    对应 selected 中每个选项的补充输入(可选)
+   * @param custom    自定义文本回答(可选)
+   */
+  answerPendingQuestion: async (selected, inputs, custom) => {
+    const { pendingQuestion } = get();
+    if (!pendingQuestion) return;
+    if (isBrowser) {
+      // 浏览器 mock 直接清空
+      set({ pendingQuestion: null });
+      return;
+    }
+    try {
+      const { answerToolQuestion } = await import('@/api/chat');
+      await answerToolQuestion({
+        id: pendingQuestion.id,
+        selected,
+        inputs: inputs ?? [],
+        custom: custom ?? null,
+      });
+    } catch (e) {
+      console.error('[Buddy] 回答 ask_user 失败:', e);
+    } finally {
+      set({ pendingQuestion: null });
+    }
+  },
   clearMessages: () => {
-    set({ messages: [], draftInput: '', error: null });
+    set({ messages: [], draftInput: '', error: null, activeToolCalls: {}, toolApproval: null });
   },
 
   /** 设置完整的消息列表（用于加载历史对话） */

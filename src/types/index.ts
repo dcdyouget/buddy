@@ -56,11 +56,46 @@ export type ContentBlock =
   | { type: 'text'; content: string }
   | { type: 'thinking'; content: string; is_open: boolean };
 
+/** 工具调用的执行状态（前端展示用，后端不持久化） */
+export type ToolCallStatus = 'calling' | 'executing' | 'done' | 'error';
+
 /** 工具调用（对应 Rust ToolCall） */
 export interface ToolCall {
   id: string;
   name: string;
   arguments: string; // JSON string
+  /** 前端展示用：流式过程中累积，done 后随消息持久化在内存中 */
+  status?: ToolCallStatus;
+  /** 执行结果内容（成功时） */
+  result?: string;
+  /** 是否为错误结果（与后端 is_error 对齐） */
+  is_error_result?: boolean;
+  /**
+   * 内联位置：tool_call 应当插入到该 block 索引之后。
+   * - 由 handleToolCallStart 在事件到来时记录"最后一个非空 block 的索引"
+   * - 渲染时 AssistantContent 据此把 ToolSection 插在对应位置而非堆在末尾
+   * - 旧消息(从磁盘加载)无此字段,渲染时回退到最后一个 block 之后
+   */
+  insertAfterBlockIndex?: number;
+}
+
+/** ask_user tool 的单个选项(后端 QuestionOption 对齐) */
+export interface QuestionOption {
+  label: string;
+  description?: string;
+  /** 此选项是否需要用户补充输入(如"选其他文件"时让用户输入路径) */
+  requiresInput?: boolean;
+  /** 输入框的占位符(仅在 requiresInput=true 时生效) */
+  inputPlaceholder?: string;
+}
+
+/** 当前等待用户回答的 ask_user 问题 */
+export interface PendingQuestion {
+  id: string;
+  question: string;
+  options: QuestionOption[];
+  multiSelect: boolean;
+  header: string;
 }
 
 /** MCP server 传输方式 */
@@ -97,6 +132,12 @@ export interface Message {
   tool_name?: string;
   /** 工具执行是否出错（tool 消息时） */
   is_error?: boolean;
+  /**
+   * 仅 user 消息使用:若设置,表示这是对指定 assistant 消息的"回应",
+   * 在 UI 上嵌套渲染在父消息内部（类似 Claude Code 的"补充信息"流程）,
+   * 数据上仍作为独立的 user 消息传给后端,以便模型拿到完整上下文。
+   */
+  parent_message_id?: string;
 }
 
 /** 流式事件类型（对应 Rust StreamEvent） */
@@ -117,6 +158,7 @@ export type StreamEvent =
   | { event: 'tool_executing'; id: string; name: string }
   | { event: 'tool_result'; id: string; name: string; content: string; is_error: boolean }
   | { event: 'tool_approval_required'; id: string; name: string; arguments: string; reason: string }
+  | { event: 'tool_question_required'; id: string; name: string; question: string; options: QuestionOption[]; multi_select: boolean; header: string }
   | { event: 'turn_end'; tool_calls_pending: number };
 
 /** 页面状态枚举 — 驱动整个应用的页面路由 */

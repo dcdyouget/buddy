@@ -1,12 +1,16 @@
 /**
  * ApprovalModal.tsx — Tool 执行审批弹窗
  *
- * 当后端发送 tool_approval_required 事件时，
- * useStreaming 会设置 toolApproval state。
- * 本组件监听该 state，显示「允许/本次都允许/拒绝」三个按钮。
+ * 与 QuestionModal 共享统一视觉语言：
+ * - 玻璃面板 + backdrop blur + 淡入动画
+ * - header icon + 标题
+ * - 横向并排操作按钮
+ * - 底部补充信息(Esc 提示)
  */
 
 import { useEffect } from 'react';
+import { Shield, ShieldCheck, ShieldX } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useChatStore } from '@/stores/chatStore';
 import { resolveApproval } from '@/hooks/useStreaming';
 
@@ -14,126 +18,235 @@ export function ApprovalModal() {
   const approval = useChatStore((s) => s.toolApproval);
 
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        handleDeny();
-      }
+    if (!approval) return;
+    const onKey = (e: Event) => {
+      if ((e as KeyboardEvent).key === 'Escape') handleDeny();
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [approval]);
 
   if (!approval) return null;
 
-  const dismiss = () => {
-    // 通过重新调用 handleToolApprovalRequired 传空值来清除
-    useChatStore.getState().setToolApproval(null);
-  };
-
-  const handleAllow = () => {
-    resolveApproval(true, false);
-    dismiss();
-  };
-
-  const handleAllowAll = () => {
-    resolveApproval(true, true);
-    dismiss();
-  };
-
-  const handleDeny = () => {
-    resolveApproval(false, false);
-    dismiss();
-  };
-
-  // 需要清空 toolApproval:直接通过 getState 修改
+  const dismiss = () => useChatStore.getState().setToolApproval(null);
+  const handleAllow = () => { resolveApproval(true, false); dismiss(); };
+  const handleAllowAll = () => { resolveApproval(true, true); dismiss(); };
+  const handleDeny = () => { resolveApproval(false, false); dismiss(); };
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        bottom: 80,
-        left: '50%',
-        transform: 'translateX(-50%)',
-        background: 'var(--glass-bg, rgba(255,255,255,0.9))',
-        backdropFilter: 'blur(16px)',
-        border: '1px solid var(--border, #ddd)',
-        borderRadius: 12,
-        padding: '16px 20px',
-        zIndex: 1000,
-        minWidth: 320,
-        maxWidth: 480,
-        boxShadow: '0 4px 24px rgba(0,0,0,0.2)',
-      }}
-    >
-      <div style={{ marginBottom: 8, fontSize: 13, fontWeight: 600 }}>
-        工具调用审批
-      </div>
-      <div style={{ marginBottom: 6, fontSize: 13, color: 'var(--fg-secondary, #666)' }}>
-        要修改的文件: {approval.name}
-      </div>
-      <div
-        style={{
-          marginBottom: 14,
-          fontSize: 11,
-          fontFamily: 'monospace',
-          color: 'var(--fg-muted, #999)',
-          background: 'var(--code-bg, #f5f5f5)',
-          padding: '8px 10px',
-          borderRadius: 6,
-          maxHeight: 120,
-          overflow: 'auto',
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-all',
-        }}
-      >
-        {approval.reason}
-      </div>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <button
-          onClick={() => { handleAllow(); }}
+    <AnimatePresence>
+      {approval && (
+        <div
           style={{
-            flex: 1,
-            padding: '8px 0',
-            border: '1px solid var(--brand, #5B5FE9)',
-            background: 'var(--brand, #5B5FE9)',
-            color: 'var(--fg-on-brand, #fff)',
-            borderRadius: 8,
-            cursor: 'pointer',
-            fontSize: 13,
+            position: 'absolute',
+            bottom: 'calc(100% + var(--space-2))',
+            left: 0,
+            right: 0,
+            display: 'flex',
+            justifyContent: 'center',
+            zIndex: 1000,
+            pointerEvents: 'none',
           }}
         >
-          允许
-        </button>
-        <button
-          onClick={() => { handleAllowAll(); }}
+        <motion.div
+          initial={{ opacity: 0, y: 20, scale: 0.97 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 10, scale: 0.97 }}
+          transition={{ duration: 0.18, ease: 'easeOut' }}
           style={{
-            flex: 1,
-            padding: '8px 0',
-            border: '1px solid var(--brand, #5B5FE9)',
-            background: 'transparent',
-            color: 'var(--brand, #5B5FE9)',
-            borderRadius: 8,
-            cursor: 'pointer',
-            fontSize: 13,
+            width: 420,
+            maxWidth: 'calc(100vw - 32px)',
+            pointerEvents: 'auto',
           }}
         >
-          本次都允许
-        </button>
-        <button
-          onClick={() => { handleDeny(); }}
-          style={{
-            padding: '8px 16px',
-            border: '1px solid var(--border, #ddd)',
-            background: 'transparent',
-            color: 'var(--fg, #333)',
-            borderRadius: 8,
-            cursor: 'pointer',
-            fontSize: 13,
-          }}
-        >
-          拒绝
-        </button>
-      </div>
-    </div>
+          <div
+            style={{
+              background: 'var(--bg-elevated)',
+              backdropFilter: 'blur(var(--blur-surface)) saturate(160%)',
+              WebkitBackdropFilter: 'blur(var(--blur-surface)) saturate(160%)',
+              border: '1px solid var(--border-default)',
+              borderRadius: 'var(--radius-xl)',
+              overflow: 'hidden',
+              boxShadow: 'var(--shadow-floating-md)',
+            }}
+          >
+            {/* ── Header ── */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 'var(--space-3)',
+                padding: 'var(--space-4) var(--space-4) var(--space-2)',
+              }}
+            >
+              <div
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 'var(--radius-md)',
+                  background: 'var(--buddy-primary-50)',
+                  color: 'var(--buddy-primary)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                <Shield size={16} />
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  style={{
+                    fontSize: 'var(--font-size-md)',
+                    fontWeight: 600,
+                    color: 'var(--text-primary)',
+                    letterSpacing: 'var(--letter-spacing-tight)',
+                  }}
+                >
+                  工具调用审批
+                </div>
+                <div
+                  style={{
+                    fontSize: 'var(--font-size-sm)',
+                    color: 'var(--text-muted)',
+                    marginTop: 1,
+                    fontFamily: 'var(--font-mono)',
+                  }}
+                >
+                  {approval.name}
+                </div>
+              </div>
+            </div>
+
+            {/* ── 参数预览 ── */}
+            <div
+              style={{
+                margin: '0 var(--space-4) var(--space-3)',
+                padding: 'var(--space-2) var(--space-3)',
+                background: 'var(--bg-sunken)',
+                borderRadius: 'var(--radius-md)',
+                fontSize: 'var(--font-size-xs)',
+                fontFamily: 'var(--font-mono)',
+                color: 'var(--text-muted)',
+                maxHeight: 100,
+                overflow: 'auto',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-all',
+                lineHeight: 1.5,
+              }}
+            >
+              {approval.reason}
+            </div>
+
+            {/* ── 操作按钮(横向并排) ── */}
+            <div
+              style={{
+                display: 'flex',
+                gap: 'var(--space-2)',
+                padding: '0 var(--space-4) var(--space-4)',
+              }}
+            >
+              <button
+                onClick={handleDeny}
+                style={{
+                  flex: 1,
+                  padding: '8px 0',
+                  border: '1px solid var(--border-default)',
+                  background: 'transparent',
+                  color: 'var(--text-muted)',
+                  borderRadius: 'var(--radius-md)',
+                  cursor: 'pointer',
+                  fontSize: 'var(--font-size-sm)',
+                  fontWeight: 500,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 5,
+                  transition: 'all 0.12s',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'var(--bg-sunken)';
+                  e.currentTarget.style.borderColor = 'var(--state-error)';
+                  e.currentTarget.style.color = 'var(--state-error)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'transparent';
+                  e.currentTarget.style.borderColor = 'var(--border-default)';
+                  e.currentTarget.style.color = 'var(--text-muted)';
+                }}
+              >
+                <ShieldX size={13} />
+                拒绝
+              </button>
+              <button
+                onClick={handleAllowAll}
+                style={{
+                  flex: 1,
+                  padding: '8px 0',
+                  border: '1px solid var(--buddy-primary)',
+                  background: 'transparent',
+                  color: 'var(--buddy-primary)',
+                  borderRadius: 'var(--radius-md)',
+                  cursor: 'pointer',
+                  fontSize: 'var(--font-size-sm)',
+                  fontWeight: 500,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 5,
+                  transition: 'all 0.12s',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'var(--primary-tint-soft)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'transparent';
+                }}
+              >
+                <ShieldCheck size={13} />
+                本次都允许
+              </button>
+              <button
+                onClick={handleAllow}
+                style={{
+                  flex: 1.2,
+                  padding: '8px 0',
+                  border: 'none',
+                  background: 'var(--buddy-primary)',
+                  color: 'var(--text-on-primary)',
+                  borderRadius: 'var(--radius-md)',
+                  cursor: 'pointer',
+                  fontSize: 'var(--font-size-sm)',
+                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 5,
+                  transition: 'opacity 0.12s',
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.opacity = '0.92'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.opacity = '1'; }}
+              >
+                <ShieldCheck size={13} />
+                允许
+              </button>
+            </div>
+
+            {/* ── 底部提示 ── */}
+            <div
+              style={{
+                padding: '0 var(--space-4) var(--space-3)',
+                fontSize: 'var(--font-size-xs)',
+                color: 'var(--text-tertiary)',
+                textAlign: 'center',
+              }}
+            >
+              Esc · 拒绝
+            </div>
+          </div>
+        </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
   );
 }

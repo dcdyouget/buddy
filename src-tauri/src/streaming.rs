@@ -106,6 +106,22 @@ pub enum StopReason {
     Aborted,
 }
 
+/// ask_user tool 的选项结构(用于 ToolQuestionRequired 事件 payload)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuestionOption {
+    /// 1-5 词的简短标签
+    pub label: String,
+    /// 可选说明
+    #[serde(default)]
+    pub description: String,
+    /// 此选项是否需要用户补充输入
+    #[serde(default)]
+    pub requires_input: bool,
+    /// 输入框占位符
+    #[serde(default)]
+    pub input_placeholder: String,
+}
+
 /// stream_chat 的返回结果(P4 新增)
 ///
 /// 拆分 full_text + tool_calls,让 P4 的 send_message 知道本轮有没有 tool_call 需要执行
@@ -116,6 +132,9 @@ pub enum StopReason {
 pub struct StreamOutcome {
     /// 累积的完整文本(用于持久化 + UI 展示)
     pub full_text: String,
+    /// 累积的思考文本(DeepSeek reasoning_content 等)
+    /// 持久化时会被合并进 assistant 消息的 blocks 中
+    pub thinking_text: String,
     /// 本轮产生的 tool_calls(可能为空,表示纯文本回复)
     pub tool_calls: Vec<crate::models::ToolCall>,
     /// provider 内部是否已通过 emitter 发射过 error 事件
@@ -226,6 +245,22 @@ pub enum StreamEvent {
         arguments: String,
         /// 审批原因(写文件时是 "write to <path>")
         reason: String,
+    },
+    /// 模型调用了 ask_user tool — 需要用户在 QuestionModal 中做出选择
+    /// 前端弹 QuestionModal,点击选项/输入自定义答案后
+    /// invoke('answer_tool_question', {id, selected, custom})
+    ToolQuestionRequired {
+        id: String,
+        /// 始终是 "ask_user",保留字段便于前端过滤
+        name: String,
+        /// 问题文本
+        question: String,
+        /// 2-4 个选项
+        options: Vec<QuestionOption>,
+        /// 是否允许多选
+        multi_select: bool,
+        /// 短标签(chip)
+        header: String,
     },
     /// 一轮 assistant 完成,统计待处理 tool_call 数
     /// tool_calls_pending == 0 时整次 send_message 也将结束
@@ -361,6 +396,26 @@ impl StreamEventEmitter {
             name: name.to_string(),
             arguments: arguments.to_string(),
             reason: reason.to_string(),
+        });
+    }
+
+    /// 发射 ToolQuestionRequired 事件(模型调用了 ask_user tool)
+    pub fn tool_question_required(
+        &self,
+        id: &str,
+        name: &str,
+        question: &str,
+        options: Vec<QuestionOption>,
+        multi_select: bool,
+        header: &str,
+    ) {
+        self.emit(&StreamEvent::ToolQuestionRequired {
+            id: id.to_string(),
+            name: name.to_string(),
+            question: question.to_string(),
+            options,
+            multi_select,
+            header: header.to_string(),
         });
     }
 

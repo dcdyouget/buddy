@@ -94,6 +94,11 @@ fn write_manifest(dir: &PathBuf, manifest: &Manifest) -> Result<(), String> {
 
 // ── Messages ──────────────────────────────────────────────
 
+/// 全局写入锁 —— 防止 `tokio::task::spawn_blocking` 并发调用 `append_message`
+/// 时产生读写竞态（两个任务同时读 chunk → 各追加一条 → 后写覆盖先写 → 丢消息）。
+/// `std::sync::Mutex` 在 `spawn_blocking` 线程中阻塞是预期行为。
+static APPEND_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// 追加一条新消息到分块存储
 ///
 /// 分块逻辑：
@@ -101,7 +106,10 @@ fn write_manifest(dir: &PathBuf, manifest: &Manifest) -> Result<(), String> {
 /// 2. 若已满则创建新分块（chunk_002.json, chunk_003.json...）
 /// 3. 将消息追加到目标分块末尾
 /// 4. 更新 manifest 中的计数
+///
+/// 线程安全:通过 `APPEND_LOCK` 串行化所有写入,防止并发 `spawn_blocking` 丢消息。
 pub fn append_message(app: &tauri::AppHandle, message: &Message) -> Result<(), String> {
+    let _guard = APPEND_LOCK.lock().map_err(|e| format!("获取写入锁失败: {}", e))?;
     let dir = ensure_data_dir(app)?;
     let mut manifest = read_manifest(&dir);
 

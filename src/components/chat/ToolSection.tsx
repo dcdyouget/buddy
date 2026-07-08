@@ -1,0 +1,358 @@
+import { memo, useCallback, useEffect, useState } from 'react';
+import {
+  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  CircleDashed,
+  FilePlus2,
+  FileText,
+  FilePenLine,
+  FileOutput,
+  HelpCircle,
+  Loader2,
+  Wrench,
+  XCircle,
+} from 'lucide-react';
+import type { ToolCall, ToolCallStatus } from '@/types';
+import { CodeBlock } from './CodeBlock';
+
+interface ToolSectionProps {
+  toolCall: ToolCall;
+  isStreaming: boolean;
+}
+
+// ── 状态图标 + 文字 ──
+
+function getStatusMeta(status: ToolCallStatus | undefined): {
+  label: string;
+  Icon: typeof Loader2;
+  color: string;
+  spin: boolean;
+} {
+  switch (status) {
+    case 'executing':
+      return { label: '执行中', Icon: Loader2, color: '#3b82f6', spin: true };
+    case 'done':
+      return { label: '已完成', Icon: CheckCircle2, color: '#16a34a', spin: false };
+    case 'error':
+      return { label: '失败',   Icon: XCircle,     color: '#dc2626', spin: false };
+    case 'calling':
+    default:
+      return { label: '准备中', Icon: CircleDashed, color: '#71717f', spin: false };
+  }
+}
+
+// ── 工具名 → 图标 + 左边框色 ──
+
+function getToolIcon(name: string): { Icon: typeof FileText; borderColor: string } {
+  switch (name) {
+    case 'read_file':
+      return { Icon: FileText, borderColor: '#3b82f6' };
+    case 'create_file':
+      return { Icon: FilePlus2, borderColor: '#16a34a' };
+    case 'overwrite_file':
+      return { Icon: FilePenLine, borderColor: '#d97706' };
+    case 'append_file':
+      return { Icon: FileOutput, borderColor: '#0891b2' };
+    case 'ask_user':
+      return { Icon: HelpCircle, borderColor: '#8b5cf6' };
+    default:
+      return { Icon: Wrench, borderColor: '#71717f' };
+  }
+}
+
+// ── 工具调用摘要(折叠时显示) ──
+
+function actionSummary(tc: ToolCall): string {
+  try {
+    const args = JSON.parse(tc.arguments);
+    if (args.path) return args.path as string;
+    if (args.question) return (args.question as string).slice(0, 50);
+    return '';
+  } catch {
+    return '';
+  }
+}
+
+// ── JSON pretty print ──
+
+function prettyArgs(raw: string): string {
+  if (!raw) return '(空参数)';
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2);
+  } catch {
+    return raw;
+  }
+}
+
+export const ToolSection = memo(function ToolSection({
+  toolCall,
+  isStreaming,
+}: ToolSectionProps) {
+  const { label, Icon, color, spin } = getStatusMeta(toolCall.status);
+  const { Icon: ToolIcon, borderColor } = getToolIcon(toolCall.name);
+
+  const initialExpanded =
+    isStreaming && (toolCall.status === 'calling' || toolCall.status === 'executing');
+  const [expanded, setExpanded] = useState(initialExpanded);
+  const [userToggled, setUserToggled] = useState(false);
+
+  useEffect(() => {
+    if (initialExpanded) {
+      setExpanded(true);
+      setUserToggled(false);
+    } else if (!userToggled) {
+      setExpanded(false);
+    }
+  }, [initialExpanded, userToggled]);
+
+  const toggle = useCallback(() => {
+    setUserToggled(true);
+    setExpanded((prev) => !prev);
+  }, []);
+
+  const argsText = prettyArgs(toolCall.arguments);
+  const hasResult = toolCall.status === 'done' || toolCall.status === 'error';
+  const summary = actionSummary(toolCall);
+  const isAskUser = toolCall.name === 'ask_user';
+
+  return (
+    <div
+      onClick={toggle}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          toggle();
+        }
+      }}
+      style={{
+        border: '1px solid var(--border-subtle)',
+        borderLeft: `3px solid ${borderColor}`,
+        borderRadius: 'var(--radius-md)',
+        borderTopLeftRadius: 0,
+        borderBottomLeftRadius: 0,
+        overflow: 'hidden',
+        margin: 'var(--space-2) 0',
+        cursor: 'pointer',
+        width: '100%',
+        boxSizing: 'border-box',
+        background: 'var(--bg-sunken)',
+      }}
+    >
+      {/* ── Header ── */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 'var(--space-2)',
+          width: '100%',
+          padding: 'var(--space-1) var(--space-2)',
+          background: 'transparent',
+          border: 'none',
+          fontSize: 'var(--font-size-sm)',
+          color: 'var(--text-muted)',
+          boxSizing: 'border-box',
+          minHeight: 28,
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.background = 'var(--bg-sunken)';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = 'transparent';
+        }}
+      >
+        <ToolIcon size={14} style={{ color: borderColor, flexShrink: 0 }} />
+        <span
+          style={{
+            fontWeight: 600,
+            color: 'var(--text-primary)',
+            fontFamily: 'var(--font-mono)',
+            fontSize: 'var(--font-size-xs)',
+          }}
+        >
+          {toolCall.name}
+        </span>
+        {/* 折叠时显示摘要 */}
+        {!expanded && summary && (
+          <span
+            style={{
+              flex: 1,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              fontSize: 'var(--font-size-xs)',
+              color: 'var(--text-tertiary)',
+              fontFamily: 'var(--font-mono)',
+            }}
+          >
+            → {summary}
+          </span>
+        )}
+        {/* 状态徽标 */}
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 3,
+            padding: '1px 6px',
+            borderRadius: 'var(--radius-full)',
+            background: `${color}15`,
+            color,
+            fontSize: 10,
+            fontWeight: 600,
+            lineHeight: 1.4,
+            flexShrink: 0,
+          }}
+        >
+          <Icon size={10} className={spin ? 'buddy-spin' : undefined} />
+          {label}
+        </span>
+        <span style={{ flex: expanded ? 1 : 0 }} />
+        {expanded ? (
+          <ChevronDown size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+        ) : (
+          <ChevronRight size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+        )}
+      </div>
+
+      {/* ── 展开内容 ── */}
+      {expanded && (
+        <div
+          style={{
+            padding: '0 var(--space-2) var(--space-2) var(--space-2)',
+            borderTop: '1px solid var(--border-subtle)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 'var(--space-2)',
+            width: '100%',
+            boxSizing: 'border-box',
+            background: 'var(--bg-sunken)',
+          }}
+        >
+          {/* ── ask_user 特殊渲染 ── */}
+          {isAskUser && (
+            <AskUserCard toolCall={toolCall} hasResult={hasResult} />
+          )}
+
+          {/* ── 普通 tool 参数 ── */}
+          {!isAskUser && (
+            <div>
+              <div style={{
+                fontSize: 10, color: 'var(--text-tertiary)', margin: 'var(--space-2) 0 4px',
+                textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 700,
+              }}>
+                参数
+              </div>
+              <CodeBlock language="json" source={argsText} />
+            </div>
+          )}
+
+          {/* ── 结果 ── */}
+          {hasResult && toolCall.result && (
+            <div>
+              <div style={{
+                fontSize: 10,
+                color: toolCall.is_error_result ? '#dc2626' : 'var(--text-tertiary)',
+                margin: 'var(--space-1) 0 4px',
+                textTransform: 'uppercase',
+                letterSpacing: '0.04em',
+                fontWeight: 700,
+              }}>
+                {toolCall.is_error_result ? '错误' : '结果'}
+              </div>
+              <CodeBlock language="text" source={toolCall.result} />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+},
+(prevProps, nextProps) => {
+  return (
+    prevProps.toolCall === nextProps.toolCall &&
+    prevProps.isStreaming === nextProps.isStreaming
+  );
+});
+
+// ── ask_user 卡片(展开时显示) ──
+
+function AskUserCard({ toolCall, hasResult }: { toolCall: ToolCall; hasResult: boolean }) {
+  let parsed: {
+    question?: string;
+    header?: string;
+    options?: { label: string; description?: string; requires_input?: boolean; input_placeholder?: string }[];
+    multi_select?: boolean;
+  } = {};
+  try { parsed = JSON.parse(toolCall.arguments); } catch { /* */ }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+      {/* header chip */}
+      {parsed.header && (
+        <div style={{
+          display: 'inline-flex', alignItems: 'center', gap: 5, alignSelf: 'flex-start',
+          marginTop: 'var(--space-2)',
+          padding: '3px 10px', borderRadius: 'var(--radius-full)',
+          background: '#8b5cf615', color: '#8b5cf6', fontSize: 11, fontWeight: 700,
+        }}>
+          <HelpCircle size={12} />
+          {parsed.header}
+          {parsed.multi_select && <span style={{ color: 'var(--text-tertiary)', fontWeight: 400 }}>· 多选</span>}
+        </div>
+      )}
+      {/* question */}
+      {parsed.question && (
+        <div style={{ fontSize: 'var(--font-size-base)', color: 'var(--text-primary)', fontWeight: 500, lineHeight: 1.5 }}>
+          {parsed.question}
+        </div>
+      )}
+      {/* options */}
+      {parsed.options && parsed.options.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {parsed.options.map((opt, i) => (
+            <div key={i} style={{
+              display: 'flex', alignItems: 'flex-start', gap: 8,
+              padding: '6px 10px', border: '1px solid var(--border-subtle)',
+              borderRadius: 'var(--radius-sm)', background: 'var(--bg-surface)', fontSize: 'var(--font-size-sm)',
+            }}>
+              <span style={{ color: 'var(--text-tertiary)', fontVariantNumeric: 'tabular-nums', flexShrink: 0 }}>
+                {i + 1}.
+              </span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  <span style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{opt.label}</span>
+                  {opt.requires_input && (
+                    <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 'var(--radius-full)', background: 'var(--bg-sunken)', color: 'var(--text-tertiary)', fontWeight: 600 }}>
+                      input
+                    </span>
+                  )}
+                </div>
+                {opt.description && (
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>{opt.description}</div>
+                )}
+                {opt.requires_input && opt.input_placeholder && (
+                  <div style={{ fontSize: 10, color: 'var(--text-tertiary)', marginTop: 2, fontFamily: 'var(--font-mono)' }}>
+                    ↳ {opt.input_placeholder}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {/* answer */}
+      {hasResult && toolCall.result && (
+        <div style={{
+          fontSize: 'var(--font-size-sm)', color: 'var(--text-muted)',
+          padding: '6px 10px', background: 'var(--bg-surface)', borderRadius: 'var(--radius-sm)', whiteSpace: 'pre-wrap',
+        }}>
+          <span style={{ color: 'var(--text-tertiary)' }}>用户回应: </span>
+          <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{toolCall.result}</span>
+        </div>
+      )}
+    </div>
+  );
+}

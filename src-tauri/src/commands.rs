@@ -5,13 +5,13 @@
 
 use crate::models::*;
 use crate::providers::{self, ProviderType};
-use crate::streaming::{ContentBlock, StopReason, StreamEventEmitter};
+use crate::streaming::{ContentBlock, QuestionOption, StopReason, StreamEventEmitter};
 use crate::storage;
-use crate::tools::ToolRegistry;
+use crate::tools::{AskUserAnswer, AskUserArgs, AskUserOption, ToolRegistry};
 use log::{info, warn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use parking_lot::Mutex;
-use tauri::State;
+use tauri::{Manager, State};
 use tokio::sync::{oneshot, watch};
 /// 取消状态：跨命令共享的取消通道
 ///
@@ -60,6 +60,37 @@ pub struct ApprovalState {
     pub pending: Mutex<Vec<ApprovalSlot>>,
     /// "本次都允许"标志:send_message 进入审批循环时检查,跳过所有 ToolApprovalRequired
     pub approve_all_for_turn: AtomicBool,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ask_user 问题等待状态
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// 当模型调用 ask_user tool 时, send_message 会:
+//   1. 解析 arguments(question/options/multi_select/header)
+//   2. 发射 ToolQuestionRequired 事件(让前端弹 QuestionModal)
+//   3. 创建 oneshot channel, 把 receiver 存进 QuestionState
+//   4. await receiver → 拿到用户选择
+//   5. 前端调用 answer_tool_question(id, selected, custom) → 通过 sender 推回
+
+/// 一次 ask_user 调用的等待槽位
+pub struct QuestionSlot {
+    /// tool_call.id
+    pub id: String,
+    /// 工具名(始终为 "ask_user")
+    pub name: String,
+    /// 原始参数 JSON 字符串(供 UI 展示)
+    pub arguments: String,
+    /// 解析后的选项(用于构造 tool result)
+    pub options: Vec<AskUserOption>,
+    /// oneshot sender:前端 invoke('answer_tool_question', ...) 通过这里推回结果
+    pub tx: Option<oneshot::Sender<AskUserAnswer>>,
+}
+
+/// 共享问题等待状态
+pub struct QuestionState {
+    /// 当前挂起待回答的 slot 列表
+    pub pending: Mutex<Vec<QuestionSlot>>,
 }
 // ── 滑动窗口辅助函数 ──
 
@@ -238,16 +269,20 @@ pub async fn send_message(
     // 每次 send_message 开始时重置"本次都允许"标志，防止上次被中断时残留
     approval.approve_all_for_turn.store(false, Ordering::Relaxed);
 
-    // 工具循环上限(防止 model 死循环):最多 5 轮 tool 调用
-    const MAX_TOOL_TURNS: usize = 5;
+    // 工具循环上限(防止 model 死循环):
+    // - 硬上限 20 轮(安全网,正常情况下不会触发)
+    // - 软上限:连续 3 轮全部 tool 执行失败则中断,避免 model 反复失败同一操作
+    const MAX_TOOL_TURNS: usize = 20;
+    const MAX_CONSECUTIVE_FAILED_TURNS: usize = 3;
     let mut turn: usize = 0;
+    let mut consecutive_failed_turns: usize = 0;
 
     let outcome: Result<crate::streaming::StreamOutcome, _> = loop {
         turn += 1;
         if turn > MAX_TOOL_TURNS {
-            warn!("[send_message] 达到 tool 轮数上限 {}", MAX_TOOL_TURNS);
+            warn!("[send_message] 达到 tool 轮数硬上限 {}", MAX_TOOL_TURNS);
             break Err(crate::providers::ApiError::NetworkError(
-                format!("达到 tool 轮数上限 {}", MAX_TOOL_TURNS),
+                format!("已达到最大工具调用轮数 {}", MAX_TOOL_TURNS),
             ));
         }
 
@@ -276,8 +311,22 @@ pub async fn send_message(
         };
 
         // 持久化本轮 assistant 消息
-        if !out.full_text.is_empty() || !out.tool_calls.is_empty() {
-            let blocks = ContentBlock::parse_from_text(&out.full_text);
+        if !out.full_text.is_empty() || !out.tool_calls.is_empty() || !out.thinking_text.is_empty() {
+            // 合并思考 + 文本为 blocks
+            // - thinking_text 非空时:显式构造 thinking + text 块
+            // - thinking_text 为空时:尝试从 full_text 解析 <think> 标签(部分模型把思考包在 text 里)
+            let blocks = if !out.thinking_text.is_empty() {
+                let mut b = vec![ContentBlock::Thinking {
+                    content: out.thinking_text.clone(),
+                    is_open: false,
+                }];
+                if !out.full_text.is_empty() {
+                    b.push(ContentBlock::Text { content: out.full_text.clone() });
+                }
+                b
+            } else {
+                ContentBlock::parse_from_text(&out.full_text)
+            };
             let assistant_msg = Message {
                 id: format!("a-{}-{}", turn, chrono::Utc::now().timestamp_millis()),
                 role: MessageRole::Assistant,
@@ -306,7 +355,103 @@ pub async fn send_message(
         // 有 tool_calls → 顺序执行(并发=1;P4 决定),再调 stream_chat
         info!("[send_message] turn {} 收到 {} 个 tool_call,开始执行",
             turn, out.tool_calls.len());
+        // 本轮追踪:是否有至少一个 tool 执行成功(非 is_error)?
+        let mut turn_has_success = false;
         for call in &out.tool_calls {
+            // ── ask_user 特殊分支:不进入普通 tool.execute,而是弹 QuestionModal 等回答 ──
+            if call.name == "ask_user" {
+                let args_value: serde_json::Value = match serde_json::from_str(&call.arguments) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let content = format!("ask_user 参数解析失败: {}", e);
+                        emitter.tool_result(&call.id, "ask_user", &content, true);
+                        let tool_msg = build_tool_msg(turn, call, content, true);
+                        let app_handle = app.clone();
+                        let to_persist = tool_msg.clone();
+                        tokio::task::spawn_blocking(move || {
+                            storage::append_message(&app_handle, &to_persist).unwrap_or_else(|e| warn!("持久化消息失败: {}", e));
+                        });
+                        conv_messages.push(tool_msg.clone());
+                        continue;
+                    }
+                };
+                let parsed: AskUserArgs = match serde_json::from_value(args_value) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        let content = format!("ask_user 参数校验失败: {}", e);
+                        emitter.tool_result(&call.id, "ask_user", &content, true);
+                        let tool_msg = build_tool_msg(turn, call, content, true);
+                        let app_handle = app.clone();
+                        let to_persist = tool_msg.clone();
+                        tokio::task::spawn_blocking(move || {
+                            storage::append_message(&app_handle, &to_persist).unwrap_or_else(|e| warn!("持久化消息失败: {}", e));
+                        });
+                        conv_messages.push(tool_msg.clone());
+                        continue;
+                    }
+                };
+
+                // 发射 ToolQuestionRequired,前端弹 QuestionModal
+                let q_options: Vec<QuestionOption> = parsed.options.iter().map(|o| QuestionOption {
+                    label: o.label.clone(),
+                    description: o.description.clone(),
+                    requires_input: o.requires_input,
+                    input_placeholder: o.input_placeholder.clone(),
+                }).collect();
+                emitter.tool_question_required(
+                    &call.id,
+                    "ask_user",
+                    &parsed.question,
+                    q_options,
+                    parsed.multi_select,
+                    &parsed.header,
+                );
+
+                // 阻塞等待用户回答
+                let (tx, rx) = oneshot::channel::<AskUserAnswer>();
+                let q_state = app.state::<QuestionState>();
+                q_state.pending.lock().push(QuestionSlot {
+                    id: call.id.clone(),
+                    name: "ask_user".to_string(),
+                    arguments: call.arguments.clone(),
+                    options: parsed.options.clone(),
+                    tx: Some(tx),
+                });
+
+                let answer = tokio::select! {
+                    _ = cancel_rx.changed() => {
+                        // 取消时移除 slot,按 "用户跳过" 处理
+                        if let Some(idx) = q_state.pending.lock().iter().position(|s| s.id == call.id) {
+                            q_state.pending.lock().remove(idx);
+                        }
+                        warn!("[send_message] ask_user 等待被用户取消");
+                        AskUserAnswer { selected: vec![], inputs: vec![], custom: Some("(已取消)".to_string()) }
+                    }
+                    result = rx => {
+                        match result {
+                            Ok(a) => a,
+                            Err(_) => {
+                                warn!("[send_message] ask_user oneshot 失败");
+                                AskUserAnswer { selected: vec![], inputs: vec![], custom: Some("(无响应)".to_string()) }
+                            }
+                        }
+                    }
+                };
+
+                // 把答案转成 tool result 文本
+                let content = format_ask_user_answer(&parsed.options, &answer);
+                turn_has_success = true; // 用户回答了就是成功
+                emitter.tool_result(&call.id, "ask_user", &content, false);
+                let tool_msg = build_tool_msg(turn, call, content, false);
+                let app_handle = app.clone();
+                let to_persist = tool_msg.clone();
+                tokio::task::spawn_blocking(move || {
+                    storage::append_message(&app_handle, &to_persist).unwrap_or_else(|e| warn!("持久化消息失败: {}", e));
+                });
+                conv_messages.push(tool_msg.clone());
+                continue;
+            }
+
             let tool = match registry.get(&call.name) {
                 Some(t) => t,
                 None => {
@@ -395,9 +540,14 @@ pub async fn send_message(
                 Ok(o) => (o.content.clone(), o.is_error),
                 Err(e) => (format!("执行失败: {}", e), true),
             };
-            info!("[send_message] turn {} tool '{}' 执行结果: is_error={}, content_len={}",
-                turn, call.name, is_error, content.len());
+            info!("[send_message] turn {} tool '{}' 执行结果: is_error={}, content_len={}, id={}",
+                turn, call.name, is_error, content.len(), call.id);
+            if !is_error {
+                turn_has_success = true;
+            }
             emitter.tool_result(&call.id, &call.name, &content, is_error);
+            info!("[send_message] turn {} tool '{}' tool_result 事件已发射 (id={})",
+                turn, call.name, call.id);
             let tool_msg = build_tool_msg(turn, call, content, is_error);
             let app_handle = app.clone();
             let to_persist = tool_msg.clone();
@@ -405,6 +555,26 @@ pub async fn send_message(
                 storage::append_message(&app_handle, &to_persist).unwrap_or_else(|e| warn!("持久化消息失败: {}", e));
             });
             conv_messages.push(tool_msg.clone());
+        }
+        // ── 本轮总结:如果所有 tool 都失败了,累计连续失败计数 ──
+        if out.tool_calls.is_empty() {
+            // 没有 tool_call,谈不上失败
+        } else if turn_has_success {
+            consecutive_failed_turns = 0;
+        } else {
+            consecutive_failed_turns += 1;
+            warn!(
+                "[send_message] turn {} 全部 tool 执行失败 (连续 {}/{} 轮)",
+                turn, consecutive_failed_turns, MAX_CONSECUTIVE_FAILED_TURNS
+            );
+            if consecutive_failed_turns >= MAX_CONSECUTIVE_FAILED_TURNS {
+                break Err(crate::providers::ApiError::NetworkError(
+                    format!(
+                        "连续 {} 轮工具调用全部失败,已中断对话",
+                        consecutive_failed_turns
+                    ),
+                ));
+            }
         }
         // 继续下一轮:重新调 stream_chat(把 tool result 给 model)
     };
@@ -487,6 +657,93 @@ pub async fn approve_tool_call(
     if let Some(tx) = slot.tx.take() {
         // 忽略 send 错误:意味着 receiver 已被 drop(send_message 中途崩了)
         let _ = tx.send(approved);
+    }
+    Ok(())
+}
+
+/// 把 AskUserAnswer 格式化成给 model 看的 tool result 文本
+///
+/// 格式:
+/// - 单选带输入:`User selected: 选其他文件\nUser input: /Users/me/foo.txt`
+/// - 多选:`User selected:\n- 选项A (input: foo)\n- 选项B`
+/// - 自定义:`User responded: <text>`
+/// - 跳过:`User skipped the question`
+fn format_ask_user_answer(options: &[AskUserOption], answer: &AskUserAnswer) -> String {
+    // 优先用 selected 索引
+    if !answer.selected.is_empty() {
+        // 收集 (label, optional_input) 对
+        let pairs: Vec<(String, String)> = answer
+            .selected
+            .iter()
+            .enumerate()
+            .filter_map(|(i, idx)| {
+                options.get(*idx).map(|o| {
+                    let input = answer.inputs.get(i).cloned().unwrap_or_default();
+                    (o.label.clone(), input)
+                })
+            })
+            .collect();
+
+        if !pairs.is_empty() {
+            // 单选 + 带输入
+            if pairs.len() == 1 {
+                let (label, input) = &pairs[0];
+                if !input.trim().is_empty() {
+                    return format!("User selected: {}\nUser input: {}", label, input.trim());
+                }
+                return format!("User selected: {}", label);
+            }
+            // 多选
+            let lines: Vec<String> = pairs
+                .iter()
+                .map(|(label, input)| {
+                    if !input.trim().is_empty() {
+                        format!("- {} (input: {})", label, input.trim())
+                    } else {
+                        format!("- {}", label)
+                    }
+                })
+                .collect();
+            return format!("User selected:\n{}", lines.join("\n"));
+        }
+    }
+    // 回退到自定义文本
+    if let Some(custom) = &answer.custom {
+        if !custom.trim().is_empty() {
+            return format!("User responded: {}", custom.trim());
+        }
+    }
+    "User skipped the question".to_string()
+}
+
+/// 用户回答 ask_user 的命令
+///
+/// 前端在 QuestionModal 中用户做出选择后调用。
+/// 把 AskUserAnswer 通过 oneshot 推回 send_message 的 await 点。
+#[tauri::command]
+pub async fn answer_tool_question(
+    question: State<'_, QuestionState>,
+    id: String,
+    selected: Vec<usize>,
+    inputs: Option<Vec<String>>,
+    custom: Option<String>,
+) -> Result<(), String> {
+    info!(
+        "[answer_tool_question] id={}, selected={:?}, inputs={:?}, custom={:?}",
+        id, selected, inputs, custom
+    );
+
+    let mut pending = question.pending.lock();
+    let idx = match pending.iter().position(|s| s.id == id) {
+        Some(i) => i,
+        None => {
+            warn!("[answer_tool_question] 找不到 id={} 的 slot(可能已超时)", id);
+            return Err(format!("question slot {} not found", id));
+        }
+    };
+    let mut slot = pending.remove(idx);
+    if let Some(tx) = slot.tx.take() {
+        let _ = tx.send(AskUserAnswer { selected, inputs: inputs.unwrap_or_default(), custom });
     }
     Ok(())
 }
