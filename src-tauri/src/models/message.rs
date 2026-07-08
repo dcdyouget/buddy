@@ -93,6 +93,11 @@ pub struct Message {
     /// tool 消息携带:执行是否出错（false = 成功，true = 错误）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
+    /// user 消息: 若设置, 表示这是对指定 assistant 消息的"回应",
+    /// 在 UI 上嵌套渲染在父消息内部。 数据上仍作为独立 user 消息发给模型
+    /// (让模型拿到完整上下文),仅用于前端按父 ID 嵌套。 持久化后 reload 仍生效。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_message_id: Option<String>,
 }
 
 

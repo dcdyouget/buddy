@@ -67,7 +67,6 @@ interface ChatState {
   setDraftInput: (text: string) => void;
   sendMessage: (content: string, modelId: string, parentMessageId?: string) => Promise<void>;
   stopGeneration: () => Promise<void>;
-  appendToken: (token: string) => void;
   appendTextToken: (token: string) => void;
   appendThinkingToken: (token: string) => void;
   handleTextStart: (contentIndex: number) => void;
@@ -235,14 +234,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     try {
       // Tauri 模式：调用 Rust 后端发起 SSE 请求
       const toSend = updatedMessages.slice(0, -1);
-      // ── 诊断: dump 所有 tool 相关消息 ──
-      console.warn(`[chatStore.sendMessage] 准备发送 ${toSend.length} 条消息:`);
-      toSend.forEach((m, i) => {
-        const tc = m.tool_calls ? ` tool_calls=[${m.tool_calls.map(t => t.id).join(',')}]` : '';
-        const tcid = m.tool_call_id ? ` tool_call_id=${m.tool_call_id}` : '';
-        if (m.role === 'assistant' && m.tool_calls) console.warn(`  [${i}] assistant id=${m.id}${tc}`);
-        if (m.role === 'tool') console.warn(`  [${i}] tool id=${m.id} name=${m.tool_name}${tcid} err=${m.is_error} content=${m.content.slice(0,80)}`);
-      });
       const { sendMessage: sendMsg } = await import('@/api/chat');
       await sendMsg(toSend, modelId);
     } catch (e) {
@@ -268,18 +259,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
    * 追加 token 到当前最后一条消息（兼容旧 stream-token 格式）
    * 直接追加到 content 字符串末尾，同时更新 text block。
    */
-  appendToken: (token: string) => {
-    get().appendTextToken(token);
-  },
+  // (注: 原本的 appendToken 1 行透传已删除 —— 调用方应直接用 appendTextToken)
 
   /**
-   * 追加文本 token 到当前最后一条消息
+   * 追加文本 token 到当前最后一条 assistant 消息
    * 同时更新 content 字符串（向后兼容）和 blocks 数组。
+   * 改用 findLastAssistantIdx: handleToolResult 会在 messages 末尾 push role='tool' 的消息,
+   * 直接用 length-1 可能命中 tool 消息,把新 token 写到 tool 消息的 content 上,造成污染。
    */
   appendTextToken: (token: string) => {
     const { messages } = get();
     const updated = [...messages];
-    const lastMsg = { ...updated[updated.length - 1] } as Message;
+    const idx = findLastAssistantIdx(updated);
+    if (idx < 0) return;
+    const lastMsg = { ...updated[idx] } as Message;
     lastMsg.content = (lastMsg.content || '') + token;
 
     // 更新 blocks：找到最后一个 text block 或创建新的
@@ -301,7 +294,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
     lastMsg.blocks = blocks;
 
-    updated[updated.length - 1] = lastMsg;
+    updated[idx] = lastMsg;
     set({
       messages: updated,
       streamingTokens: get().streamingTokens + 1,
@@ -334,11 +327,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
   handleTextDelta: (_contentIndex: number, delta: string) => {
     const { messages } = get();
 
-    // 更新 content 字符串（用于持久化）
+    // 改用 findLastAssistantIdx: 同 appendTextToken 注释,避免覆盖 tool 消息
     const updated = [...messages];
-    const lastMsg = { ...updated[updated.length - 1] } as Message;
+    const idx = findLastAssistantIdx(updated);
+    if (idx < 0) return;
+    const lastMsg = { ...updated[idx] } as Message;
     lastMsg.content = (lastMsg.content || '') + delta;
-    updated[updated.length - 1] = lastMsg;
+    updated[idx] = lastMsg;
 
     // 从完整 content 中解析 <think> 标签，重建 blocks
     const newBlocks = parseThinkFromText(lastMsg.content);
@@ -353,12 +348,33 @@ export const useChatStore = create<ChatState>((set, get) => ({
   /** 文本块结束 */
   handleTextEnd: (contentIndex: number, content: string) => {
     if (contentIndex === 0) {
-      // OpenAI 单块模式:每个 turn 都会发 text_end(idx=0, &full_response)
-      // 其中 content 是「当前 turn」的文本,不是累积全文。
-      // 不能整体重置 streamingBlocks(会丢失前序 turn 的内容),
-      // 改为 push 一个空文本块作为轮次分隔,让 smoothTextDelta 把下一轮的字符
-      // 追加到新 block 而不是污染前序轮。
+      // OpenAI 单块模式:每个 turn 都会发 text_end(idx=0, content=本 turn 完整文本)
+      // 这里解析 `content` 中的 <think>…</think> 标签,把它拆成 thinking + text 块。
+      // (在 commit 788f29c 中错误地只 push 空分隔块,导致 DeepSeek/Qwen 风格响应在
+      // 流式期间把 <<think>> 标签作为原始文本显示 —— 用户看 `<think>我先想一下</think>实际…`)。
+      // 同时 push 一个空 text 块作为下一轮的起点分隔,避免下轮 smoothTextDelta 把字符
+      // 追加到本 turn 的 text 块尾部。
       const blocks = [...get().streamingBlocks];
+      if (content.length > 0) {
+        const parsed = parseThinkFromText(content);
+        // 找到本 turn 对应的 text 块位置:
+        // - 若末尾是空 text 块(说明上一轮 text_end 已推入分隔符),则倒数第二块是本 turn 的 text
+        // - 否则末尾就是本 turn 的 text
+        const lastIdx = blocks.length - 1;
+        const isTrailingSeparator =
+          lastIdx >= 0 &&
+          blocks[lastIdx].type === 'text' &&
+          blocks[lastIdx].content === '';
+        const targetIdx = isTrailingSeparator ? lastIdx - 1 : lastIdx;
+        if (targetIdx >= 0) {
+          // 替换为目标位置上的内容 (1 个或多个 block: 可能是 [thinking, text] 或 [text])
+          blocks.splice(targetIdx, 1, ...parsed);
+        } else {
+          // 极端情况: 没有任何 block —— 退化为追加
+          blocks.push(...parsed);
+        }
+      }
+      // 推入下一轮的空 text 分隔块
       blocks.push({ type: 'text', content: '' });
       set({ streamingBlocks: blocks });
     } else {
@@ -513,6 +529,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       pendingTextBuffer: '',
       error: message,
       activeToolCalls: {},
+      // 出错时也清掉挂起的 ask_user 问题 —— 不清的话 modal 会永久挂着,
+      // 用户关窗后再开,modal 还在,无法 dismiss。
+      pendingQuestion: null,
+      // 同步清掉回应模式,避免 InputDock 错误地被替换成 UserResponseInput。
+      waitingForResponse: null,
     });
   },
 
@@ -523,7 +544,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((s) => ({ pendingTextBuffer: s.pendingTextBuffer + delta }));
   },
 
-  /** rAF 每帧调用：从缓冲区取 count 个字符，追加到 streamingBlocks 和 messages[last].content */
+  /** rAF 每帧调用：从缓冲区取 count 个字符，追加到 streamingBlocks 和 messages[lastAssistant].content */
   smoothTextDelta: (count: number) => {
     const { pendingTextBuffer, messages, streamingBlocks } = get();
     if (pendingTextBuffer.length === 0) return;
@@ -531,11 +552,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const chars = pendingTextBuffer.slice(0, count);
     const rest = pendingTextBuffer.slice(count);
 
-    // 更新最后一条消息的 content（用于持久化）
+    // 改用 findLastAssistantIdx: handleToolResult 可能把 tool 消息 push 到末尾
     const updated = [...messages];
-    const lastMsg = { ...updated[updated.length - 1] } as Message;
+    const idx = findLastAssistantIdx(updated);
+    if (idx < 0) return;
+    const lastMsg = { ...updated[idx] } as Message;
     lastMsg.content = (lastMsg.content || '') + chars;
-    updated[updated.length - 1] = lastMsg;
+    updated[idx] = lastMsg;
 
     // 增量追加到 streamingBlocks（不完全 parseThinkFromText，避免 O(n²)）
     const blocks = [...streamingBlocks];
@@ -567,9 +590,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
   /** 流式生成完成后的收尾工作 */
   finalizeMessage: () => {
     const { messages } = get();
-    // 闭合所有未完成的 thinking block
+    // 改用 findLastAssistantIdx: 同 appendTextToken
     const updated = [...messages];
-    const lastMsg = { ...updated[updated.length - 1] } as Message;
+    const idx = findLastAssistantIdx(updated);
+    if (idx < 0) {
+      set({ isStreaming: false, streamingTokens: 0, streamingModelId: null });
+      return;
+    }
+    const lastMsg = { ...updated[idx] } as Message;
     if (lastMsg.blocks) {
       lastMsg.blocks = lastMsg.blocks.map((b: ContentBlock) =>
         b.type === 'thinking' && b.is_open ? { ...b, is_open: false } : b,
@@ -579,7 +607,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if ((!lastMsg.blocks || lastMsg.blocks.length === 0) && lastMsg.content) {
       lastMsg.blocks = parseThinkFromText(lastMsg.content);
     }
-    updated[updated.length - 1] = lastMsg;
+    updated[idx] = lastMsg;
 
     set({
       messages: updated,
@@ -643,7 +671,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
   /**
    * 计算 tool_call 应当插入到哪个 block 之后。
    * 跳过尾部由 text_end 推入的空文本块(它们是轮次分隔符,不算内容 block)。
-   * 如果没有 block 或全是空 block,返回 -1(渲染时放在所有 block 之后)。
+   * 如果没有非空 block(还没有任何文本),返回 0 而不是 -1:
+   * - 返回 -1 会让 MessageBubble 把 tool 分桶到 Map[-1],渲染循环只读 0..blocks.length,
+   *   -1 桶永远不读,tool_call 不可见。
+   * - 返回 0 让 MessageBubble 把它放在第一个 block 之后;若 blocks 为空,
+   *   MessageBubble 还有「blocks.length === 0 全渲染」的兜底分支。
    */
   _computeInsertAfterBlockIndex: (): number => {
     const blocks = get().streamingBlocks;
@@ -652,7 +684,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       if (b.type === 'text' && b.content !== '') return i;
       if (b.type === 'thinking' && b.content !== '') return i;
     }
-    return -1;
+    return 0;
   },
 
   handleToolCallStart: (id: string, name: string, _contentIndex: number) => {
@@ -691,8 +723,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   handleToolResult: (id: string, name: string, content: string, isError: boolean) => {
-    console.warn(`[chatStore] tool_result id=${id} name=${name} err=${isError} len=${content.length} msgs_before=${get().messages.length}`);
-
     // 用一个 set + 一个本地变量,防止两次 set 的间隙被其他事件插入
     const state = get();
     const active = { ...state.activeToolCalls };
@@ -717,7 +747,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       activeToolCalls: active,
       messages: [...state.messages, toolMsg],
     });
-    console.warn(`[chatStore] tool_result done msgs_after=${get().messages.length}`);
   },
 
   handleToolApprovalRequired: (id: string, name: string, args: string, reason: string) => {

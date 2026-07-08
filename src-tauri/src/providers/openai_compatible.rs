@@ -863,6 +863,7 @@ mod tests {
             blocks: None, model_id: None, created_at: 0,
             tool_calls: None, tool_call_id: Some(tc_id.to_string()),
             tool_name: Some("read_file".to_string()), is_error: Some(false),
+            parent_message_id: None,
         }
     }
 
@@ -876,27 +877,32 @@ mod tests {
                 arguments: "{}".to_string(),
             }]),
             tool_call_id: None, tool_name: None, is_error: None,
+            parent_message_id: None,
         }
     }
 
     #[test]
     fn test_convert_tool_msg_has_tool_call_id() {
         // 需要 assistant 消息中有匹配的 tool_call，否则会被校验过滤
+        // 注意: convert_messages 会在最前面注入 BUDDY_SYSTEM_PROMPT,索引 0 是 system
         let msgs = [
             make_assistant_with_tool_call("a1", "call_x", "read_file"),
             make_tool_msg("t1", "call_x", "hi"),
         ];
         let out = OpenAICompatibleProvider::convert_messages(&msgs);
-        assert_eq!(out[0]["role"], "assistant");
-        assert_eq!(out[1]["role"], "tool");
-        assert_eq!(out[1]["tool_call_id"], "call_x");
+        assert_eq!(out[0]["role"], "system");
+        assert_eq!(out[1]["role"], "assistant");
+        assert_eq!(out[2]["role"], "tool");
+        assert_eq!(out[2]["tool_call_id"], "call_x");
     }
 
     #[test]
     fn test_convert_tool_msg_orphan_id_stripped() {
         // 孤儿的 tool 消息（没有匹配的 assistant tool_call）应被整条过滤掉
+        // 转换后只剩 system prompt 注入(无其他对话消息)
         let out = OpenAICompatibleProvider::convert_messages(&[make_tool_msg("t1", "orphan_id", "hi")]);
-        assert!(out.is_empty(), "孤儿 tool 消息应被整条过滤");
+        assert_eq!(out.len(), 1, "只剩 system 注入,孤儿 tool 应被过滤");
+        assert_eq!(out[0]["role"], "system");
     }
 
     #[test]

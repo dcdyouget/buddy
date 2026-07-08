@@ -739,7 +739,7 @@ mod tests {
         let tools = builtin_tools(vec![]);
         for t in &tools {
             match t.name() {
-                "read_file" => assert_eq!(t.safety(), ToolSafety::ReadOnly),
+                "read_file" | "ask_user" => assert_eq!(t.safety(), ToolSafety::ReadOnly),
                 "create_file" | "overwrite_file" | "append_file" => {
                     assert_eq!(t.safety(), ToolSafety::Write)
                 }
