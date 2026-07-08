@@ -190,6 +190,16 @@ html[data-platform="windows"] #root {
   border-radius: 1px;
 }
 
+/* ── Spinner (用于 ToolSection "执行中" 图标) ── */
+@keyframes buddy-spin {
+  to { transform: rotate(360deg); }
+}
+
+.buddy-spin {
+  animation: buddy-spin 1.2s linear infinite;
+  transform-origin: center;
+}
+
 /* ── Reduced Motion ── */
 @media (prefers-reduced-motion: reduce) {
   *,

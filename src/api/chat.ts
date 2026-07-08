@@ -23,3 +23,19 @@ export async function sendMessage(messages: Message[], modelId: string): Promise
 export async function stopGeneration(): Promise<void> {
   await invokeBackend('stop_generation');
 }
+
+/**
+ * 回答 ask_user tool 的提问
+ * @param id  tool_call.id
+ * @param selected 选中的选项索引(单选/多选)
+ * @param inputs   对应 selected 中每个选项的补充输入(可选)
+ * @param custom   用户输入的自定义回答(可选)
+ */
+export async function answerToolQuestion(args: {
+  id: string;
+  selected: number[];
+  inputs?: string[];
+  custom: string | null;
+}): Promise<void> {
+  await invokeBackend('answer_tool_question', args);
+}

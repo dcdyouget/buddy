@@ -339,6 +339,7 @@ impl LlmProvider for AnthropicProvider {
 
             // 流式状态追踪变量（mut 表示可变）
             let mut full_response = String::new();       // 累积完整回复文本
+            let mut thinking_response = String::new(); // 累积思考文本
             let mut current_event: Option<String> = None;// 当前事件类型
             let mut content_index: usize = 0;            // 内容块索引
             let mut _has_started = false;                // 下划线前缀：未使用变量（Rust 会警告）
@@ -389,7 +390,7 @@ impl LlmProvider for AnthropicProvider {
                                 "用户取消",
                                 &full_response,
                             );
-                            return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![], had_stream_error: true });
+                            return Ok(StreamOutcome { full_text: full_response, thinking_text: thinking_response, tool_calls: vec![], had_stream_error: true });
                         }
                         continue;  // 还没取消，继续下一轮循环
                     }
@@ -410,7 +411,7 @@ impl LlmProvider for AnthropicProvider {
                                     "读取超时",
                                     &full_response,
                                 );
-                                return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![], had_stream_error: true });
+                                return Ok(StreamOutcome { full_text: full_response, thinking_text: thinking_response, tool_calls: vec![], had_stream_error: true });
                             }
                         }
                     }
@@ -535,6 +536,7 @@ impl LlmProvider for AnthropicProvider {
                                                                         content_index,
                                                                         thinking,
                                                                     );
+                                                                    thinking_response.push_str(thinking);
                                                                 }
                                                             }
                                                             "signature_delta" => {
@@ -584,7 +586,7 @@ impl LlmProvider for AnthropicProvider {
                                                         );
                                                         let calls = flush_tool_calls(&mut tool_calls, emitter);
                                                         // done 事件由 commands.rs 在整轮 tool 循环结束时统一发射
-                                                        return Ok(StreamOutcome { full_text: full_response, tool_calls: calls, had_stream_error: false });
+                                                        return Ok(StreamOutcome { full_text: full_response, thinking_text: thinking_response, tool_calls: calls, had_stream_error: false });
                                                     }
                                                     "error" => {
                                                         // 服务端推送的 error 事件
@@ -597,7 +599,7 @@ impl LlmProvider for AnthropicProvider {
                                                             error_msg,
                                                             &full_response,
                                                         );
-                                                        return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![], had_stream_error: true });
+                                                        return Ok(StreamOutcome { full_text: full_response, thinking_text: thinking_response, tool_calls: vec![], had_stream_error: true });
                                                     }
                                                     _ => {}
                                                 }
@@ -628,12 +630,12 @@ impl LlmProvider for AnthropicProvider {
                             &format!("流读取错误: {}", e),
                             &full_response,
                         );
-                        return Ok(StreamOutcome { full_text: full_response, tool_calls: vec![], had_stream_error: true });
+                        return Ok(StreamOutcome { full_text: full_response, thinking_text: thinking_response, tool_calls: vec![], had_stream_error: true });
                     }
                     None => {
                         let calls = flush_tool_calls(&mut tool_calls, emitter);
                         // done 事件由 commands.rs 在整轮 tool 循环结束时统一发射
-                        return Ok(StreamOutcome { full_text: full_response, tool_calls: calls, had_stream_error: false });
+                        return Ok(StreamOutcome { full_text: full_response, thinking_text: thinking_response, tool_calls: calls, had_stream_error: false });
                     }
                 }
             }

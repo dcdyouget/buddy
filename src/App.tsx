@@ -21,7 +21,6 @@ import { NoApiKeyPage } from '@/pages/NoApiKeyPage';
 import { ChatPage } from '@/pages/ChatPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { SlideInPanel } from '@/components/shared/SlideInPanel';
-import { ApprovalModal } from '@/components/shared/ApprovalModal';
 
 /**
  * 这是一个轻量级的页面路由器，避免引入 react-router 增加包体积
@@ -175,8 +174,6 @@ function App() {
           />
         )}
       </SlideInPanel>
-      {/* Tool 审批弹窗 */}
-      <ApprovalModal />
     </motion.div>
   );
 }

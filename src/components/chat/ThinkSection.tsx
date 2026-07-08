@@ -3,45 +3,40 @@ import { Brain, ChevronDown, ChevronRight } from 'lucide-react';
 import { StreamingMarkdown } from './StreamingMarkdown';
 
 /**
- * ThinkSection 组件的 Props
- * @param content - think 标签内部的原始内容（markdown 格式）
- * @param isStreaming - 此 think 块是否正在流式写入中
- * @param defaultExpanded - 初始展开状态（流式中 think 未闭合时为 true）
+ * ThinkSection — 可折叠的思考区块
+ *
+ * 视觉特征：
+ * - 左侧紫/amber 渐变边框,与常规文本明显区分
+ * - 折叠时展示第一行思考内容作为预览
+ * - 流式写入时自动展开 + pulsing dot
+ * - 完成后默认折叠,click 展开
  */
+
 interface ThinkSectionProps {
   content: string;
   isStreaming: boolean;
   defaultExpanded: boolean;
 }
 
-/**
- * 思考区块组件
- *
- * 渲染一个可折叠的思考区块：
- * - 流式中：折叠态显示 Brain 图标 + "思考中..." + pulsing dot + ChevronRight
- * - 完成后：折叠态显示 Brain 图标 + "思考内容" + ChevronRight
- * - 展开态：ChevronDown，下方渲染 markdown 内容
- * - 流式写入时自动展开，完成后默认折叠
- * - 点击整个思考框即可展开/折叠（不仅是箭头）
- * - 使用 React.memo 防止无关 token 更新导致重渲染
- */
+/** 提取 content 第一行(最多 80 字)作为折叠态预览 */
+function firstLinePreview(content: string): string {
+  const line = content.split('\n')[0] || '';
+  return line.length > 80 ? line.slice(0, 80) + '…' : line;
+}
+
 export const ThinkSection = memo(function ThinkSection({
   content,
   isStreaming,
   defaultExpanded,
 }: ThinkSectionProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
-  // 跟踪用户是否手动操作过（用于决定 think 闭合后是否自动折叠）
   const [userToggled, setUserToggled] = useState(false);
 
-  // defaultExpanded 变化时的自动展开/折叠逻辑
   useEffect(() => {
     if (defaultExpanded) {
-      // think 开始流入（<think> 到达，</think> 未到）→ 自动展开
       setExpanded(true);
-      setUserToggled(false); // 新的 think 块重置手动标记
+      setUserToggled(false);
     } else if (!userToggled) {
-      // think 闭合（</think> 到达）且用户未手动操作 → 自动折叠
       setExpanded(false);
     }
   }, [defaultExpanded, userToggled]);
@@ -50,6 +45,8 @@ export const ThinkSection = memo(function ThinkSection({
     setUserToggled(true);
     setExpanded((prev) => !prev);
   }, []);
+
+  const preview = firstLinePreview(content);
 
   return (
     <div
@@ -64,27 +61,32 @@ export const ThinkSection = memo(function ThinkSection({
       }}
       style={{
         border: '1px solid var(--border-subtle)',
+        borderLeft: '3px solid #b8a0d0', // 淡紫色左边框 — 思考标识
         borderRadius: 'var(--radius-md)',
+        borderTopLeftRadius: 0,
+        borderBottomLeftRadius: 0,
         overflow: 'hidden',
         margin: 'var(--space-2) 0',
         cursor: 'pointer',
         width: '100%',
         boxSizing: 'border-box',
+        background: 'var(--bg-sunken)',
       }}
     >
-      {/* 可点击的折叠 header */}
+      {/* ── Header ── */}
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
           gap: 'var(--space-2)',
           width: '100%',
-          padding: 'var(--space-2) var(--space-2)',
+          padding: 'var(--space-1) var(--space-2)',
           background: 'transparent',
           border: 'none',
-          fontSize: '12px',
+          fontSize: 'var(--font-size-sm)',
           color: 'var(--text-muted)',
           boxSizing: 'border-box',
+          minHeight: 28,
         }}
         onMouseEnter={(e) => {
           e.currentTarget.style.background = 'var(--bg-sunken)';
@@ -93,49 +95,74 @@ export const ThinkSection = memo(function ThinkSection({
           e.currentTarget.style.background = 'transparent';
         }}
       >
-        <Brain size={14} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-        <span style={{ fontWeight: 500 }}>
-          {isStreaming ? '思考中...' : '思考内容'}
+        <Brain size={14} style={{ color: '#9b7ec4', flexShrink: 0 }} />
+        <span
+          style={{
+            fontWeight: 600,
+            fontSize: 'var(--font-size-sm)',
+            color: 'var(--text-muted)',
+          }}
+        >
+          {isStreaming ? '正在思考' : '思考过程'}
         </span>
-        {/* 流式指示灯：一个小的 pulsing dot */}
         {isStreaming && (
           <span
             style={{
-              width: 6,
-              height: 6,
+              width: 5,
+              height: 5,
               borderRadius: 'var(--radius-full)',
-              background: 'var(--buddy-primary)',
-              opacity: 0.6,
+              background: '#9b7ec4',
+              opacity: 0.7,
+              flexShrink: 0,
             }}
           />
         )}
-        <span style={{ flex: 1 }} />
+        {/* 折叠时显示第一行预览 */}
+        {!expanded && preview && (
+          <span
+            style={{
+              flex: 1,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              fontSize: 'var(--font-size-xs)',
+              color: 'var(--text-tertiary)',
+              marginLeft: 4,
+            }}
+          >
+            {preview}
+          </span>
+        )}
+        <span style={{ flex: expanded ? 1 : 0 }} />
         {expanded ? (
-          <ChevronDown size={14} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+          <ChevronDown size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
         ) : (
-          <ChevronRight size={14} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+          <ChevronRight size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
         )}
       </div>
 
-      {/* 展开时渲染思考内容 */}
+      {/* ── 展开内容 ── */}
       {expanded && (
         <div
           style={{
             padding: '0 var(--space-2) var(--space-2) var(--space-2)',
             borderTop: '1px solid var(--border-subtle)',
-            fontSize: '13px',
+            fontSize: 'var(--font-size-base)',
             color: 'var(--text-muted)',
             width: '100%',
             boxSizing: 'border-box',
             overflowWrap: 'break-word',
             wordBreak: 'break-word',
             overflow: 'hidden',
+            background: 'var(--bg-sunken)',
           }}
         >
           {content ? (
             <StreamingMarkdown content={content} isStreaming={isStreaming} />
           ) : (
-            <span style={{ color: 'var(--text-tertiary)', fontStyle: 'italic' }}>等待思考内容...</span>
+            <span style={{ color: 'var(--text-tertiary)', fontStyle: 'italic' }}>
+              等待思考内容...
+            </span>
           )}
         </div>
       )}

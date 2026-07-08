@@ -17,7 +17,7 @@ mod tray;
 mod window;
 
 // Re-export key types for commands and hotkey modules
-pub use commands::CancelState;
+pub use commands::{CancelState, QuestionState};
 pub use window::positioning::SavedWindowPositions;
 
 /// 应用主入口：配置并启动整个 Tauri 应用
@@ -36,6 +36,9 @@ pub fn run() {
         .manage(commands::ApprovalState {
             pending: Mutex::new(Vec::new()),
             approve_all_for_turn: std::sync::atomic::AtomicBool::new(false),
+        })
+        .manage(commands::QuestionState {
+            pending: Mutex::new(Vec::new()),
         })
         .manage(hotkey::HotkeyState {
             current: Mutex::new(None),
@@ -70,6 +73,7 @@ pub fn run() {
             commands::send_message,
             commands::stop_generation,
             commands::approve_tool_call,
+            commands::answer_tool_question,
             commands::get_config,
             commands::save_config,
             commands::fetch_models,
