@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
-import { AnimatePresence } from 'framer-motion';
-import { Settings } from 'lucide-react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { AlertCircle, ChevronDown, X } from 'lucide-react';
 import { useUIStore } from '@/stores/uiStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useShallow } from 'zustand/react/shallow';
@@ -15,6 +15,7 @@ import { MessageBubble } from '@/components/chat/MessageBubble';
 import { ModelDropdown } from '@/components/chat/ModelDropdown';
 import { useDragHandle } from '@/hooks/useDragHandle';
 import { useSmoothTextRenderer } from '@/hooks/useSmoothTextRenderer';
+import { openNativeModelMenu } from '@/utils/modelMenu';
 import type { Message, ModelInfo } from '@/types';
 
 /**
@@ -43,6 +44,8 @@ export function ChatPage() {
     streamingBlocks,
     activeToolCalls,
     waitingForResponse,
+    error,
+    setError,
   } = useChatStore(
     useShallow((s) => ({
       messages: s.messages,
@@ -56,6 +59,8 @@ export function ChatPage() {
       streamingBlocks: s.streamingBlocks,
       activeToolCalls: s.activeToolCalls,
       waitingForResponse: s.waitingForResponse,
+      error: s.error,
+      setError: s.setError,
     })),
   );
   const { config } = useConfigStore();
@@ -67,6 +72,13 @@ export function ChatPage() {
   // 当前选中的模型
   const selectedModel: ModelInfo | null =
     config?.models.find((m) => m.id === config?.selected_model_id) ?? null;
+  const enabledModels = (config?.models || []).filter((model) =>
+    config?.providers.some(
+      (provider) =>
+        provider.id === model.provider_id &&
+        provider.enabled_model_ids.includes(model.id),
+    ),
+  );
   // 当前正在流式输出的模型
   const streamingModel = config?.models.find((m) => m.id === streamingModelId);
 
@@ -81,13 +93,78 @@ export function ChatPage() {
     stopGeneration();
   };
 
-  // 消息列表变化时自动滚动到底部
+  const handleModelPickerClick = async () => {
+    if (!showDropdown && config) {
+      const openedNativeMenu = await openNativeModelMenu({
+        models: enabledModels,
+        selectedId: config.selected_model_id,
+        onSelect: (id) => useConfigStore.getState().setDefaultModel(id),
+      });
+      if (openedNativeMenu) return;
+    }
+    setShowDropdown((open) => !open);
+  };
+
+  // ── 智能滚动：仅当用户在底部时才自动跟随，翻看历史时不强拉 ──
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  // 用 ref 跟踪上一次的 isAtBottom 和 showScrollButton，避免重复打 log
+  const prevIsAtBottomRef = useRef(true);
+  const prevShowButtonRef = useRef(false);
+
+  /** 判断滚动容器是否在底部（50px 容差） */
+  const checkAtBottom = useCallback((): boolean => {
+    const el = scrollRef.current;
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+  }, []);
+
+  /** 用户手动滚动时更新 isAtBottom 状态 */
+  const handleScroll = useCallback(() => {
+    const atBottom = checkAtBottom();
+    if (atBottom !== prevIsAtBottomRef.current) {
+      console.log('[Scroll] isAtBottom:', prevIsAtBottomRef.current, '→', atBottom,
+        `(scrollTop=${scrollRef.current?.scrollTop}, scrollHeight=${scrollRef.current?.scrollHeight}, clientHeight=${scrollRef.current?.clientHeight})`);
+      prevIsAtBottomRef.current = atBottom;
+    }
+    setIsAtBottom(atBottom);
+  }, [checkAtBottom]);
+
+  /** 仅在用户处于底部时才自动跟随新消息 */
   useEffect(() => {
-    if (scrollRef.current) {
+    if (scrollRef.current && isAtBottom) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, [messages, isAtBottom]);
+
+  /** 流式开始时重置为跟随模式 */
+  useEffect(() => {
+    if (isStreaming) {
+      console.log('[Scroll] 流式开始，重置 isAtBottom = true');
+      setIsAtBottom(true);
+      prevIsAtBottomRef.current = true;
+    }
+  }, [isStreaming]);
+
+  /** 手动滚动到底部 */
+  const scrollToBottom = () => {
+    console.log('[Scroll] 用户点击"滚动到底部"按钮');
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      setIsAtBottom(true);
+      prevIsAtBottomRef.current = true;
+    }
+  };
+
+  // 滚动到底按钮：流式结束后、用户翻看历史时显示
+  const showScrollButton = !isAtBottom && !isStreaming && messages.length > 0;
+
+  // 按钮显隐变化时打印日志（避免每帧 render 都打）
+  if (showScrollButton !== prevShowButtonRef.current) {
+    console.log('[Scroll] showScrollButton:', prevShowButtonRef.current, '→', showScrollButton,
+      `(isAtBottom=${isAtBottom}, isStreaming=${isStreaming}, msgCount=${messages.length})`);
+    prevShowButtonRef.current = showScrollButton;
+  }
 
   // 把『每帧重算』的两份数据移出 render: 60Hz 期间 messages 引用会变,
   // 但 visible + childByParent 的内容只在 messages 真正变化时才变。
@@ -130,6 +207,7 @@ export function ChatPage() {
       }}
     >
       <GlassPanel
+        className="buddy-shell conversation-shell"
         style={{
           flex: 1,
           display: 'flex',
@@ -140,57 +218,21 @@ export function ChatPage() {
           position: 'relative',
         }}
       >
-        {/* 设置按钮 */}
-        <div
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            height: '24px',
-            display: 'flex',
-            justifyContent: 'flex-end',
-            alignItems: 'center',
-            padding: '0 var(--space-2)',
-            zIndex: 10,
-          }}
-        >
-          <IconButton
-            icon={Settings}
-            onClick={() => setPage('settings')}
-            size={24}
-            iconSize={14}
-            title="设置"
-          />
-        </div>
-
         {/* 消息列表 */}
         <div
           ref={scrollRef}
           className="no-scrollbar"
+          onScroll={handleScroll}
           style={{
             flex: 1,
             overflowY: 'auto',
-            padding: 'var(--space-6) 0 var(--space-4) 0',
+            padding: 'var(--space-3) 0 var(--space-2)',
             display: 'flex',
             flexDirection: 'column',
-            justifyContent: messages.length === 0 ? 'center' : 'flex-start',
+            justifyContent: 'flex-start',
+            position: 'relative',
           }}
         >
-          {messages.length === 0 && (
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: 'var(--text-tertiary)',
-                fontSize: '14px',
-                paddingBottom: 'var(--space-3)',
-              }}
-            >
-              开始新对话
-            </div>
-          )}
           {/* tool 消息是内部消息，不展示给用户;parent_message_id 非空的用户回应
               也不在主列表渲染，而是嵌套到对应的 assistant 消息内。
               visible / childByParent / liveToolCallsForLast 已在 useMemo 中算好,
@@ -201,6 +243,13 @@ export function ChatPage() {
                 ? `msg-${arr[i - 1].id}`
                 : undefined;
             const isLast = isStreaming && msg.role === 'assistant' && i === arr.length - 1;
+            // 工具循环会连续产生多个 assistant 消息；视觉上应作为同一条回答紧凑衔接。
+            const isContinuation =
+              msg.role === 'assistant' && i > 0 && arr[i - 1].role === 'assistant';
+            const continuesToNext =
+              msg.role === 'assistant' &&
+              i < arr.length - 1 &&
+              arr[i + 1].role === 'assistant';
             // 流式过程中将 live blocks 注入最后一条 assistant 消息
             const displayMsg =
               isLast && streamingBlocks.length > 0
@@ -216,11 +265,55 @@ export function ChatPage() {
                 message={displayMsg}
                 isStreaming={isLast}
                 questionId={questionId}
+                isContinuation={isContinuation}
+                continuesToNext={continuesToNext}
                 liveToolCalls={isLast ? liveToolCallsForLast : undefined}
                 childResponses={childResponses}
               />
             );
           })}
+
+          {/* 滚动到底按钮：轻量浮动圆形按钮，仅在用户翻看历史且不在流式中显示 */}
+          <AnimatePresence>
+            {showScrollButton && (
+              <motion.button
+                initial={{ opacity: 0, scale: 0.8 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.8 }}
+                transition={{ duration: 0.15 }}
+                onClick={scrollToBottom}
+                title="滚动到底部"
+                style={{
+                  position: 'absolute',
+                  bottom: 'var(--space-4)',
+                  right: 'var(--space-4)',
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '50%',
+                  background: 'var(--bg-elevated)',
+                  border: '1px solid var(--border-default)',
+                  boxShadow: 'var(--shadow-floating-sm)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  zIndex: 20,
+                  color: 'var(--text-muted)',
+                  transition: 'color 0.15s, background 0.15s',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = 'var(--text-primary)';
+                  e.currentTarget.style.background = 'var(--bg-surface)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = 'var(--text-muted)';
+                  e.currentTarget.style.background = 'var(--bg-elevated)';
+                }}
+              >
+                <ChevronDown size={16} />
+              </motion.button>
+            )}
+          </AnimatePresence>
         </div>
 
         {/* 输入区域 + 弹窗容器:弹窗在输入框正上方,作为正常流元素撑起消息 */}
@@ -228,9 +321,22 @@ export function ChatPage() {
           style={{
             display: 'flex',
             flexDirection: 'column',
-            padding: messages.length === 0 ? '0 var(--space-3) var(--space-4)' : undefined,
           }}
         >
+          {error && (
+            <div className="chat-error" role="alert">
+              <AlertCircle size={15} />
+              <span>{error}</span>
+              <IconButton
+                icon={X}
+                onClick={() => setError(null)}
+                size={24}
+                iconSize={13}
+                title="关闭错误提示"
+              />
+            </div>
+          )}
+
           {/* Approval 弹窗(工具调用审批) */}
           <ApprovalModal />
           {/* ask_user 弹窗(模型问题时) */}
@@ -248,9 +354,8 @@ export function ChatPage() {
               onDraftChange={setDraftInput}
               onSend={isStreaming ? () => {} : handleSend}
               onStop={handleStop}
-              onModelPickerClick={
-                isStreaming ? () => {} : () => setShowDropdown(!showDropdown)
-              }
+              onModelPickerClick={isStreaming ? undefined : handleModelPickerClick}
+              onSettingsClick={() => setPage('settings')}
             />
           )}
         </div>
@@ -260,7 +365,7 @@ export function ChatPage() {
       <AnimatePresence>
         {showDropdown && !isStreaming && (
           <ModelDropdown
-            models={config?.models || []}
+            models={enabledModels}
             selectedId={config?.selected_model_id || ''}
             onSelect={(id) => {
               useConfigStore.getState().setDefaultModel(id);

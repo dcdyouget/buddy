@@ -31,14 +31,14 @@ function getStatusMeta(status: ToolCallStatus | undefined): {
 } {
   switch (status) {
     case 'executing':
-      return { label: '执行中', Icon: Loader2, color: '#3b82f6', spin: true };
+      return { label: '执行中', Icon: Loader2, color: 'var(--state-info)', spin: true };
     case 'done':
-      return { label: '已完成', Icon: CheckCircle2, color: '#16a34a', spin: false };
+      return { label: '已完成', Icon: CheckCircle2, color: 'var(--state-success)', spin: false };
     case 'error':
-      return { label: '失败',   Icon: XCircle,     color: '#dc2626', spin: false };
+      return { label: '失败',   Icon: XCircle,     color: 'var(--state-error)', spin: false };
     case 'calling':
     default:
-      return { label: '准备中', Icon: CircleDashed, color: '#71717f', spin: false };
+      return { label: '准备中', Icon: CircleDashed, color: 'var(--text-muted)', spin: false };
   }
 }
 
@@ -47,17 +47,17 @@ function getStatusMeta(status: ToolCallStatus | undefined): {
 function getToolIcon(name: string): { Icon: typeof FileText; borderColor: string } {
   switch (name) {
     case 'read_file':
-      return { Icon: FileText, borderColor: '#3b82f6' };
+      return { Icon: FileText, borderColor: 'var(--state-info)' };
     case 'create_file':
-      return { Icon: FilePlus2, borderColor: '#16a34a' };
+      return { Icon: FilePlus2, borderColor: 'var(--state-success)' };
     case 'overwrite_file':
-      return { Icon: FilePenLine, borderColor: '#d97706' };
+      return { Icon: FilePenLine, borderColor: 'var(--state-warning)' };
     case 'append_file':
-      return { Icon: FileOutput, borderColor: '#0891b2' };
+      return { Icon: FileOutput, borderColor: 'var(--state-info)' };
     case 'ask_user':
-      return { Icon: HelpCircle, borderColor: '#8b5cf6' };
+      return { Icon: HelpCircle, borderColor: 'var(--buddy-primary)' };
     default:
-      return { Icon: Wrench, borderColor: '#71717f' };
+      return { Icon: Wrench, borderColor: 'var(--text-muted)' };
   }
 }
 
@@ -128,17 +128,19 @@ export const ToolSection = memo(function ToolSection({
         }
       }}
       style={{
-        border: '1px solid var(--border-subtle)',
+        borderTop: '1px solid var(--border-default)',
+        borderRight: '1px solid var(--border-default)',
+        borderBottom: '1px solid var(--border-default)',
         borderLeft: `3px solid ${borderColor}`,
         borderRadius: 'var(--radius-md)',
         borderTopLeftRadius: 0,
         borderBottomLeftRadius: 0,
         overflow: 'hidden',
-        margin: 'var(--space-2) 0',
+        margin: 0,
         cursor: 'pointer',
         width: '100%',
         boxSizing: 'border-box',
-        background: 'var(--bg-sunken)',
+        background: 'var(--panel-surface)',
       }}
     >
       {/* ── Header ── */}
@@ -183,7 +185,7 @@ export const ToolSection = memo(function ToolSection({
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
               fontSize: 'var(--font-size-xs)',
-              color: 'var(--text-tertiary)',
+              color: 'var(--text-muted)',
               fontFamily: 'var(--font-mono)',
             }}
           >
@@ -198,7 +200,7 @@ export const ToolSection = memo(function ToolSection({
             gap: 3,
             padding: '1px 6px',
             borderRadius: 'var(--radius-full)',
-            background: `${color}15`,
+            background: `color-mix(in srgb, ${color} 10%, transparent)`,
             color,
             fontSize: 10,
             fontWeight: 600,
@@ -211,9 +213,9 @@ export const ToolSection = memo(function ToolSection({
         </span>
         <span style={{ flex: expanded ? 1 : 0 }} />
         {expanded ? (
-          <ChevronDown size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+          <ChevronDown size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
         ) : (
-          <ChevronRight size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+          <ChevronRight size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
         )}
       </div>
 
@@ -228,7 +230,7 @@ export const ToolSection = memo(function ToolSection({
             gap: 'var(--space-2)',
             width: '100%',
             boxSizing: 'border-box',
-            background: 'var(--bg-sunken)',
+            background: 'transparent',
           }}
         >
           {/* ── ask_user 特殊渲染 ── */}
@@ -254,7 +256,7 @@ export const ToolSection = memo(function ToolSection({
             <div>
               <div style={{
                 fontSize: 10,
-                color: toolCall.is_error_result ? '#dc2626' : 'var(--text-tertiary)',
+                color: toolCall.is_error_result ? 'var(--state-error)' : 'var(--text-tertiary)',
                 margin: 'var(--space-1) 0 4px',
                 textTransform: 'uppercase',
                 letterSpacing: '0.04em',
@@ -296,7 +298,7 @@ function AskUserCard({ toolCall, hasResult }: { toolCall: ToolCall; hasResult: b
           display: 'inline-flex', alignItems: 'center', gap: 5, alignSelf: 'flex-start',
           marginTop: 'var(--space-2)',
           padding: '3px 10px', borderRadius: 'var(--radius-full)',
-          background: '#8b5cf615', color: '#8b5cf6', fontSize: 11, fontWeight: 700,
+          background: 'var(--primary-tint-soft)', color: 'var(--buddy-primary)', fontSize: 11, fontWeight: 700,
         }}>
           <HelpCircle size={12} />
           {parsed.header}

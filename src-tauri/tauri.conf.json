@@ -14,8 +14,8 @@
     "windows": [
       {
         "title": "Buddy",
-        "width": 520,
-        "height": 60,
+        "width": 460,
+        "height": 78,
         "decorations": false,
         "transparent": true,
         "acceptFirstMouse": true,
@@ -48,10 +48,12 @@
       "icons/1024x1024.png",
       "icons/icon.png",
       "icons/icon-1024.png",
+      "icons/icon.icns",
       "icons/icon.ico"
     ],
     "macOS": {
-      "minimumSystemVersion": "12.0"
+      "minimumSystemVersion": "12.0",
+      "signingIdentity": "-"
     }
   }
 }

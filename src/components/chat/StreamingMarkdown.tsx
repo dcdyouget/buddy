@@ -1,8 +1,12 @@
-import { memo, useMemo } from 'react';
+import { Children, memo, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { isTauri } from '@tauri-apps/api/core';
 import { open as openExternal } from '@tauri-apps/plugin-shell';
+import {
+  MARKDOWN_EMPHASIS_GUARD,
+  normalizeMarkdownEmphasis,
+} from '@/utils/markdownNormalizer';
 import { CodeBlock } from './CodeBlock';
 
 /**
@@ -60,6 +64,17 @@ const COMPONENTS = {
   p({ children }: any) {
     return <p style={{ margin: '0 0 var(--space-2) 0' }}>{children}</p>;
   },
+  strong({ children }: any) {
+    return (
+      <strong>
+        {Children.map(children, (child) =>
+          typeof child === 'string'
+            ? child.replaceAll(MARKDOWN_EMPHASIS_GUARD, '')
+            : child,
+        )}
+      </strong>
+    );
+  },
   // 拦截外链：阻止 webview 内部跳转，强制走系统默认浏览器
   a({ href, children, ...props }: any) {
     const external = isExternalUrl(href);
@@ -74,7 +89,7 @@ const COMPONENTS = {
           openInDefaultApp(href);
         }}
         style={{
-          color: 'var(--primary)',
+          color: 'var(--buddy-primary)',
           textDecoration: 'underline',
           cursor: 'pointer',
         }}
@@ -130,30 +145,38 @@ interface StreamingMarkdownProps {
  * 复杂度从 O(n²) 降低到 O(n)。
  */
 export function StreamingMarkdown({ content, isStreaming }: StreamingMarkdownProps) {
+  const normalizedContent = useMemo(
+    () => normalizeMarkdownEmphasis(content),
+    [content],
+  );
+
   // 将内容切分为稳定块和不稳定尾部
   const { stablePart, unstablePart } = useMemo(() => {
     // 未在流式输出中，或内容为空 → 全部当作稳定内容
-    if (!isStreaming || !content) {
-      return { stablePart: content, unstablePart: '' };
+    if (!isStreaming || !normalizedContent) {
+      return { stablePart: normalizedContent, unstablePart: '' };
     }
 
     // 查找最后一个段落分隔符 \n\n
-    const lastDoubleNewline = content.lastIndexOf('\n\n');
+    const lastDoubleNewline = normalizedContent.lastIndexOf('\n\n');
     if (lastDoubleNewline === -1) {
       // 没有段落分隔 → 全部内容都还不稳定
-      return { stablePart: '', unstablePart: content };
+      return { stablePart: '', unstablePart: normalizedContent };
     }
 
     // 检查是否在代码围栏内部（围栏中的空行不应作为段落边界）
-    const stableCandidate = content.substring(0, lastDoubleNewline + 2);
+    const stableCandidate = normalizedContent.substring(
+      0,
+      lastDoubleNewline + 2,
+    );
     const fenceCount = (stableCandidate.match(/```/g) || []).length;
     if (fenceCount % 2 !== 0) {
       // 处于未闭合的代码围栏中 → 回退到围栏开始位置
       const openingFence = stableCandidate.lastIndexOf('```');
       if (openingFence > 0) {
         return {
-          stablePart: content.substring(0, openingFence),
-          unstablePart: content.substring(openingFence),
+          stablePart: normalizedContent.substring(0, openingFence),
+          unstablePart: normalizedContent.substring(openingFence),
         };
       }
       // 开围栏在开头 → 全部不稳定
@@ -162,9 +185,9 @@ export function StreamingMarkdown({ content, isStreaming }: StreamingMarkdownPro
 
     return {
       stablePart: stableCandidate,
-      unstablePart: content.substring(lastDoubleNewline + 2),
+      unstablePart: normalizedContent.substring(lastDoubleNewline + 2),
     };
-  }, [content, isStreaming]);
+  }, [normalizedContent, isStreaming]);
 
   return (
     <div className="ai-message-content">

@@ -1,6 +1,6 @@
 import { memo, useState } from 'react';
 import { Fragment } from 'react';
-import { Check, Copy, CornerDownLeft, CornerUpLeft } from 'lucide-react';
+import { ArrowUp, Check, Copy, CornerDownLeft } from 'lucide-react';
 import type { Message, ContentBlock, ToolCall } from '@/types';
 import { parseThinkBlocks, type TextBlock } from '@/utils/thinkParser';
 import { StreamingMarkdown } from './StreamingMarkdown';
@@ -14,7 +14,9 @@ import { ToolSection } from './ToolSection';
 function formatMessageTime(unixSeconds: number): string {
   const d = new Date(unixSeconds * 1000);
   const pad = (n: number) => n.toString().padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(
+    d.getHours(),
+  )}:${pad(d.getMinutes())}`;
 }
 
 /**
@@ -85,6 +87,10 @@ interface MessageBubbleProps {
   message: Message;
   isStreaming?: boolean;
   questionId?: string;
+  /** 当前消息是上一条 assistant 消息的工具循环续段。 */
+  isContinuation?: boolean;
+  /** 下一条消息仍是当前 assistant 工具循环的续段。 */
+  continuesToNext?: boolean;
   /**
    * 流式过程中 chatStore 累积的实时 tool_call 列表。
    * 当传入时,会与 message.tool_calls 合并(去重:以 id 为键,live 优先)。
@@ -184,7 +190,7 @@ function AssistantContent({
 
   // ── 主体:遍历 blocks,每个 block 之后插入属于该索引的 tool_calls ──
   return (
-    <>
+    <div className="assistant-content-flow">
       {blocks.map((block, i) => {
         const isLast = i === blocks.length - 1;
         const tcs = toolCallsByIndex.get(i) || [];
@@ -214,7 +220,7 @@ function AssistantContent({
       {(toolCallsByIndex.get(blocks.length) || []).map((tc) => (
         <ToolSection key={tc.id} toolCall={tc} isStreaming={isStreaming} />
       ))}
-    </>
+    </div>
   );
 }
 
@@ -225,6 +231,8 @@ export const MessageBubble = memo(function MessageBubble({
   message,
   isStreaming = false,
   questionId,
+  isContinuation = false,
+  continuesToNext = false,
   liveToolCalls,
   childResponses,
 }: MessageBubbleProps) {
@@ -250,14 +258,25 @@ export const MessageBubble = memo(function MessageBubble({
 
   return (
     <div
+      className={[
+        'message-row',
+        isUser ? 'is-user' : 'is-assistant',
+        isContinuation ? 'is-continuation' : '',
+        continuesToNext ? 'has-continuation' : '',
+      ].filter(Boolean).join(' ')}
       id={isUser ? `msg-${message.id}` : undefined}
       style={{
         display: 'flex',
         justifyContent: isUser ? 'flex-end' : 'flex-start',
-        padding: 'var(--space-2) var(--space-4)',
+        padding: isUser
+          ? 'var(--space-2) var(--space-4)'
+          : `${isContinuation ? 'var(--space-1)' : 'var(--space-2)'} var(--space-4) ${
+              continuesToNext ? '0' : 'var(--space-2)'
+            }`,
       }}
     >
       <div
+        className="message-bubble"
         style={
           isUser
             ? {
@@ -275,7 +294,7 @@ export const MessageBubble = memo(function MessageBubble({
               }
             : {
                 width: '100%',
-                maxWidth: '85%',
+                maxWidth: '100%',
                 padding: 'var(--space-2) var(--space-2)',
                 color: 'var(--text-primary)',
                 fontSize: '14px',
@@ -287,7 +306,7 @@ export const MessageBubble = memo(function MessageBubble({
         }
       >
         {isUser ? (
-          <span>{message.content}</span>
+          <span style={{ whiteSpace: 'pre-wrap' }}>{message.content}</span>
         ) : (
           <>
             <AssistantContent
@@ -305,6 +324,7 @@ export const MessageBubble = memo(function MessageBubble({
             )}
             {!isStreaming && questionId && message.content && (
               <div
+                className="message-actions"
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -313,10 +333,10 @@ export const MessageBubble = memo(function MessageBubble({
                 }}
               >
                 <span
+                  className="message-time"
                   title={new Date(message.created_at * 1000).toLocaleString()}
                   style={{
                     fontSize: '12px',
-                    color: 'var(--text-tertiary)',
                     fontVariantNumeric: 'tabular-nums',
                     userSelect: 'none',
                   }}
@@ -324,6 +344,7 @@ export const MessageBubble = memo(function MessageBubble({
                   {formatMessageTime(message.created_at)}
                 </span>
                 <button
+                  className={`message-action-button ${copied ? 'is-copied' : ''}`}
                   onClick={handleCopy}
                   title={copied ? '已复制' : '复制回答'}
                   style={{
@@ -333,29 +354,18 @@ export const MessageBubble = memo(function MessageBubble({
                     padding: '2px 8px',
                     border: 'none',
                     borderRadius: 'var(--radius-sm)',
-                    background: copied ? 'var(--primary-tint-soft)' : 'transparent',
-                    color: copied ? 'var(--primary)' : 'var(--text-tertiary)',
                     fontSize: '12px',
                     cursor: 'pointer',
                     transition: 'color 0.15s, background 0.15s',
                   }}
-                  onMouseEnter={(e) => {
-                    if (copied) return;
-                    e.currentTarget.style.color = 'var(--text-muted)';
-                    e.currentTarget.style.background = 'var(--bg-sunken)';
-                  }}
-                  onMouseLeave={(e) => {
-                    if (copied) return;
-                    e.currentTarget.style.color = 'var(--text-tertiary)';
-                    e.currentTarget.style.background = 'transparent';
-                  }}
                 >
                   {copied ? <Check size={13} /> : <Copy size={13} />}
-                  {copied ? '已复制' : '复制'}
                 </button>
                 <button
+                  className="message-action-button"
                   onClick={handleBackToQuestion}
                   title="回到问题"
+                  aria-label="回到问题"
                   style={{
                     display: 'inline-flex',
                     alignItems: 'center',
@@ -363,23 +373,12 @@ export const MessageBubble = memo(function MessageBubble({
                     padding: '2px 8px',
                     border: 'none',
                     borderRadius: 'var(--radius-sm)',
-                    background: 'transparent',
-                    color: 'var(--text-tertiary)',
                     fontSize: '12px',
                     cursor: 'pointer',
                     transition: 'color 0.15s, background 0.15s',
                   }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.color = 'var(--text-muted)';
-                    e.currentTarget.style.background = 'var(--bg-sunken)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.color = 'var(--text-tertiary)';
-                    e.currentTarget.style.background = 'transparent';
-                  }}
                 >
-                  <CornerUpLeft size={13} />
-                  回到问题
+                  <ArrowUp size={13} />
                 </button>
               </div>
             )}
@@ -397,6 +396,8 @@ export const MessageBubble = memo(function MessageBubble({
     prevProps.message.tool_calls === nextProps.message.tool_calls &&
     prevProps.isStreaming === nextProps.isStreaming &&
     prevProps.questionId === nextProps.questionId &&
+    prevProps.isContinuation === nextProps.isContinuation &&
+    prevProps.continuesToNext === nextProps.continuesToNext &&
     prevProps.liveToolCalls === nextProps.liveToolCalls &&
     prevProps.childResponses === nextProps.childResponses
   );

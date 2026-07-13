@@ -125,7 +125,14 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
       return { ...p, enabled_model_ids };
     });
 
-    await get().saveConfig({ ...config, providers });
+    const enabledModelIds = new Set(
+      providers.flatMap((provider) => provider.enabled_model_ids),
+    );
+    const selected_model_id = enabledModelIds.has(config.selected_model_id)
+      ? config.selected_model_id
+      : config.models.find((item) => enabledModelIds.has(item.id))?.id ?? '';
+
+    await get().saveConfig({ ...config, providers, selected_model_id });
   },
 
   /** 设置当前选中的默认模型 */

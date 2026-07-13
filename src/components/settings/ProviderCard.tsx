@@ -29,6 +29,7 @@ export function ProviderCard({
 }: ProviderCardProps) {
   return (
     <button
+      className="provider-card"
       onClick={onSelect}
       style={{
         display: 'flex',
