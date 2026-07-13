@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { ChevronRight, KeyRound } from 'lucide-react';
 import { useUIStore } from '@/stores/uiStore';
 import { useConfigStore } from '@/stores/configStore';
 import { GlassPanel } from '@/components/shared/GlassPanel';
@@ -45,7 +46,7 @@ export function NoApiKeyPage() {
       <GlassPanel
         onClick={goSettings}
         style={{
-          width: 520,
+          width: '100%',
           minHeight: 60,
           padding: 'var(--space-3) var(--space-4)',
           display: 'flex',
@@ -54,23 +55,8 @@ export function NoApiKeyPage() {
           cursor: 'pointer',
         }}
       >
-        {/* B logo */}
-        <div
-          style={{
-            width: 24,
-            height: 24,
-            borderRadius: 'var(--radius-sm)',
-            background: 'var(--buddy-primary)',
-            color: 'var(--text-on-primary)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: '12px',
-            fontWeight: 800,
-            flexShrink: 0,
-          }}
-        >
-          B
+        <div className="brand-mark">
+          <KeyRound size={14} />
         </div>
 
         <span
@@ -92,8 +78,9 @@ export function NoApiKeyPage() {
             flexShrink: 0,
           }}
         >
-          设置 →
+          设置
         </span>
+        <ChevronRight size={16} style={{ color: 'var(--state-error)' }} />
       </GlassPanel>
     </div>
   );

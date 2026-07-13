@@ -1,5 +1,5 @@
 import { useRef, useEffect, type KeyboardEvent } from 'react';
-import { Send, Square } from 'lucide-react';
+import { ChevronDown, Send, Settings, Square } from 'lucide-react';
 import { IconButton } from '@/components/shared/IconButton';
 import { ClearButton } from './ClearButton';
 import type { ModelInfo } from '@/types';
@@ -9,12 +9,12 @@ import type { ModelInfo } from '@/types';
  * @param isStreaming - 是否正在流式生成中，控制输入栏的状态切换
  * @param streamingModelName - 流式生成时显示的模型名称
  * @param streamingTokens - 流式生成时显示的 token 计数
- * @param selectedModel - 当前选中的模型信息（预留，尚未启用 ModelPicker）
+ * @param selectedModel - 当前选中的模型信息
  * @param draftInput - 输入框中的当前草稿文本
  * @param onDraftChange - 输入文本变化时的回调
  * @param onSend - 发送消息的回调
  * @param onStop - 停止生成的回调
- * @param onModelPickerClick - 模型选择器点击回调（预留）
+ * @param onModelPickerClick - 模型选择器点击回调
  */
 interface InputDockProps {
   isStreaming: boolean;
@@ -26,6 +26,7 @@ interface InputDockProps {
   onSend: () => void;
   onStop: () => void;
   onModelPickerClick?: () => void;
+  onSettingsClick?: () => void;
   /** 禁用 textarea 自动撑高，改为固定高度 + 滚动条（用于紧凑窗口） */
   disableAutoResize?: boolean;
   /** 隐藏顶部分隔线（空态气泡中不需要分隔消息列表） */
@@ -46,10 +47,13 @@ export function InputDock({
   isStreaming,
   streamingModelName,
   streamingTokens,
+  selectedModel,
   draftInput,
   onDraftChange,
   onSend,
   onStop,
+  onModelPickerClick,
+  onSettingsClick,
   disableAutoResize = false,
   hideBorder = false,
 }: InputDockProps) {
@@ -124,35 +128,16 @@ export function InputDock({
 
   return (
     <div
+      className={`input-dock ${hideBorder ? 'is-standalone' : ''}`}
       style={{
         display: 'flex',
-        alignItems: 'flex-end',
+        alignItems: 'center',
         gap: 'var(--space-2)',
         padding: 'var(--space-3)',
-        borderTop: hideBorder ? 'none' : '1px solid var(--border-subtle)',
+        borderTop: 'none',
         width: '100%',
       }}
     >
-      {/* B logo placeholder */}
-      {/* <div
-        style={{
-          width: 24,
-          height: 24,
-          borderRadius: 'var(--radius-sm)',
-          background: 'var(--buddy-primary)',
-          color: 'var(--text-on-primary)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontSize: '12px',
-          fontWeight: 800,
-          flexShrink: 0,
-          alignSelf: 'center',
-        }}
-      >
-        B
-      </div> */}
-
       {isStreaming ? (
         /* 流式生成状态：显示模型名称和生成进度 + 停止按钮 */
         <>
@@ -171,21 +156,22 @@ export function InputDock({
             icon={Square}
             onClick={onStop}
             variant="danger"
-            size={32}
+            size={28}
             iconSize={14}
             title="停止生成"
           />
         </>
       ) : (
-        /* 正常输入状态：textarea（内含清除按钮）+ 发送按钮 */
+        /* 正常输入状态：textarea（内含清除按钮）+ 设置 + 模型选择 + 发送 */
         <>
           <div style={{ position: 'relative', flex: 1, display: 'flex' }}>
             <textarea
+              className="composer-textarea"
               ref={textareaRef}
               value={draftInput}
               onChange={(e) => onDraftChange(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="输入消息... Enter 发送 · ⌘Enter 换行"
+              placeholder="问点什么…"
               rows={1}
               style={{
                 flex: 1,
@@ -221,6 +207,28 @@ export function InputDock({
             </div>
           </div>
 
+          {onSettingsClick && (
+            <IconButton
+              icon={Settings}
+              onClick={onSettingsClick}
+              size={24}
+              iconSize={13}
+              title="设置"
+            />
+          )}
+
+          {onModelPickerClick && (
+            <button
+              className="model-picker-trigger"
+              onClick={onModelPickerClick}
+              title={`切换模型：${selectedModel?.display_name || '未选择'}`}
+              aria-label={`切换模型，当前为${selectedModel?.display_name || '未选择'}`}
+              aria-haspopup="menu"
+              type="button"
+            >
+              <ChevronDown size={11} strokeWidth={1.8} />
+            </button>
+          )}
 
           <IconButton
             icon={Send}
@@ -228,8 +236,8 @@ export function InputDock({
             // 有内容时显示主色，无内容时显示默认色
             variant={hasContent ? 'primary' : 'default'}
             disabled={!hasContent}
-            size={32}
-            iconSize={16}
+            size={28}
+            iconSize={14}
             title="发送"
           />
         </>

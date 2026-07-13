@@ -1,4 +1,5 @@
 import type { ModelInfo } from '@/types';
+import { Bot } from 'lucide-react';
 import { StatusDot } from '@/components/shared/StatusDot';
 
 /** 上下文窗口预设选项（token 数） */
@@ -53,6 +54,7 @@ export function ModelRow({
 }: ModelRowProps) {
   return (
     <div
+      className="model-row"
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -87,12 +89,13 @@ export function ModelRow({
 
       {/* 提供商首字母图标 */}
       <div
+        className="model-provider-mark"
         style={{
           width: 28,
           height: 28,
           borderRadius: 'var(--radius-sm)',
-          background: 'var(--buddy-primary)',
-          color: 'var(--text-on-primary)',
+          background: 'var(--bg-sunken)',
+          color: 'var(--text-muted)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -101,7 +104,7 @@ export function ModelRow({
           flexShrink: 0,
         }}
       >
-        {model.provider_id.charAt(0).toUpperCase()}
+        <Bot size={14} />
       </div>
 
       {/* 模型信息：名称 + 默认标签 + 上下文窗口 */}
@@ -113,6 +116,7 @@ export function ModelRow({
           {/* 默认模型显示"默认"徽章 */}
           {isDefault && (
             <span
+              className="model-default-tag"
               style={{
                 padding: '0 var(--space-2)',
                 borderRadius: 'var(--radius-full)',
@@ -186,6 +190,7 @@ export function ModelRow({
       {/* "设为默认"按钮：仅在非默认且已启用时显示 */}
       {!isDefault && enabled && (
         <button
+          className="model-default-button"
           onClick={onSetDefault}
           style={{
             padding: '2px 10px',

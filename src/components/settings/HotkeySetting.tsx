@@ -8,11 +8,14 @@ interface HotkeySettingProps {
 /** 快捷键设置：展示当前快捷键 + 录制新快捷键 */
 export function HotkeySetting({ hotkey, onHotkeyChange }: HotkeySettingProps) {
   return (
-    <section>
-      <h3 className="t-h3" style={{ color: 'var(--text-primary)', marginBottom: 'var(--space-3)' }}>
-        快捷键
-      </h3>
-      <HotkeyRecorder currentHotkey={hotkey} onRecord={onHotkeyChange} />
+    <section className="settings-section">
+      <div className="settings-row">
+        <div className="settings-copy">
+          <h3>呼出快捷键</h3>
+          <p>在任意应用中快速打开 Buddy</p>
+        </div>
+        <HotkeyRecorder currentHotkey={hotkey} onRecord={onHotkeyChange} />
+      </div>
     </section>
   );
 }

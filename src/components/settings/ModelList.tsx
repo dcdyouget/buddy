@@ -1,4 +1,5 @@
 import { ModelRow } from '@/components/settings/ModelRow';
+import { Plus } from 'lucide-react';
 import type { ModelInfo } from '@/types';
 
 interface ModelListProps {
@@ -6,16 +7,30 @@ interface ModelListProps {
   selectedModelId: string;
   onSetDefault: (modelId: string) => void;
   onAddClick: () => void;
+  enabledModelIds: string[];
+  onToggle: (modelId: string) => void;
   onUpdateModel?: (modelId: string, updates: Partial<ModelInfo>) => void;
 }
 
 /** 模型范围设置：展示已添加的模型列表 + 添加新模型入口 */
-export function ModelList({ models, selectedModelId, onSetDefault, onAddClick, onUpdateModel }: ModelListProps) {
+export function ModelList({
+  models,
+  selectedModelId,
+  onSetDefault,
+  onAddClick,
+  enabledModelIds,
+  onToggle,
+  onUpdateModel,
+}: ModelListProps) {
   return (
-    <section>
-      <h3 className="t-h3" style={{ color: 'var(--text-primary)', marginBottom: 'var(--space-3)' }}>
-        模型范围
-      </h3>
+    <section className="settings-section">
+      <div className="settings-section-header">
+        <div className="settings-copy">
+          <h3>模型</h3>
+          <p>选择可用模型与默认模型</p>
+        </div>
+      </div>
+      <div className="model-list">
       {models.length === 0 ? (
         <div className="t-body" style={{ color: 'var(--text-tertiary)', padding: 'var(--space-4) 0' }}>
           暂无模型，请点击下方按钮添加
@@ -27,9 +42,9 @@ export function ModelList({ models, selectedModelId, onSetDefault, onAddClick, o
             <ModelRow
               key={model.id}
               model={model}
-              enabled={true}
+              enabled={enabledModelIds.includes(model.id)}
               isDefault={isDefault}
-              onToggle={() => {}}
+              onToggle={() => onToggle(model.id)}
               onSetDefault={() => onSetDefault(model.id)}
               onUpdateContextWindow={
                 onUpdateModel
@@ -40,7 +55,9 @@ export function ModelList({ models, selectedModelId, onSetDefault, onAddClick, o
           );
         })
       )}
+      </div>
       <button
+        className="add-model-button"
         onClick={onAddClick}
         style={{
           width: '100%',
@@ -55,7 +72,8 @@ export function ModelList({ models, selectedModelId, onSetDefault, onAddClick, o
           fontSize: '14px',
         }}
       >
-        + 添加模型
+        <Plus size={14} />
+        添加模型
       </button>
     </section>
   );

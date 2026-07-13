@@ -117,6 +117,7 @@ export function HotkeyRecorder({ currentHotkey, onRecord }: HotkeyRecorderProps)
 
   return (
     <div
+      className="hotkey-recorder"
       style={{
         display: 'flex',
         alignItems: 'center',

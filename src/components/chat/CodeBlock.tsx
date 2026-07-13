@@ -127,7 +127,7 @@ export const CodeBlock = memo(function CodeBlock({ language, source }: CodeBlock
                 fontFamily: 'var(--font-mono)',
                 lineHeight: 1.5,
                 // VS Code Dark 主题的背景色
-                background: '#1E1E1E',
+                background: 'var(--code-bg)',
                 overflowX: 'auto',
               }}
             >

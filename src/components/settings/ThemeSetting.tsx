@@ -1,4 +1,5 @@
 import type { Theme } from '@/types';
+import { Moon, Sun } from 'lucide-react';
 
 interface ThemeSettingProps {
   theme: Theme;
@@ -8,39 +9,25 @@ interface ThemeSettingProps {
 /** 主题设置：浅色 / 深色切换 */
 export function ThemeSetting({ theme, onThemeChange }: ThemeSettingProps) {
   return (
-    <section>
-      <h3 className="t-h3" style={{ color: 'var(--text-primary)', marginBottom: 'var(--space-3)' }}>
-        主题
-      </h3>
-      <div style={{ display: 'flex', gap: 'var(--space-3)' }}>
+    <section className="settings-section">
+      <div className="settings-row">
+        <div className="settings-copy">
+          <h3>外观</h3>
+          <p>选择窗口的显示模式</p>
+        </div>
+        <div className="segmented-control">
         {(['light', 'dark'] as const).map((t) => (
           <button
             key={t}
+            className={theme === t ? 'is-active' : ''}
             onClick={() => onThemeChange(t)}
-            style={{
-              padding: 'var(--space-2) var(--space-4)',
-              borderRadius: 'var(--radius-md)',
-              border:
-                theme === t
-                  ? '1px solid var(--buddy-primary)'
-                  : '1px solid var(--border-default)',
-              background:
-                theme === t
-                  ? 'var(--primary-tint-soft)'
-                  : 'var(--bg-elevated)',
-              color:
-                theme === t
-                  ? 'var(--buddy-primary)'
-                  : 'var(--text-primary)',
-              cursor: 'pointer',
-              fontFamily: 'var(--font-sans)',
-              fontSize: '14px',
-              fontWeight: theme === t ? 600 : 400,
-            }}
+            title={t === 'light' ? '浅色' : '深色'}
           >
+            {t === 'light' ? <Sun size={14} /> : <Moon size={14} />}
             {t === 'light' ? '浅色' : '深色'}
           </button>
         ))}
+        </div>
       </div>
     </section>
   );

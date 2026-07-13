@@ -60,17 +60,19 @@ export const ThinkSection = memo(function ThinkSection({
         }
       }}
       style={{
-        border: '1px solid var(--border-subtle)',
-        borderLeft: '3px solid #b8a0d0', // 淡紫色左边框 — 思考标识
+        borderTop: '1px solid var(--border-default)',
+        borderRight: '1px solid var(--border-default)',
+        borderBottom: '1px solid var(--border-default)',
+        borderLeft: '2px solid var(--buddy-primary)',
         borderRadius: 'var(--radius-md)',
         borderTopLeftRadius: 0,
         borderBottomLeftRadius: 0,
         overflow: 'hidden',
-        margin: 'var(--space-2) 0',
+        margin: 0,
         cursor: 'pointer',
         width: '100%',
         boxSizing: 'border-box',
-        background: 'var(--bg-sunken)',
+        background: 'var(--panel-surface)',
       }}
     >
       {/* ── Header ── */}
@@ -95,7 +97,7 @@ export const ThinkSection = memo(function ThinkSection({
           e.currentTarget.style.background = 'transparent';
         }}
       >
-        <Brain size={14} style={{ color: '#9b7ec4', flexShrink: 0 }} />
+        <Brain size={14} style={{ color: 'var(--buddy-primary)', flexShrink: 0 }} />
         <span
           style={{
             fontWeight: 600,
@@ -111,7 +113,7 @@ export const ThinkSection = memo(function ThinkSection({
               width: 5,
               height: 5,
               borderRadius: 'var(--radius-full)',
-              background: '#9b7ec4',
+              background: 'var(--buddy-primary)',
               opacity: 0.7,
               flexShrink: 0,
             }}
@@ -126,7 +128,7 @@ export const ThinkSection = memo(function ThinkSection({
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
               fontSize: 'var(--font-size-xs)',
-              color: 'var(--text-tertiary)',
+              color: 'var(--text-muted)',
               marginLeft: 4,
             }}
           >
@@ -135,9 +137,9 @@ export const ThinkSection = memo(function ThinkSection({
         )}
         <span style={{ flex: expanded ? 1 : 0 }} />
         {expanded ? (
-          <ChevronDown size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+          <ChevronDown size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
         ) : (
-          <ChevronRight size={13} style={{ color: 'var(--text-tertiary)', flexShrink: 0 }} />
+          <ChevronRight size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
         )}
       </div>
 
@@ -154,13 +156,13 @@ export const ThinkSection = memo(function ThinkSection({
             overflowWrap: 'break-word',
             wordBreak: 'break-word',
             overflow: 'hidden',
-            background: 'var(--bg-sunken)',
+            background: 'transparent',
           }}
         >
           {content ? (
             <StreamingMarkdown content={content} isStreaming={isStreaming} />
           ) : (
-            <span style={{ color: 'var(--text-tertiary)', fontStyle: 'italic' }}>
+            <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
               等待思考内容...
             </span>
           )}

@@ -21,6 +21,7 @@ import { NoApiKeyPage } from '@/pages/NoApiKeyPage';
 import { ChatPage } from '@/pages/ChatPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { SlideInPanel } from '@/components/shared/SlideInPanel';
+import { resizeWindowToPage } from '@/utils/windowResize';
 
 /**
  * 这是一个轻量级的页面路由器，避免引入 react-router 增加包体积
@@ -122,6 +123,42 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  // ── 菜单栏操作：打开设置 / 同步开机自启状态 ──
+  useEffect(() => {
+    if (typeof window === 'undefined' || !(window as any).__TAURI_INTERNALS__) {
+      return;
+    }
+
+    let disposed = false;
+    const unlisteners: Array<() => void> = [];
+
+    import('@tauri-apps/api/event').then(async ({ listen }) => {
+      const settingsUnlisten = await listen('open-settings', () => {
+        const ui = useUIStore.getState();
+        if (ui.currentPage !== 'settings') {
+          ui.setPage('settings');
+        }
+      });
+      const autoStartUnlisten = await listen<boolean>('auto-start-changed', () => {
+        useConfigStore.getState().loadConfig();
+      });
+
+      if (disposed) {
+        settingsUnlisten();
+        autoStartUnlisten();
+        return;
+      }
+      unlisteners.push(settingsUnlisten, autoStartUnlisten);
+    }).catch((error) => {
+      console.error('[Buddy] 菜单栏事件监听失败:', error);
+    });
+
+    return () => {
+      disposed = true;
+      unlisteners.forEach((unlisten) => unlisten());
+    };
+  }, []);
+
   // ── 监听 Rust 后端发送的 selected-text 事件 ──
   // 用户在其他应用中选中文本后按快捷键，Rust 会发送该事件
   // 前端收到后将文本填入输入框草稿
@@ -169,6 +206,11 @@ function App() {
           <SettingsPage
             onBack={() => {
               const prev = useUIStore.getState().previousPage ?? 'empty';
+              if (prev === 'empty' || prev === 'noapikey') {
+                void resizeWindowToPage('conversation');
+                setPage('conversation');
+                return;
+              }
               setPage(prev);
             }}
           />

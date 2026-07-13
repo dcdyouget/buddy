@@ -167,6 +167,7 @@ export function AddProviderPanel({ onBack }: AddProviderPanelProps) {
 
   return (
     <GlassPanel
+      className="buddy-shell provider-panel"
       style={{
         width: '100%',
         height: '100%',
@@ -176,18 +177,18 @@ export function AddProviderPanel({ onBack }: AddProviderPanelProps) {
         borderRadius: 0,
       }}
     >
-      {/* Header：返回按钮 + 关闭按钮 */}
+      {/* Header */}
       <div
+        className="provider-header"
         style={{
           display: 'flex',
-          justifyContent: 'space-between',
           alignItems: 'center',
-          padding: 'var(--space-4) var(--space-6)',
-          borderBottom: '1px solid var(--border-subtle)',
+          padding: 'var(--space-3) var(--space-4)',
         }}
       >
         <button
           onClick={onBack}
+          title="返回设置"
           style={{
             border: 'none',
             background: 'none',
@@ -202,25 +203,18 @@ export function AddProviderPanel({ onBack }: AddProviderPanelProps) {
           }}
         >
           <ArrowLeft size={16} />
-          返回设置
         </button>
-        <button
-          onClick={onBack}
-          style={{
-            border: 'none',
-            background: 'none',
-            color: 'var(--text-muted)',
-            cursor: 'pointer',
-            padding: '4px',
-          }}
-        >
-          <ArrowLeft size={18} />
-        </button>
+        <div>
+          <h2 className="t-title" style={{ color: 'var(--text-primary)' }}>
+            添加模型
+          </h2>
+          <p className="t-caption">连接模型服务并选择可用模型</p>
+        </div>
       </div>
 
       {/* Content：可滚动的配置区域 */}
       <div
-        className="no-scrollbar"
+        className="no-scrollbar provider-content"
         style={{
           flex: 1,
           overflowY: 'auto',
@@ -230,13 +224,6 @@ export function AddProviderPanel({ onBack }: AddProviderPanelProps) {
           gap: 'var(--space-5)',
         }}
       >
-        <h2 className="t-title" style={{ color: 'var(--text-primary)' }}>
-          添加模型
-        </h2>
-        <p className="t-body" style={{ color: 'var(--text-muted)' }}>
-          配置 Provider · 获取可用模型
-        </p>
-
         {/* Provider 预设选择：2×2 网格布局 */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
           {PROVIDER_PRESETS.map((preset) => (
@@ -544,7 +531,7 @@ export function AddProviderPanel({ onBack }: AddProviderPanelProps) {
       <FooterActions
         onCancel={onBack}
         onConfirm={handleAdd}
-        confirmLabel="✓ 添加"
+        confirmLabel="添加"
         confirmDisabled={!selectedPreset || !apiKey || selectedModelIds.size === 0}
       />
     </GlassPanel>

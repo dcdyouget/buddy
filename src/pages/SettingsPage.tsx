@@ -3,7 +3,6 @@ import { ArrowLeft } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useConfigStore } from '@/stores/configStore';
 import { GlassPanel } from '@/components/shared/GlassPanel';
-import { FooterActions } from '@/components/shared/FooterActions';
 import { SlideInPanel } from '@/components/shared/SlideInPanel';
 import { ThemeSetting } from '@/components/settings/ThemeSetting';
 import { HotkeySetting } from '@/components/settings/HotkeySetting';
@@ -26,7 +25,14 @@ interface SettingsPageProps {
  */
 export function SettingsPage({ onBack }: SettingsPageProps) {
   const dragRef = useDragHandle();
-  const { config, updateTheme, updateHotkey, setDefaultModel, updateModel } = useConfigStore();
+  const {
+    config,
+    updateTheme,
+    updateHotkey,
+    setDefaultModel,
+    toggleModel,
+    updateModel,
+  } = useConfigStore();
   const [showAddProvider, setShowAddProvider] = useState(false);
 
   if (!config) return null;
@@ -50,6 +56,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       }}
     >
       <GlassPanel
+        className="buddy-shell"
         style={{
           flex: 1,
           display: 'flex',
@@ -61,13 +68,13 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       >
         {/* Header */}
         <div
+          className="settings-header"
           style={{
             display: 'flex',
             alignItems: 'center',
             gap: 'var(--space-2)',
             padding: 'var(--space-2) var(--space-4)',
             minHeight: '36px',
-            borderBottom: '1px solid var(--border-subtle)',
           }}
         >
           <button
@@ -87,21 +94,23 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           >
             <ArrowLeft size={18} />
           </button>
-          <h2 className="t-title" style={{ color: 'var(--text-primary)' }}>
-            设置
-          </h2>
+          <div>
+            <h2 className="t-title" style={{ color: 'var(--text-primary)' }}>
+              设置
+            </h2>
+          </div>
         </div>
 
         {/* Content */}
         <div
-          className="no-scrollbar"
+          className="no-scrollbar settings-content"
           style={{
             flex: 1,
             overflowY: 'auto',
-            padding: 'var(--space-6)',
+            padding: 'var(--space-4)',
             display: 'flex',
             flexDirection: 'column',
-            gap: 'var(--space-6)',
+            gap: 'var(--space-3)',
           }}
         >
           <ThemeSetting theme={config.theme} onThemeChange={updateTheme} />
@@ -111,11 +120,12 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             selectedModelId={config.selected_model_id}
             onSetDefault={setDefaultModel}
             onAddClick={() => setShowAddProvider(true)}
+            enabledModelIds={config.providers.flatMap((provider) => provider.enabled_model_ids)}
+            onToggle={toggleModel}
             onUpdateModel={updateModel}
           />
         </div>
 
-        <FooterActions onCancel={onBack} onConfirm={onBack} confirmLabel="确定" />
       </GlassPanel>
 
       <SlideInPanel from="right" show={showAddProvider}>

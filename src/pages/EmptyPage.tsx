@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { AnimatePresence } from 'framer-motion';
+import { ChevronUp } from 'lucide-react';
 import { useUIStore } from '@/stores/uiStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useConfigStore } from '@/stores/configStore';
@@ -7,6 +8,7 @@ import { GlassPanel } from '@/components/shared/GlassPanel';
 import { InputDock } from '@/components/chat/InputDock';
 import { ModelDropdown } from '@/components/chat/ModelDropdown';
 import { useDragHandle } from '@/hooks/useDragHandle';
+import { openNativeModelMenu } from '@/utils/modelMenu';
 import type { ModelInfo } from '@/types';
 
 /**
@@ -24,6 +26,26 @@ export function EmptyPage() {
   const { sendMessage, draftInput, setDraftInput } = useChatStore();
   const { config } = useConfigStore();
   const [showDropdown, setShowDropdown] = useState(false);
+
+  const enabledModels = (config?.models || []).filter((model) =>
+    config?.providers.some(
+      (provider) =>
+        provider.id === model.provider_id &&
+        provider.enabled_model_ids.includes(model.id),
+    ),
+  );
+
+  const handleModelPickerClick = async () => {
+    if (!showDropdown && config) {
+      const openedNativeMenu = await openNativeModelMenu({
+        models: enabledModels,
+        selectedId: config.selected_model_id,
+        onSelect: (id) => useConfigStore.getState().setDefaultModel(id),
+      });
+      if (openedNativeMenu) return;
+    }
+    setShowDropdown((open) => !open);
+  };
 
   // 从配置中查找当前选中的模型信息
   const selectedModel: ModelInfo | null =
@@ -46,6 +68,7 @@ export function EmptyPage() {
   return (
     <div
       ref={dragRef}
+      className={`empty-page ${showDropdown ? 'has-popover' : ''}`}
       style={{
         width: '100vw',
         height: '100vh',
@@ -56,17 +79,28 @@ export function EmptyPage() {
       }}
     >
       <GlassPanel
+        className={`buddy-shell empty-shell ${showDropdown ? 'has-popover' : ''}`}
         style={{
           flex: 1,
           display: 'flex',
           flexDirection: 'column',
-          justifyContent: 'center',
+          justifyContent: 'flex-end',
           overflow: 'hidden',
           margin: 0,
           borderRadius: 'var(--radius-xl)',
           position: 'relative',
         }}
       >
+        <button
+          className="empty-expand-trigger"
+          type="button"
+          onClick={() => setPage('conversation')}
+          title="展开对话"
+          aria-label="展开到对话模式"
+        >
+          <ChevronUp size={14} strokeWidth={1.8} />
+        </button>
+
         <InputDock
           isStreaming={false}
           selectedModel={selectedModel}
@@ -74,6 +108,8 @@ export function EmptyPage() {
           onDraftChange={setDraftInput}
           onSend={handleSend}
           onStop={() => {}} // 空态页无流式进行中，stop 为空操作
+          onModelPickerClick={handleModelPickerClick}
+          onSettingsClick={() => setPage('settings')}
           disableAutoResize
           hideBorder
         />
@@ -83,7 +119,7 @@ export function EmptyPage() {
       <AnimatePresence>
         {showDropdown && (
           <ModelDropdown
-            models={config?.models || []}
+            models={enabledModels}
             selectedId={config?.selected_model_id || ''}
             onSelect={(id) => {
               useConfigStore.getState().setDefaultModel(id);

@@ -354,6 +354,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // 流式期间把 <<think>> 标签作为原始文本显示 —— 用户看 `<think>我先想一下</think>实际…`)。
       // 同时 push 一个空 text 块作为下一轮的起点分隔,避免下轮 smoothTextDelta 把字符
       // 追加到本 turn 的 text 块尾部。
+      //
+      // FIX: 必须在替换 blocks 之前清空 pendingTextBuffer，否则 rAF 循环可能
+      // 在 text_end 之后继续消费缓冲中的残留字符，追加到已替换完成的 blocks 尾部，
+      // 导致消息最后几个字重复显示（text_end 的完整文本 + 缓冲区残留 = 重复）。
+      get().flushTextBuffer();
       const blocks = [...get().streamingBlocks];
       if (content.length > 0) {
         const parsed = parseThinkFromText(content);
@@ -379,6 +384,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       set({ streamingBlocks: blocks });
     } else {
       // Anthropic 多块模式:每个 text_end 只更新对应索引的 block
+      // 同样需要先清空缓冲，防止 text_end 之后 rAF 继续追加残留字符
+      get().flushTextBuffer();
       const blocks = [...get().streamingBlocks];
       while (blocks.length <= contentIndex) {
         blocks.push({ type: 'text', content: '' });

@@ -9,6 +9,7 @@ interface FooterActionsProps {
   cancelLabel?: string;
   /** 是否禁用确认按钮 */
   confirmDisabled?: boolean;
+  showCancel?: boolean;
 }
 
 /**
@@ -26,9 +27,11 @@ export function FooterActions({
   confirmLabel = '确定',
   cancelLabel = '取消',
   confirmDisabled = false,
+  showCancel = true,
 }: FooterActionsProps) {
   return (
     <div
+      className="footer-actions"
       style={{
         display: 'flex',
         justifyContent: 'flex-end', // 按钮右对齐
@@ -38,25 +41,29 @@ export function FooterActions({
       }}
     >
       {/* 取消按钮 —— 次要样式，带边框 */}
-      <button
-        onClick={onCancel}
-        style={{
-          padding: 'var(--space-2) var(--space-4)',
-          borderRadius: 'var(--radius-md)',
-          border: '1px solid var(--border-default)',
-          background: 'var(--bg-elevated)',
-          color: 'var(--text-primary)',
-          cursor: 'pointer',
-          fontFamily: 'var(--font-sans)',
-          fontSize: '14px',
-          fontWeight: 500,
-          transition: `all var(--duration-fast) var(--ease-standard)`,
-        }}
-      >
-        {cancelLabel}
-      </button>
+      {showCancel && (
+        <button
+          className="secondary-button"
+          onClick={onCancel}
+          style={{
+            padding: 'var(--space-2) var(--space-4)',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--border-default)',
+            background: 'var(--bg-elevated)',
+            color: 'var(--text-primary)',
+            cursor: 'pointer',
+            fontFamily: 'var(--font-sans)',
+            fontSize: '14px',
+            fontWeight: 500,
+            transition: `all var(--duration-fast) var(--ease-standard)`,
+          }}
+        >
+          {cancelLabel}
+        </button>
+      )}
       {/* 确认按钮 —— 品牌主色填充 */}
       <button
+        className="primary-button"
         onClick={onConfirm}
         disabled={confirmDisabled}
         style={{

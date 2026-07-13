@@ -9,14 +9,48 @@
 import { useEffect, useRef } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 
-/** 仅排除这些必须保持原生交互的元素 */
-const INTERACTIVE_TAGS = ['INPUT', 'TEXTAREA', 'BUTTON', 'SELECT'];
+/**
+ * 这些元素需要保留点击、输入或文本选择行为。
+ * 使用 closest 而不是只判断 target.tagName，避免点击按钮内的 SVG 时误触发拖动。
+ */
+const NO_DRAG_SELECTOR = [
+  'input',
+  'textarea',
+  'button',
+  'select',
+  'a',
+  'label',
+  '[contenteditable]:not([contenteditable="false"])',
+  '[data-no-window-drag]',
+  '.message-bubble',
+  'p',
+  'span',
+  'pre',
+  'code',
+  'blockquote',
+  'li',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'td',
+  'th',
+  'dt',
+  'dd',
+].join(',');
+
+/** 仅空白容器和玻璃背景可触发窗口拖动。 */
+export function shouldStartWindowDrag(target: EventTarget | null): boolean {
+  return target instanceof Element && !target.closest(NO_DRAG_SELECTOR);
+}
 
 /**
  * Spotlight 风格拖拽 Hook
  *
- * 返回一个 ref，挂到页面最外层容器上即可让整个窗口任意位置（排除输入框/按钮）
- * 都可拖拽，包括消息列表、文字内容、GlassPanel 边缘等。
+ * 返回一个 ref，挂到页面最外层容器上即可从空白区域和玻璃边缘拖动窗口。
+ * 文本内容、输入控件和按钮保留原生交互。
  *
  * 用法：<div ref={dragRef}> ... </div>
  */
@@ -30,9 +64,7 @@ export function useDragHandle() {
     const onMouseDown = (e: MouseEvent) => {
       if (e.button !== 0) return;
 
-      const target = e.target as HTMLElement;
-      if (INTERACTIVE_TAGS.includes(target.tagName)) return;
-      if (target.isContentEditable) return;
+      if (!shouldStartWindowDrag(e.target)) return;
 
       try {
         getCurrentWindow().startDragging();
