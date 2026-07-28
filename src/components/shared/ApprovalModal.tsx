@@ -56,8 +56,6 @@ export function ApprovalModal() {
           <div
             style={{
               background: 'var(--bg-elevated)',
-              backdropFilter: 'blur(var(--blur-surface)) saturate(160%)',
-              WebkitBackdropFilter: 'blur(var(--blur-surface)) saturate(160%)',
               border: '1px solid var(--border-default)',
               borderRadius: 'var(--radius-xl)',
               overflow: 'hidden',

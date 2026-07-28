@@ -18,7 +18,7 @@ pub struct HotkeyState {
 /// 注册全局热键并绑定窗口 toggle 行为
 ///
 /// 三态切换（参考 Bob 等 macOS 工具型应用的标准行为）：
-/// - **隐藏状态** → 获取选中文本、重新定位到当前光标所在显示器、显示、聚焦
+/// - **隐藏状态** → 获取选中文本、保留上次位置、显示、聚焦
 /// - **显示但失焦**（用户点到了别的窗口，窗口在 z 序后面）→ 唤回到最前，不改位置
 /// - **显示且已聚焦**（在最前）→ 隐藏
 ///
@@ -38,14 +38,9 @@ pub fn register(app: &tauri::AppHandle, shortcut: Shortcut) {
                         log::info!("[hotkey] hidden");
                     } else {
                         // ── 隐藏 OR 显示但失焦 → 带到最前 ──
-                        // 仅在从"隐藏"唤起时才重新定位到当前光标所在显示器；
-                        // 失焦唤回不重定位（保留用户拖拽后的位置）。
+                        // 不改位置：用户拖拽后，下次快捷键呼出仍应出现在原处。
                         if !visible {
                             crate::platform::macos::get_selected_text(app);
-                            log::info!("[hotkey] before reposition (hidden → show)");
-                            crate::window::positioning::reposition_to_cursor_monitor(&window);
-                            log::info!("[hotkey] before sleep");
-                            std::thread::sleep(std::time::Duration::from_millis(16));
                         } else {
                             log::info!("[hotkey] shown+unfocused → bring_to_front (no reposition)");
                         }

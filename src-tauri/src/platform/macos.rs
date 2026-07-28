@@ -43,16 +43,12 @@ pub fn get_selected_text(app: &tauri::AppHandle) {
 #[cfg(not(target_os = "macos"))]
 pub fn get_selected_text(_app: &tauri::AppHandle) {}
 
-/// macOS 平台：应用毛玻璃效果和圆角
+/// macOS 平台：应用无边框窗口圆角。
+///
+/// Buddy 当前使用实色白色界面；不启用原生 vibrancy，避免页面切换中
+/// 透明区域短暂露出 HUDWindow 的灰色底。
 #[cfg(target_os = "macos")]
 pub fn apply_macos_window_effects(window: &tauri::WebviewWindow) {
-    let _ = window_vibrancy::apply_vibrancy(
-        window,
-        window_vibrancy::NSVisualEffectMaterial::HudWindow,
-        Some(window_vibrancy::NSVisualEffectState::Active),
-        None,
-    );
-
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
     if let Ok(ns_window_ptr) = window.ns_window() {

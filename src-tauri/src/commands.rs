@@ -165,6 +165,20 @@ fn build_tool_msg(turn: usize, call: &crate::models::ToolCall, content: String, 
     }
 }
 
+/// 将同一次模型调用累积的消息一次性落盘，避免工具循环产生密集的小文件写入。
+async fn flush_pending_messages(app: tauri::AppHandle, pending: Vec<Message>) {
+    if pending.is_empty() {
+        return;
+    }
+
+    let count = pending.len();
+    match tokio::task::spawn_blocking(move || storage::append_messages(&app, &pending)).await {
+        Ok(Ok(())) => info!("[send_message] 本轮 {} 条消息已批量持久化", count),
+        Ok(Err(e)) => warn!("[send_message] 批量持久化消息失败: {}", e),
+        Err(e) => warn!("[send_message] 批量持久化任务失败: {}", e),
+    }
+}
+
 /// 发送消息命令
 ///
 /// 前端调用此命令发起 AI 对话。后端根据 Provider 类型分发到对应适配器：
@@ -238,14 +252,8 @@ pub async fn send_message(
         );
     }
 
-    // 持久化用户消息（messages 最后一条是新发送的用户消息）
-    if let Some(user_msg) = messages.last() {
-        let msg = user_msg.clone();
-        let app_handle = app.clone();
-        tokio::task::spawn_blocking(move || {
-            storage::append_message(&app_handle, &msg).ok();
-        });
-    }
+    // 本轮产生的用户、assistant 与工具消息先放在内存，结束时统一批量写入。
+    let mut pending_persistence: Vec<Message> = messages.last().cloned().into_iter().collect();
 
     // 创建取消通道
     let (cancel_tx, mut cancel_rx) = watch::channel(false);
@@ -341,11 +349,7 @@ pub async fn send_message(
                 is_error: None,
                 parent_message_id: None,
             };
-            let app_handle = app.clone();
-            let to_persist = assistant_msg.clone();
-            tokio::task::spawn_blocking(move || {
-                storage::append_message(&app_handle, &to_persist).unwrap_or_else(|e| warn!("持久化消息失败: {}", e));
-            });
+            pending_persistence.push(assistant_msg.clone());
             conv_messages.push(assistant_msg.clone());
         }
 
@@ -368,11 +372,7 @@ pub async fn send_message(
                         let content = format!("ask_user 参数解析失败: {}", e);
                         emitter.tool_result(&call.id, "ask_user", &content, true);
                         let tool_msg = build_tool_msg(turn, call, content, true);
-                        let app_handle = app.clone();
-                        let to_persist = tool_msg.clone();
-                        tokio::task::spawn_blocking(move || {
-                            storage::append_message(&app_handle, &to_persist).unwrap_or_else(|e| warn!("持久化消息失败: {}", e));
-                        });
+                        pending_persistence.push(tool_msg.clone());
                         conv_messages.push(tool_msg.clone());
                         continue;
                     }
@@ -383,11 +383,7 @@ pub async fn send_message(
                         let content = format!("ask_user 参数校验失败: {}", e);
                         emitter.tool_result(&call.id, "ask_user", &content, true);
                         let tool_msg = build_tool_msg(turn, call, content, true);
-                        let app_handle = app.clone();
-                        let to_persist = tool_msg.clone();
-                        tokio::task::spawn_blocking(move || {
-                            storage::append_message(&app_handle, &to_persist).unwrap_or_else(|e| warn!("持久化消息失败: {}", e));
-                        });
+                        pending_persistence.push(tool_msg.clone());
                         conv_messages.push(tool_msg.clone());
                         continue;
                     }
@@ -458,11 +454,7 @@ pub async fn send_message(
                 turn_has_success = true; // 用户回答了就是成功
                 emitter.tool_result(&call.id, "ask_user", &content, false);
                 let tool_msg = build_tool_msg(turn, call, content, false);
-                let app_handle = app.clone();
-                let to_persist = tool_msg.clone();
-                tokio::task::spawn_blocking(move || {
-                    storage::append_message(&app_handle, &to_persist).unwrap_or_else(|e| warn!("持久化消息失败: {}", e));
-                });
+                pending_persistence.push(tool_msg.clone());
                 conv_messages.push(tool_msg.clone());
                 continue;
             }
@@ -473,11 +465,7 @@ pub async fn send_message(
                     let content = format!("tool '{}' 未在 ToolRegistry 中注册", call.name);
                     emitter.tool_result(&call.id, &call.name, &content, true);
                     let tool_msg = build_tool_msg(turn, call, content, true);
-                    let app_handle = app.clone();
-                    let to_persist = tool_msg.clone();
-                    tokio::task::spawn_blocking(move || {
-                        storage::append_message(&app_handle, &to_persist).unwrap_or_else(|e| warn!("持久化消息失败: {}", e));
-                    });
+                    pending_persistence.push(tool_msg.clone());
                     conv_messages.push(tool_msg.clone());
                     continue;
                 }
@@ -520,11 +508,7 @@ pub async fn send_message(
                     let content = "用户拒绝执行".to_string();
                     emitter.tool_result(&call.id, &call.name, &content, true);
                     let tool_msg = build_tool_msg(turn, call, content, true);
-                    let app_handle = app.clone();
-                    let to_persist = tool_msg.clone();
-                    tokio::task::spawn_blocking(move || {
-                        storage::append_message(&app_handle, &to_persist).unwrap_or_else(|e| warn!("持久化消息失败: {}", e));
-                    });
+                    pending_persistence.push(tool_msg.clone());
                     conv_messages.push(tool_msg.clone());
                     continue;
                 }
@@ -538,11 +522,7 @@ pub async fn send_message(
                     let content = format!("参数解析失败: {}", e);
                     emitter.tool_result(&call.id, &call.name, &content, true);
                     let tool_msg = build_tool_msg(turn, call, content, true);
-                    let app_handle = app.clone();
-                    let to_persist = tool_msg.clone();
-                    tokio::task::spawn_blocking(move || {
-                        storage::append_message(&app_handle, &to_persist).unwrap_or_else(|e| warn!("持久化消息失败: {}", e));
-                    });
+                    pending_persistence.push(tool_msg.clone());
                     conv_messages.push(tool_msg.clone());
                     continue;
                 }
@@ -564,11 +544,7 @@ pub async fn send_message(
             info!("[send_message] turn {} tool '{}' tool_result 事件已发射 (id={})",
                 turn, call.name, call.id);
             let tool_msg = build_tool_msg(turn, call, content, is_error);
-            let app_handle = app.clone();
-            let to_persist = tool_msg.clone();
-            tokio::task::spawn_blocking(move || {
-                storage::append_message(&app_handle, &to_persist).unwrap_or_else(|e| warn!("持久化消息失败: {}", e));
-            });
+            pending_persistence.push(tool_msg.clone());
             conv_messages.push(tool_msg.clone());
         }
         // ── 本轮总结:如果所有 tool 都失败了,累计连续失败计数 ──
@@ -619,6 +595,9 @@ pub async fn send_message(
             error_emitter.error(StopReason::Error, &error_msg, "");
         }
     }
+
+    // 不论正常完成、取消还是工具循环报错，均保存本轮已经生成的完整记录。
+    flush_pending_messages(app.clone(), pending_persistence).await;
 
     // 清理:取消通道 + 重置 "本次都允许" 标志(P5 一次性,下次 send_message 重新开始)
     state.sender.lock().take();
@@ -836,6 +815,12 @@ pub async fn load_messages(
     limit: u64,
 ) -> Result<Vec<Message>, String> {
     storage::load_messages(&app, offset, limit)
+}
+
+/// 返回本地历史消息总数，供前端计算分页起点。
+#[tauri::command]
+pub async fn get_message_count(app: tauri::AppHandle) -> Result<u64, String> {
+    storage::message_count(&app)
 }
 
 /// 保存消息命令

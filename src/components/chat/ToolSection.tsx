@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import type { ToolCall, ToolCallStatus } from '@/types';
 import { CodeBlock } from './CodeBlock';
+import { parseAskUserArguments } from '@/utils/askUserDisplay';
 
 interface ToolSectionProps {
   toolCall: ToolCall;
@@ -66,6 +67,10 @@ function getToolIcon(name: string): { Icon: typeof FileText; borderColor: string
 function actionSummary(tc: ToolCall): string {
   try {
     const args = JSON.parse(tc.arguments);
+    if (tc.name === 'ask_user') {
+      const question = parseAskUserArguments(tc.arguments).question;
+      return question ? `需要你回答: ${question}` : '需要你回答一个问题';
+    }
     if (args.path) return args.path as string;
     if (args.question) return (args.question as string).slice(0, 50);
     return '';
@@ -282,13 +287,7 @@ export const ToolSection = memo(function ToolSection({
 // ── ask_user 卡片(展开时显示) ──
 
 function AskUserCard({ toolCall, hasResult }: { toolCall: ToolCall; hasResult: boolean }) {
-  let parsed: {
-    question?: string;
-    header?: string;
-    options?: { label: string; description?: string; requires_input?: boolean; input_placeholder?: string }[];
-    multi_select?: boolean;
-  } = {};
-  try { parsed = JSON.parse(toolCall.arguments); } catch { /* */ }
+  const parsed = parseAskUserArguments(toolCall.arguments);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
@@ -302,7 +301,23 @@ function AskUserCard({ toolCall, hasResult }: { toolCall: ToolCall; hasResult: b
         }}>
           <HelpCircle size={12} />
           {parsed.header}
-          {parsed.multi_select && <span style={{ color: 'var(--text-tertiary)', fontWeight: 400 }}>· 多选</span>}
+          {parsed.multiSelect && <span style={{ color: 'var(--text-tertiary)', fontWeight: 400 }}>· 多选</span>}
+        </div>
+      )}
+      {!hasResult && (
+        <div style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 'var(--space-1)',
+          alignSelf: 'flex-start',
+          padding: '3px 8px',
+          borderRadius: 'var(--radius-full)',
+          background: 'var(--primary-tint-soft)',
+          color: 'var(--buddy-primary)',
+          fontSize: 'var(--font-size-xs)',
+          fontWeight: 600,
+        }}>
+          等待你的回答
         </div>
       )}
       {/* question */}
@@ -323,7 +338,7 @@ function AskUserCard({ toolCall, hasResult }: { toolCall: ToolCall; hasResult: b
               color: 'var(--text-primary)', whiteSpace: 'nowrap',
             }}>
               {opt.label}
-              {opt.requires_input && (
+              {opt.requiresInput && (
                 <span style={{ fontSize: 9, padding: '0px 4px', borderRadius: 'var(--radius-full)', background: 'var(--bg-sunken)', color: 'var(--text-tertiary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
                   input
                 </span>

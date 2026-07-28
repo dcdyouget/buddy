@@ -18,6 +18,9 @@ import { useSmoothTextRenderer } from '@/hooks/useSmoothTextRenderer';
 import { openNativeModelMenu } from '@/utils/modelMenu';
 import type { Message, ModelInfo } from '@/types';
 
+/** 用户离开底部超过该距离后，立即停止流式自动跟随。 */
+const BOTTOM_FOLLOW_TOLERANCE = 12;
+
 /**
  * 统一聊天页组件
  *
@@ -29,6 +32,7 @@ import type { Message, ModelInfo } from '@/types';
 export function ChatPage() {
   const dragRef = useDragHandle();
   const { setPage } = useUIStore();
+  const [isHistoryVisible, setIsHistoryVisible] = useState(false);
   // 改用 useShallow + 细粒度选择器,避免每次 set 都触发整棵 ChatPage 树重渲染。
   // 之前 `useChatStore()` 无选择器,流式期间 smoothTextDelta 每 ~16ms set 一次,
   // 整页 + 所有 MessageBubble 子树被强行 re-render 60Hz/秒。
@@ -46,6 +50,9 @@ export function ChatPage() {
     waitingForResponse,
     error,
     setError,
+    hasMoreHistory,
+    isLoadingHistory,
+    loadOlderMessages,
   } = useChatStore(
     useShallow((s) => ({
       messages: s.messages,
@@ -61,6 +68,9 @@ export function ChatPage() {
       waitingForResponse: s.waitingForResponse,
       error: s.error,
       setError: s.setError,
+      hasMoreHistory: s.hasMoreHistory,
+      isLoadingHistory: s.isLoadingHistory,
+      loadOlderMessages: s.loadOlderMessages,
     })),
   );
   const { config } = useConfigStore();
@@ -68,6 +78,13 @@ export function ChatPage() {
 
   // 平滑文本渲染器：rAF 循环从缓冲队列逐字消费到 streamingBlocks
   useSmoothTextRenderer();
+
+  // 气泡展开时先让外壳完成 GPU 缩放，再挂载历史 Markdown。
+  // 避免大量 Markdown / 代码块的首次解析与展开动画抢占同一帧。
+  useEffect(() => {
+    const timer = window.setTimeout(() => setIsHistoryVisible(true), 240);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   // 当前选中的模型
   const selectedModel: ModelInfo | null =
@@ -111,15 +128,32 @@ export function ChatPage() {
   // 用 ref 跟踪上一次的 isAtBottom 和 showScrollButton，避免重复打 log
   const prevIsAtBottomRef = useRef(true);
   const prevShowButtonRef = useRef(false);
+  const isLoadingOlderRef = useRef(false);
 
-  /** 判断滚动容器是否在底部（50px 容差） */
+  /** 判断滚动容器是否仍在底部附近。容差保持很小，便于用户立即接管滚动。 */
   const checkAtBottom = useCallback((): boolean => {
     const el = scrollRef.current;
     if (!el) return true;
-    return el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_FOLLOW_TOLERANCE;
   }, []);
 
   /** 用户手动滚动时更新 isAtBottom 状态 */
+  const loadOlderHistory = useCallback(async () => {
+    const el = scrollRef.current;
+    if (!el || !hasMoreHistory || isLoadingOlderRef.current) return;
+
+    isLoadingOlderRef.current = true;
+    const previousHeight = el.scrollHeight;
+    const previousTop = el.scrollTop;
+    await loadOlderMessages();
+
+    requestAnimationFrame(() => {
+      const heightDelta = el.scrollHeight - previousHeight;
+      el.scrollTop = previousTop + heightDelta;
+      isLoadingOlderRef.current = false;
+    });
+  }, [hasMoreHistory, loadOlderMessages]);
+
   const handleScroll = useCallback(() => {
     const atBottom = checkAtBottom();
     if (atBottom !== prevIsAtBottomRef.current) {
@@ -128,14 +162,22 @@ export function ChatPage() {
       prevIsAtBottomRef.current = atBottom;
     }
     setIsAtBottom(atBottom);
-  }, [checkAtBottom]);
 
-  /** 仅在用户处于底部时才自动跟随新消息 */
+    if (scrollRef.current && scrollRef.current.scrollTop <= 56) {
+      void loadOlderHistory();
+    }
+  }, [checkAtBottom, loadOlderHistory]);
+
+  /**
+   * 仅在用户处于底部时才自动跟随新内容。
+   * 思考过程和流式正文写入 streamingBlocks，而非 messages；若不监听它，
+   * 新一轮的首个思考卡片会在消息创建后才插入，停留在输入栏下方。
+   */
   useEffect(() => {
     if (scrollRef.current && isAtBottom) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, isAtBottom]);
+  }, [messages, streamingBlocks, isAtBottom, isHistoryVisible]);
 
   /** 流式开始时重置为跟随模式 */
   useEffect(() => {
@@ -225,6 +267,7 @@ export function ChatPage() {
           onScroll={handleScroll}
           style={{
             flex: 1,
+            minHeight: 0,
             overflowY: 'auto',
             padding: 'var(--space-3) 0 var(--space-2)',
             display: 'flex',
@@ -233,15 +276,31 @@ export function ChatPage() {
             position: 'relative',
           }}
         >
+          {isLoadingHistory && hasMoreHistory && (
+            <div
+              style={{
+                padding: 'var(--space-2) var(--space-4)',
+                color: 'var(--text-tertiary)',
+                fontSize: 'var(--font-size-xs)',
+                textAlign: 'center',
+              }}
+            >
+              正在加载更早消息…
+            </div>
+          )}
+
           {/* tool 消息是内部消息，不展示给用户;parent_message_id 非空的用户回应
               也不在主列表渲染，而是嵌套到对应的 assistant 消息内。
               visible / childByParent / liveToolCallsForLast 已在 useMemo 中算好,
               此处只做纯映射,不再 filter / Object.values。 */}
-          {visible.map((msg, i, arr) => {
-            const questionId =
-              msg.role === 'assistant' && i > 0 && arr[i - 1].role === 'user'
-                ? `msg-${arr[i - 1].id}`
+          {isHistoryVisible && visible.map((msg, i, arr) => {
+            // 工具消息不会单独显示，工具循环后的最终 assistant 消息在可见列表中
+            // 可能紧跟另一条 assistant。向上按钮需跨过这些续段，定位到本轮原始问题。
+            const previousUser =
+              msg.role === 'assistant'
+                ? arr.slice(0, i).reverse().find((candidate) => candidate.role === 'user')
                 : undefined;
+            const questionId = previousUser ? `msg-${previousUser.id}` : undefined;
             const isLast = isStreaming && msg.role === 'assistant' && i === arr.length - 1;
             // 工具循环会连续产生多个 assistant 消息；视觉上应作为同一条回答紧凑衔接。
             const isContinuation =

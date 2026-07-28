@@ -238,6 +238,12 @@ export const MessageBubble = memo(function MessageBubble({
 }: MessageBubbleProps) {
   const isUser = message.role === 'user';
   const [copied, setCopied] = useState(false);
+  const hasChildResponses = (childResponses?.length ?? 0) > 0;
+  const showMessageMeta =
+    !isStreaming &&
+    !hasChildResponses &&
+    !continuesToNext &&
+    Boolean(message.content);
 
   const handleBackToQuestion = () => {
     if (!questionId) return;
@@ -322,7 +328,7 @@ export const MessageBubble = memo(function MessageBubble({
                 ))}
               </div>
             )}
-            {!isStreaming && questionId && message.content && (
+            {showMessageMeta && (
               <div
                 className="message-actions"
                 style={{
@@ -361,25 +367,27 @@ export const MessageBubble = memo(function MessageBubble({
                 >
                   {copied ? <Check size={13} /> : <Copy size={13} />}
                 </button>
-                <button
-                  className="message-action-button"
-                  onClick={handleBackToQuestion}
-                  title="回到问题"
-                  aria-label="回到问题"
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    padding: '2px 8px',
-                    border: 'none',
-                    borderRadius: 'var(--radius-sm)',
-                    fontSize: '12px',
-                    cursor: 'pointer',
-                    transition: 'color 0.15s, background 0.15s',
-                  }}
-                >
-                  <ArrowUp size={13} />
-                </button>
+                {questionId && (
+                  <button
+                    className="message-action-button"
+                    onClick={handleBackToQuestion}
+                    title="回到问题"
+                    aria-label="回到问题"
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: '2px 8px',
+                      border: 'none',
+                      borderRadius: 'var(--radius-sm)',
+                      fontSize: '12px',
+                      cursor: 'pointer',
+                      transition: 'color 0.15s, background 0.15s',
+                    }}
+                  >
+                    <ArrowUp size={13} />
+                  </button>
+                )}
               </div>
             )}
           </>
