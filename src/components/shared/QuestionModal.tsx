@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useChatStore } from '@/stores/chatStore';
+import { extractAskUserQuestion } from '@/utils/askUserDisplay';
 
 export function QuestionModal() {
   const pending = useChatStore((s) => s.pendingQuestion);
@@ -92,6 +93,7 @@ export function QuestionModal() {
     pending && selected.size > 0
       ? Array.from(selected).filter((idx) => pending.options[idx]?.description)
       : [];
+  const displayQuestion = pending ? extractAskUserQuestion(pending.question) : '';
 
   return (
     <AnimatePresence>
@@ -112,8 +114,6 @@ export function QuestionModal() {
               width: 440,
               maxWidth: '100%',
               background: 'var(--bg-elevated)',
-              backdropFilter: 'blur(var(--blur-surface)) saturate(160%)',
-              WebkitBackdropFilter: 'blur(var(--blur-surface)) saturate(160%)',
               border: '1px solid var(--border-default)',
               borderRadius: 'var(--radius-xl)',
               overflow: 'hidden',
@@ -193,7 +193,7 @@ export function QuestionModal() {
                 lineHeight: 'var(--line-height-relaxed)',
               }}
             >
-              {pending.question}
+              {displayQuestion}
             </div>
 
             {/* ── 选项按钮(横向排列) ── */}
@@ -418,7 +418,7 @@ export function QuestionModal() {
                   color: 'var(--text-tertiary)',
                 }}
               >
-                Esc · 关闭窗口
+                请选择一个选项，或直接输入自定义回答
               </div>
               <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
                 <button

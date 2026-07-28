@@ -75,8 +75,6 @@ export function ModelDropdown({
           background: 'var(--bg-elevated)',
           border: '1px solid var(--border-subtle)',
           boxShadow: 'var(--shadow-floating-md)',
-          backdropFilter: 'blur(20px) saturate(160%)',
-          WebkitBackdropFilter: 'blur(20px) saturate(160%)',
           zIndex: 200,
         }}
         className="no-scrollbar model-dropdown"

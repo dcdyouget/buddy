@@ -9,14 +9,14 @@ describe('shouldStartWindowDrag', () => {
     expect(shouldStartWindowDrag(blank)).toBe(true);
   });
 
-  it('保留消息文本的选择行为', () => {
+  it('仅消息中的文字保留选择，气泡空白处可以拖动', () => {
     const bubble = document.createElement('div');
     bubble.className = 'message-bubble';
     const paragraph = document.createElement('p');
     bubble.appendChild(paragraph);
 
     expect(shouldStartWindowDrag(paragraph)).toBe(false);
-    expect(shouldStartWindowDrag(bubble)).toBe(false);
+    expect(shouldStartWindowDrag(bubble)).toBe(true);
   });
 
   it('点击按钮内部图标时不会触发拖动', () => {

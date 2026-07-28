@@ -26,6 +26,10 @@ import { parseThinkBlocks } from '@/utils/thinkParser';
 /** ChatStore 状态和操作定义 */
 interface ChatState {
   messages: Message[];
+  /** 当前已加载历史中最早一条的全局偏移量。 */
+  historyOffset: number;
+  hasMoreHistory: boolean;
+  isLoadingHistory: boolean;
   draftInput: string;
   isStreaming: boolean;
   streamingTokens: number;
@@ -98,7 +102,8 @@ interface ChatState {
   smoothTextDelta: (count: number) => void;
   flushTextBuffer: () => void;
   saveMessage: (message: Message) => Promise<void>;
-  loadMessages: (offset?: number, limit?: number) => Promise<void>;
+  loadMessages: () => Promise<void>;
+  loadOlderMessages: () => Promise<void>;
   clearMessages: () => void;
   setMessages: (messages: Message[]) => void;
   setError: (error: string | null) => void;
@@ -147,9 +152,23 @@ function findLastAssistantIdx(messages: Message[]): number {
   return -1;
 }
 
+const HISTORY_PAGE_SIZE = 10;
+
+function hydrateHistoryMessages(messages: Message[]): Message[] {
+  return messages.map((msg) => {
+    if (msg.role === 'assistant' && (!msg.blocks || msg.blocks.length === 0) && msg.content) {
+      return { ...msg, blocks: parseThinkFromText(msg.content) };
+    }
+    return msg;
+  });
+}
+
 export const useChatStore = create<ChatState>((set, get) => ({
   // 浏览器模式预填充 mock 消息，方便 UI 调试
   messages: isBrowser ? [...MOCK_MESSAGES] : [],
+  historyOffset: 0,
+  hasMoreHistory: false,
+  isLoadingHistory: false,
   draftInput: '',
   isStreaming: false,
   streamingTokens: 0,
@@ -635,24 +654,56 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
-  /** 从磁盘加载历史消息，自动补全缺失的 blocks */
-  loadMessages: async (offset = 0, limit = 100) => {
+  /** 从磁盘加载最新一页历史消息，自动补全缺失的 blocks。 */
+  loadMessages: async () => {
     if (isBrowser) return;
     try {
-      const { loadMessages: load } = await import('@/api/storage');
-      const history = await load(offset, limit);
-      if (history && history.length > 0) {
-        // 为没有 blocks 的消息从 content 中解析 blocks
-        const withBlocks = history.map((msg) => {
-          if (msg.role === 'assistant' && (!msg.blocks || msg.blocks.length === 0) && msg.content) {
-            return { ...msg, blocks: parseThinkFromText(msg.content) };
-          }
-          return msg;
-        });
-        set({ messages: withBlocks });
-      }
+      set({ isLoadingHistory: true });
+      const { getMessageCount, loadMessages: load } = await import('@/api/storage');
+      const total = await getMessageCount();
+      const offset = Math.max(0, total - HISTORY_PAGE_SIZE);
+      const history = await load(offset, HISTORY_PAGE_SIZE);
+      const hydrated = hydrateHistoryMessages(history || []);
+      const loadedIds = new Set(hydrated.map((message) => message.id));
+
+      set((state) => ({
+        // 启动加载期间若用户已发送消息，保留那些尚未被磁盘页覆盖的本地消息。
+        messages: [...hydrated, ...state.messages.filter((message) => !loadedIds.has(message.id))],
+        historyOffset: offset,
+        hasMoreHistory: offset > 0,
+        isLoadingHistory: false,
+      }));
     } catch (e) {
+      set({ isLoadingHistory: false });
       console.error('[Buddy] 加载历史消息失败:', e);
+    }
+  },
+
+  /** 加载当前最早消息之前的一页，并追加到列表开头。 */
+  loadOlderMessages: async () => {
+    const { historyOffset, hasMoreHistory, isLoadingHistory } = get();
+    if (isBrowser || !hasMoreHistory || isLoadingHistory) return;
+
+    try {
+      set({ isLoadingHistory: true });
+      const nextOffset = Math.max(0, historyOffset - HISTORY_PAGE_SIZE);
+      const limit = historyOffset - nextOffset;
+      const { loadMessages: load } = await import('@/api/storage');
+      const history = await load(nextOffset, limit);
+      const hydrated = hydrateHistoryMessages(history || []);
+
+      set((state) => {
+        const existingIds = new Set(state.messages.map((message) => message.id));
+        return {
+          messages: [...hydrated.filter((message) => !existingIds.has(message.id)), ...state.messages],
+          historyOffset: nextOffset,
+          hasMoreHistory: nextOffset > 0,
+          isLoadingHistory: false,
+        };
+      });
+    } catch (e) {
+      set({ isLoadingHistory: false });
+      console.error('[Buddy] 加载更早历史消息失败:', e);
     }
   },
 
@@ -804,7 +855,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
   clearMessages: () => {
-    set({ messages: [], draftInput: '', error: null, activeToolCalls: {}, toolApproval: null });
+    set({
+      messages: [],
+      draftInput: '',
+      error: null,
+      activeToolCalls: {},
+      toolApproval: null,
+      historyOffset: 0,
+      hasMoreHistory: false,
+      isLoadingHistory: false,
+    });
   },
 
   /** 设置完整的消息列表（用于加载历史对话） */

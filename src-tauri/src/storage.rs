@@ -109,78 +109,83 @@ static APPEND_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 ///
 /// 线程安全:通过 `APPEND_LOCK` 串行化所有写入,防止并发 `spawn_blocking` 丢消息。
 pub fn append_message(app: &tauri::AppHandle, message: &Message) -> Result<(), String> {
+    append_messages(app, std::slice::from_ref(message))
+}
+
+/// 批量追加同一轮对话产生的消息。
+///
+/// 一轮流式对话可能包含 assistant、多个 tool call/result。将这些消息在内存中
+/// 收集后一次写入，避免每条消息都重复读取、序列化并覆写同一个 JSON 分块。
+pub fn append_messages(app: &tauri::AppHandle, messages: &[Message]) -> Result<(), String> {
+    if messages.is_empty() {
+        return Ok(());
+    }
+
     // 防止 mutex poisoning 级联失败: 若上一持锁者 panic 了,
     // unwrap_or_else(|p| p.into_inner()) 仍拿到 guard(其内部状态反映 panic 前),
     // 后续写盘流程照常推进 —— 持久化不会因一次 panic 永久停摆。
     let _guard = APPEND_LOCK.lock().unwrap_or_else(|p| {
-        log::warn!("[storage::append_message] APPEND_LOCK 已 poison,恢复并继续");
+        log::warn!("[storage::append_messages] APPEND_LOCK 已 poison,恢复并继续");
         p.into_inner()
     });
     let dir = ensure_data_dir(app)?;
     let mut manifest = read_manifest(&dir);
 
-    // 确定目标分块文件：若最后一个分块已满则创建新分块
-    let chunk_file = if let Some(last) = manifest.chunks.last() {
-        if last.count >= CHUNK_SIZE {
-            // 当前最后一个分块已满，创建新分块
-            let new_idx = manifest.chunks.len() as u32 + 1;
-            let file = format!("chunk_{:03}.json", new_idx);
-            manifest.chunks.push(ChunkMeta {
-                file: file.clone(),
-                count: 0, // 初始计数为 0，追加消息后再更新
-            });
-            file
-        } else {
-            // 继续追加到当前最后一个分块
-            last.file.clone()
-        }
-    } else {
-        // 没有任何分块文件，创建第一个分块
-        let file = "chunk_001.json".to_string();
-        manifest.chunks.push(ChunkMeta {
-            file: file.clone(),
-            count: 0,
-        });
-        file
-    };
+    let mut active: Option<(String, ChatChunk)> = None;
+    for message in messages {
+        let needs_new_chunk = active
+            .as_ref()
+            .map(|(_, chunk)| chunk.messages.len() as u32 >= CHUNK_SIZE)
+            .unwrap_or(true);
 
-    // 读取目标分块文件（不存在则创建空的 ChatChunk）
-    let chunk_path = dir.join(&chunk_file);
-    let mut chunk: ChatChunk = if chunk_path.exists() {
-        let content =
-            fs::read_to_string(&chunk_path).map_err(|e| format!("读取消息文件失败: {}", e))?;
-        serde_json::from_str(&content).unwrap_or_else(|e| {
-            warn!(
-                "[storage::append_message] 分块 {} JSON 解析失败，将创建新分块: {}",
-                chunk_file, e
-            );
-            ChatChunk {
-                id: chunk_file.trim_end_matches(".json").to_string(),
-                messages: vec![],
+        if needs_new_chunk {
+            if let Some((file, chunk)) = active.take() {
+                write_chunk(&dir, &file, &chunk)?;
             }
-        })
-    } else {
-        ChatChunk {
-            id: chunk_file.trim_end_matches(".json").to_string(),
-            messages: vec![],
+
+            let file = match manifest.chunks.last() {
+                Some(last) if last.count < CHUNK_SIZE => last.file.clone(),
+                _ => {
+                    let file = format!("chunk_{:03}.json", manifest.chunks.len() + 1);
+                    manifest.chunks.push(ChunkMeta { file: file.clone(), count: 0 });
+                    file
+                }
+            };
+            let chunk = read_chunk(&dir, &file)?;
+            active = Some((file, chunk));
         }
-    };
 
-    // 追加消息并写回文件
-    chunk.messages.push(message.clone());
-
-    let content = serde_json::to_string_pretty(&chunk)
-        .map_err(|e| format!("序列化消息失败: {}", e))?;
-    fs::write(&chunk_path, content).map_err(|e| format!("写入消息文件失败: {}", e))?;
-
-    // 更新 manifest 中该分块的消息计数和总数
-    if let Some(meta) = manifest.chunks.iter_mut().find(|m| m.file == chunk_file) {
-        meta.count = chunk.messages.len() as u32;
+        let (file, chunk) = active.as_mut().expect("active chunk must exist");
+        chunk.messages.push(message.clone());
+        if let Some(meta) = manifest.chunks.iter_mut().find(|meta| meta.file == *file) {
+            meta.count = chunk.messages.len() as u32;
+        }
+        manifest.total_messages = manifest.total_messages.saturating_add(1);
     }
-    manifest.total_messages = manifest.total_messages.saturating_add(1);
+
+    if let Some((file, chunk)) = active {
+        write_chunk(&dir, &file, &chunk)?;
+    }
     write_manifest(&dir, &manifest)?;
 
     Ok(())
+}
+
+fn read_chunk(dir: &PathBuf, file: &str) -> Result<ChatChunk, String> {
+    let path = dir.join(file);
+    if !path.exists() {
+        return Ok(ChatChunk { id: file.trim_end_matches(".json").to_string(), messages: vec![] });
+    }
+    let content = fs::read_to_string(&path).map_err(|e| format!("读取消息文件失败: {}", e))?;
+    Ok(serde_json::from_str(&content).unwrap_or_else(|e| {
+        warn!("[storage::append_messages] 分块 {} JSON 解析失败，将创建空分块: {}", file, e);
+        ChatChunk { id: file.trim_end_matches(".json").to_string(), messages: vec![] }
+    }))
+}
+
+fn write_chunk(dir: &PathBuf, file: &str, chunk: &ChatChunk) -> Result<(), String> {
+    let content = serde_json::to_string_pretty(chunk).map_err(|e| format!("序列化消息失败: {}", e))?;
+    fs::write(dir.join(file), content).map_err(|e| format!("写入消息文件失败: {}", e))
 }
 
 /// 按偏移量和数量加载历史消息（支持跨分块查询）
@@ -265,6 +270,14 @@ pub fn load_messages(
     }
 
     Ok(collected)
+}
+
+/// 返回已持久化的消息总数。
+///
+/// 前端用它从末尾计算首屏偏移量，以便优先加载最新的历史消息。
+pub fn message_count(app: &tauri::AppHandle) -> Result<u64, String> {
+    let dir = data_dir(app)?;
+    Ok(read_manifest(&dir).total_messages)
 }
 
 // ── 单元测试 ──────────────────────────────────────────────

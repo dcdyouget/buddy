@@ -3,6 +3,7 @@ import { CornerDownLeft, MessageSquarePlus, Send } from 'lucide-react';
 import { IconButton } from '@/components/shared/IconButton';
 import { useChatStore } from '@/stores/chatStore';
 import { useConfigStore } from '@/stores/configStore';
+import { extractAskUserQuestion } from '@/utils/askUserDisplay';
 
 /**
  * UserResponseInput — 回应模型问题的输入面板
@@ -31,6 +32,7 @@ export function UserResponseInput() {
   }, [waiting]);
 
   if (!waiting) return null;
+  const displayQuestion = extractAskUserQuestion(waiting.question);
 
   const submit = () => {
     const content = text.trim();
@@ -68,9 +70,8 @@ export function UserResponseInput() {
   return (
     <div
       style={{
-        padding: 'var(--space-3)',
-        borderTop: '1px solid var(--border-subtle)',
-        background: 'var(--bg-sunken)',
+        padding: 'var(--space-2)',
+        background: 'transparent',
         width: '100%',
         boxSizing: 'border-box',
       }}
@@ -83,20 +84,33 @@ export function UserResponseInput() {
           gap: 'var(--space-2)',
           marginBottom: 'var(--space-2)',
           padding: 'var(--space-2) var(--space-3)',
-          background: 'var(--bg-surface)',
+          background: 'var(--composer-surface)',
           borderLeft: '2px solid var(--buddy-primary)',
-          borderRadius: 'var(--radius-sm)',
-          fontSize: '12px',
-          color: 'var(--text-muted)',
-          maxHeight: '72px',
-          overflowY: 'auto',
+          borderRadius: 'var(--radius-md)',
+          boxShadow: 'inset 0 0 0 1px var(--border-subtle)',
+          fontSize: 'var(--font-size-base)',
+          color: 'var(--text-primary)',
         }}
       >
         <CornerDownLeft
           size={12}
           style={{ color: 'var(--buddy-primary)', flexShrink: 0, marginTop: 2 }}
         />
-        <span style={{ overflowWrap: 'break-word' }}>{waiting.question}</span>
+        <div style={{ minWidth: 0 }}>
+          <div
+            style={{
+              marginBottom: 2,
+              color: 'var(--buddy-primary)',
+              fontSize: 'var(--font-size-xs)',
+              fontWeight: 700,
+            }}
+          >
+            模型正在等待你的回答
+          </div>
+          <span style={{ overflowWrap: 'break-word', lineHeight: 'var(--line-height-base)' }}>
+            {displayQuestion}
+          </span>
+        </div>
       </div>
 
       {/* 回应输入区 */}
@@ -113,7 +127,7 @@ export function UserResponseInput() {
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="回应模型... Enter 发送 · ⌘Enter 换行"
+          placeholder="回答上面的问题… Enter 发送 · ⌘Enter 换行"
           rows={1}
           style={{
             flex: 1,

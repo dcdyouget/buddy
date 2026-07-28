@@ -25,7 +25,7 @@ interface UIState {
   themeReady: boolean;               // 主题是否已加载就绪（避免闪烁）
 
   // ── 操作 ──
-  setPage: (page: PageState) => void;         // 切换页面
+  setPage: (page: PageState) => Promise<void>; // 切换页面
   goBack: () => void;                          // 返回上一页
   setError: (error: string) => void;           // 设置错误（自动分类）
   clearError: () => void;                      // 清除错误
@@ -33,6 +33,8 @@ interface UIState {
   toggleModelDropdown: () => void;             // 切换下拉菜单开关
   setThemeReady: (ready: boolean) => void;     // 设置主题就绪
 }
+
+let activePageTransitionId = 0;
 
 export const useUIStore = create<UIState>((set, get) => ({
   currentPage: 'empty',
@@ -48,11 +50,18 @@ export const useUIStore = create<UIState>((set, get) => ({
    * - 清除错误状态
    * - 自动调整窗口尺寸
    */
-  setPage: (page: PageState) => {
+  setPage: async (page: PageState) => {
     const { currentPage } = get();
+    if (currentPage === page) return;
+
+    const transitionId = ++activePageTransitionId;
     console.log('[Buddy] setPage called:', currentPage, '→', page);
-    // 在 set 之前调用 resizeWindowForPage，使其能够读取到旧页面状态
-    resizeWindowForPage(currentPage, page);
+
+    // compact → content 必须先完成原生窗口放大，再挂载目标页面。
+    // 否则内容会先挤在 560×60 的旧窗口里，产生停顿和闪跳。
+    await resizeWindowForPage(currentPage, page);
+    if (transitionId !== activePageTransitionId) return;
+
     set({ currentPage: page, previousPage: currentPage, error: null, errorType: null });
   },
 

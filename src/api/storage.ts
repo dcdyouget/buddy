@@ -18,6 +18,11 @@ export async function loadMessages(offset: number = 0, limit: number = 100): Pro
   return invokeBackend<Message[]>('load_messages', { offset, limit });
 }
 
+/** 获取已持久化消息总数，用于从末尾分页加载。 */
+export async function getMessageCount(): Promise<number> {
+  return invokeBackend<number>('get_message_count');
+}
+
 /** 将单条消息持久化到本地存储 */
 export async function saveMessage(message: Message): Promise<void> {
   await invokeBackend('save_message', { message });

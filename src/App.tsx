@@ -204,14 +204,14 @@ function App() {
       <SlideInPanel from="right" show={currentPage === 'settings'}>
         {currentPage === 'settings' && (
           <SettingsPage
-            onBack={() => {
+            onBack={async () => {
               const prev = useUIStore.getState().previousPage ?? 'empty';
               if (prev === 'empty' || prev === 'noapikey') {
-                void resizeWindowToPage('conversation');
-                setPage('conversation');
+                await resizeWindowToPage('conversation');
+                await setPage('conversation');
                 return;
               }
-              setPage(prev);
+              await setPage(prev);
             }}
           />
         )}

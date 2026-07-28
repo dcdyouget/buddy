@@ -79,6 +79,7 @@ pub fn run() {
             commands::fetch_models,
             commands::test_latency,
             commands::load_messages,
+            commands::get_message_count,
             commands::save_message,
         ])
         .on_window_event(|window, event| {

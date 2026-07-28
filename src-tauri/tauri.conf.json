@@ -14,10 +14,11 @@
     "windows": [
       {
         "title": "Buddy",
-        "width": 460,
-        "height": 78,
+        "width": 560,
+        "height": 60,
         "decorations": false,
         "transparent": true,
+        "shadow": false,
         "acceptFirstMouse": true,
         "alwaysOnTop": false,
         "visibleOnAllWorkspaces": true,

@@ -22,7 +22,6 @@ const NO_DRAG_SELECTOR = [
   'label',
   '[contenteditable]:not([contenteditable="false"])',
   '[data-no-window-drag]',
-  '.message-bubble',
   'p',
   'span',
   'pre',
@@ -41,7 +40,11 @@ const NO_DRAG_SELECTOR = [
   'dd',
 ].join(',');
 
-/** 仅空白容器和玻璃背景可触发窗口拖动。 */
+/**
+ * 仅文字本身与可交互控件阻止拖动。
+ * 消息气泡占满整行，不能把整个气泡都列为禁拖区域；否则文字四周的空白
+ * 也无法拖窗。实际文本节点由下列语义元素匹配，气泡的空白区域则可拖动。
+ */
 export function shouldStartWindowDrag(target: EventTarget | null): boolean {
   return target instanceof Element && !target.closest(NO_DRAG_SELECTOR);
 }

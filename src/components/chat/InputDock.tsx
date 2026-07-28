@@ -1,4 +1,4 @@
-import { useRef, useEffect, type KeyboardEvent } from 'react';
+import { useRef, useEffect, type KeyboardEvent, type PointerEvent } from 'react';
 import { ChevronDown, Send, Settings, Square } from 'lucide-react';
 import { IconButton } from '@/components/shared/IconButton';
 import { ClearButton } from './ClearButton';
@@ -123,12 +123,31 @@ export function InputDock({
     }
   };
 
+  const handlePointerMove = (e: PointerEvent<HTMLDivElement>) => {
+    const bounds = e.currentTarget.getBoundingClientRect();
+    e.currentTarget.style.setProperty(
+      '--composer-pointer-x',
+      `${e.clientX - bounds.left}px`,
+    );
+    e.currentTarget.style.setProperty(
+      '--composer-pointer-y',
+      `${e.clientY - bounds.top}px`,
+    );
+  };
+
+  const handlePointerLeave = (e: PointerEvent<HTMLDivElement>) => {
+    e.currentTarget.style.setProperty('--composer-pointer-x', '50%');
+    e.currentTarget.style.setProperty('--composer-pointer-y', '0px');
+  };
+
   // 是否有有效输入内容（去除空白后）
   const hasContent = draftInput.trim().length > 0;
 
   return (
     <div
       className={`input-dock ${hideBorder ? 'is-standalone' : ''}`}
+      onPointerMove={handlePointerMove}
+      onPointerLeave={handlePointerLeave}
       style={{
         display: 'flex',
         alignItems: 'center',
