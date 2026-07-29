@@ -1,7 +1,7 @@
 /**
  * ApprovalModal.tsx — Tool 执行审批弹窗
  *
- * 与 QuestionModal 共享统一视觉语言：
+ * 与工具交互卡片共享统一视觉语言：
  * - 玻璃面板 + backdrop blur + 淡入动画
  * - header icon + 标题
  * - 横向并排操作按钮
@@ -37,33 +37,25 @@ export function ApprovalModal() {
     <AnimatePresence>
       {approval && (
         <motion.div
-          initial={{ opacity: 0, height: 0, marginBottom: 0 }}
-          animate={{ opacity: 1, height: 'auto', marginBottom: 'var(--space-2)' }}
-          exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+          className="tool-interaction-layer"
+          initial={{ opacity: 0, y: 8, scale: 0.99 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 6, scale: 0.99 }}
           transition={{ duration: 0.2, ease: 'easeOut' }}
-          style={{
-            overflow: 'hidden',
-            display: 'flex',
-            justifyContent: 'center',
-          }}
         >
         <div
+          className="tool-interaction-shell"
           style={{
-            width: 420,
+            width: 440,
             maxWidth: '100%',
           }}
         >
           <div
-            style={{
-              background: 'var(--bg-elevated)',
-              border: '1px solid var(--border-default)',
-              borderRadius: 'var(--radius-xl)',
-              overflow: 'hidden',
-              boxShadow: 'var(--shadow-floating-md)',
-            }}
+            className="tool-interaction-panel"
           >
             {/* ── Header ── */}
             <div
+              className="tool-interaction-header"
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -72,12 +64,13 @@ export function ApprovalModal() {
               }}
             >
               <div
+                className="tool-interaction-icon"
                 style={{
-                  width: 32,
-                  height: 32,
+                  width: 28,
+                  height: 28,
                   borderRadius: 'var(--radius-md)',
-                  background: 'var(--buddy-primary-50)',
-                  color: 'var(--buddy-primary)',
+                  background: 'var(--tool-ui-accent-soft)',
+                  color: 'var(--tool-ui-accent-strong)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -88,6 +81,7 @@ export function ApprovalModal() {
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div
+                  className="tool-interaction-title"
                   style={{
                     fontSize: 'var(--font-size-md)',
                     fontWeight: 600,
@@ -112,6 +106,7 @@ export function ApprovalModal() {
 
             {/* ── 参数预览 ── */}
             <div
+              className="tool-interaction-preview"
               style={{
                 margin: '0 var(--space-4) var(--space-3)',
                 padding: 'var(--space-2) var(--space-3)',
@@ -139,6 +134,7 @@ export function ApprovalModal() {
               }}
             >
               <button
+                className="tool-action-button"
                 onClick={handleDeny}
                 style={{
                   flex: 1,
@@ -171,13 +167,14 @@ export function ApprovalModal() {
                 拒绝
               </button>
               <button
+                className="tool-action-button"
                 onClick={handleAllowAll}
                 style={{
                   flex: 1,
                   padding: '8px 0',
-                  border: '1px solid var(--buddy-primary)',
+                  border: '1px solid var(--tool-ui-accent)',
                   background: 'transparent',
-                  color: 'var(--buddy-primary)',
+                  color: 'var(--tool-ui-accent-strong)',
                   borderRadius: 'var(--radius-md)',
                   cursor: 'pointer',
                   fontSize: 'var(--font-size-sm)',
@@ -189,7 +186,7 @@ export function ApprovalModal() {
                   transition: 'all 0.12s',
                 }}
                 onMouseEnter={(e) => {
-                  e.currentTarget.style.background = 'var(--primary-tint-soft)';
+                  e.currentTarget.style.background = 'var(--tool-ui-accent-soft)';
                 }}
                 onMouseLeave={(e) => {
                   e.currentTarget.style.background = 'transparent';
@@ -199,12 +196,13 @@ export function ApprovalModal() {
                 本次都允许
               </button>
               <button
+                className="tool-action-button"
                 onClick={handleAllow}
                 style={{
                   flex: 1.2,
                   padding: '8px 0',
                   border: 'none',
-                  background: 'var(--buddy-primary)',
+                  background: 'var(--tool-ui-action)',
                   color: 'var(--text-on-primary)',
                   borderRadius: 'var(--radius-md)',
                   cursor: 'pointer',

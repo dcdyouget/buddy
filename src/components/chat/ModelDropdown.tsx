@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Check } from 'lucide-react';
 import type { ModelInfo } from '@/types';
@@ -30,6 +30,8 @@ export function ModelDropdown({
   onClose,
 }: ModelDropdownProps) {
   const ref = useRef<HTMLDivElement>(null);
+  const closeTimerRef = useRef<number | null>(null);
+  const [pendingSelectedId, setPendingSelectedId] = useState<string | null>(null);
 
   useEffect(() => {
     // 按 Esc 键关闭下拉菜单
@@ -52,8 +54,25 @@ export function ModelDropdown({
     };
   }, [onClose]);
 
+  useEffect(
+    () => () => {
+      if (closeTimerRef.current !== null) {
+        window.clearTimeout(closeTimerRef.current);
+      }
+    },
+    [],
+  );
+
   // 仅展示 enabled 不为 false 的模型
   const enabledModels = models.filter((m) => (m as any).enabled !== false);
+  const displayedSelectedId = pendingSelectedId ?? selectedId;
+
+  /** 先展示短促的选中反馈，再关闭菜单。 */
+  const handleSelect = (modelId: string) => {
+    setPendingSelectedId(modelId);
+    onSelect(modelId);
+    closeTimerRef.current = window.setTimeout(onClose, 120);
+  };
 
   return (
       <motion.div
@@ -93,18 +112,15 @@ export function ModelDropdown({
           </div>
         )}
         {enabledModels.map((model) => {
-          const isDefault = model.id === selectedId;
+          const isDefault = model.id === displayedSelectedId;
 
           return (
             <button
-              className="model-dropdown-row"
+              className={`model-dropdown-row ${isDefault ? 'is-selected' : ''}`}
               key={model.id}
               role="option"
               aria-selected={isDefault}
-              onClick={() => {
-                onSelect(model.id);
-                onClose();
-              }}
+              onClick={() => handleSelect(model.id)}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -151,12 +167,14 @@ export function ModelDropdown({
               </div>
 
               {isDefault && (
-                <Check
-                  className="model-dropdown-check"
-                  size={14}
-                  strokeWidth={2}
-                  aria-hidden="true"
-                />
+                <span className="model-dropdown-check-wrap">
+                  <Check
+                    className="model-dropdown-check"
+                    size={14}
+                    strokeWidth={2}
+                    aria-hidden="true"
+                  />
+                </span>
               )}
             </button>
           );

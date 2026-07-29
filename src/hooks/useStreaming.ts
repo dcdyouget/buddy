@@ -142,7 +142,7 @@ export function useStreaming() {
 
             case 'tool_question_required': {
               // 模型调用了 ask_user tool:把问题挂到 chatStore,
-              // QuestionModal 会自动弹出,answer 由 answerPendingQuestion 发起
+              // AskUserCard 会在对应工具调用处显示交互,answer 由 answerPendingQuestion 发起
               setPendingQuestion({
                 id: e.id,
                 question: e.question,
@@ -164,6 +164,8 @@ export function useStreaming() {
 
             case 'error': {
               if (e.reason === 'aborted') {
+                // 若正停在审批等待中，先释放前端 Promise；后端取消后会忽略这次拒绝。
+                resolveApproval(false, false);
                 handleStreamDone();
                 setPage('conversation');
                 break;

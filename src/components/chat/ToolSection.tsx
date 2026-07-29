@@ -1,85 +1,149 @@
-import { memo, useCallback, useEffect, useState } from 'react';
 import {
+  memo,
+  useCallback,
+  useEffect,
+  useState,
+} from 'react';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
+import {
+  Braces,
   CheckCircle2,
   ChevronDown,
-  ChevronRight,
   CircleDashed,
+  FileCheck2,
+  FileDiff,
+  FileOutput,
+  FilePenLine,
   FilePlus2,
   FileText,
-  FilePenLine,
-  FileOutput,
+  FolderTree,
   HelpCircle,
   Loader2,
+  Search,
   Wrench,
   XCircle,
 } from 'lucide-react';
 import type { ToolCall, ToolCallStatus } from '@/types';
+import { useChatStore } from '@/stores/chatStore';
 import { CodeBlock } from './CodeBlock';
-import { parseAskUserArguments } from '@/utils/askUserDisplay';
+import { AskUserCard } from './AskUserCard';
 
 interface ToolSectionProps {
   toolCall: ToolCall;
   isStreaming: boolean;
 }
 
-// ── 状态图标 + 文字 ──
-
-function getStatusMeta(status: ToolCallStatus | undefined): {
+interface StatusMeta {
   label: string;
   Icon: typeof Loader2;
-  color: string;
+  tone: 'neutral' | 'info' | 'success' | 'error';
   spin: boolean;
-} {
+}
+
+interface ToolMeta {
+  label: string;
+  Icon: typeof FileText;
+}
+
+function getStatusMeta(status: ToolCallStatus | undefined): StatusMeta {
   switch (status) {
     case 'executing':
-      return { label: '执行中', Icon: Loader2, color: 'var(--state-info)', spin: true };
+      return { label: '执行中', Icon: Loader2, tone: 'info', spin: true };
     case 'done':
-      return { label: '已完成', Icon: CheckCircle2, color: 'var(--state-success)', spin: false };
+      return {
+        label: '已完成',
+        Icon: CheckCircle2,
+        tone: 'success',
+        spin: false,
+      };
     case 'error':
-      return { label: '失败',   Icon: XCircle,     color: 'var(--state-error)', spin: false };
+      return { label: '失败', Icon: XCircle, tone: 'error', spin: false };
+    case 'interrupted':
+      return {
+        label: '已中断',
+        Icon: XCircle,
+        tone: 'neutral',
+        spin: false,
+      };
     case 'calling':
     default:
-      return { label: '准备中', Icon: CircleDashed, color: 'var(--text-muted)', spin: false };
+      return {
+        label: '准备中',
+        Icon: CircleDashed,
+        tone: 'neutral',
+        spin: false,
+      };
   }
 }
 
-// ── 工具名 → 图标 + 左边框色 ──
-
-function getToolIcon(name: string): { Icon: typeof FileText; borderColor: string } {
+function getToolMeta(name: string): ToolMeta {
   switch (name) {
     case 'read_file':
-      return { Icon: FileText, borderColor: 'var(--state-info)' };
+      return {
+        label: '读取文件',
+        Icon: FileText,
+      };
+    case 'list_directory':
+      return {
+        label: '浏览目录',
+        Icon: FolderTree,
+      };
+    case 'search_files':
+      return {
+        label: '搜索文件',
+        Icon: Search,
+      };
     case 'create_file':
-      return { Icon: FilePlus2, borderColor: 'var(--state-success)' };
+      return {
+        label: '创建文件',
+        Icon: FilePlus2,
+      };
     case 'overwrite_file':
-      return { Icon: FilePenLine, borderColor: 'var(--state-warning)' };
+      return {
+        label: '覆盖文件',
+        Icon: FilePenLine,
+      };
     case 'append_file':
-      return { Icon: FileOutput, borderColor: 'var(--state-info)' };
+      return {
+        label: '追加文件',
+        Icon: FileOutput,
+      };
+    case 'edit_file':
+      return {
+        label: '编辑文件',
+        Icon: FileDiff,
+      };
     case 'ask_user':
-      return { Icon: HelpCircle, borderColor: 'var(--buddy-primary)' };
+      return {
+        label: '询问用户',
+        Icon: HelpCircle,
+      };
     default:
-      return { Icon: Wrench, borderColor: 'var(--text-muted)' };
+      return {
+        label: '调用工具',
+        Icon: Wrench,
+      };
   }
 }
 
-// ── 工具调用摘要(折叠时显示) ──
-
-function actionSummary(tc: ToolCall): string {
+function actionSummary(toolCall: ToolCall): string {
   try {
-    const args = JSON.parse(tc.arguments);
-    if (tc.name === 'ask_user') {
-      const question = parseAskUserArguments(tc.arguments).question;
-      return question ? `需要你回答: ${question}` : '需要你回答一个问题';
+    const args = JSON.parse(toolCall.arguments);
+    if (toolCall.name === 'ask_user') {
+      return args.question || '等待用户回答';
     }
-    if (args.path) return args.path as string;
-    if (args.question) return (args.question as string).slice(0, 50);
+
+    const summaryKeys = ['path', 'command', 'query', 'url', 'name'];
+    for (const key of summaryKeys) {
+      if (typeof args[key] === 'string' && args[key].trim()) {
+        return args[key];
+      }
+    }
     return '';
   } catch {
     return '';
   }
 }
-
-// ── JSON pretty print ──
 
 function prettyArgs(raw: string): string {
   if (!raw) return '(空参数)';
@@ -90,278 +154,176 @@ function prettyArgs(raw: string): string {
   }
 }
 
-export const ToolSection = memo(function ToolSection({
-  toolCall,
-  isStreaming,
-}: ToolSectionProps) {
-  const { label, Icon, color, spin } = getStatusMeta(toolCall.status);
-  const { Icon: ToolIcon, borderColor } = getToolIcon(toolCall.name);
+interface DetailBlockProps {
+  label: string;
+  Icon: typeof Braces;
+  language: string;
+  source: string;
+  isError?: boolean;
+}
 
-  const initialExpanded =
-    isStreaming && (toolCall.status === 'calling' || toolCall.status === 'executing');
-  const [expanded, setExpanded] = useState(initialExpanded);
-  const [userToggled, setUserToggled] = useState(false);
-
-  useEffect(() => {
-    if (initialExpanded) {
-      setExpanded(true);
-      setUserToggled(false);
-    } else if (!userToggled) {
-      setExpanded(false);
-    }
-  }, [initialExpanded, userToggled]);
-
-  const toggle = useCallback(() => {
-    setUserToggled(true);
-    setExpanded((prev) => !prev);
-  }, []);
-
-  const argsText = prettyArgs(toolCall.arguments);
-  const hasResult = toolCall.status === 'done' || toolCall.status === 'error';
-  const summary = actionSummary(toolCall);
-  const isAskUser = toolCall.name === 'ask_user';
-
+function DetailBlock({
+  label,
+  Icon,
+  language,
+  source,
+  isError = false,
+}: DetailBlockProps) {
   return (
-    <div
-      onClick={toggle}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          toggle();
-        }
-      }}
-      style={{
-        borderTop: '1px solid var(--border-default)',
-        borderRight: '1px solid var(--border-default)',
-        borderBottom: '1px solid var(--border-default)',
-        borderLeft: `3px solid ${borderColor}`,
-        borderRadius: 'var(--radius-md)',
-        borderTopLeftRadius: 0,
-        borderBottomLeftRadius: 0,
-        overflow: 'hidden',
-        margin: 0,
-        cursor: 'pointer',
-        width: '100%',
-        boxSizing: 'border-box',
-        background: 'var(--panel-surface)',
-      }}
-    >
-      {/* ── Header ── */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 'var(--space-2)',
-          width: '100%',
-          padding: 'var(--space-1) var(--space-2)',
-          background: 'transparent',
-          border: 'none',
-          fontSize: 'var(--font-size-sm)',
-          color: 'var(--text-muted)',
-          boxSizing: 'border-box',
-          minHeight: 28,
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.background = 'var(--bg-sunken)';
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.background = 'transparent';
-        }}
-      >
-        <ToolIcon size={14} style={{ color: borderColor, flexShrink: 0 }} />
-        <span
-          style={{
-            fontWeight: 600,
-            color: 'var(--text-primary)',
-            fontFamily: 'var(--font-mono)',
-            fontSize: 'var(--font-size-xs)',
-          }}
-        >
-          {toolCall.name}
-        </span>
-        {/* 折叠时显示摘要 */}
-        {!expanded && summary && (
-          <span
-            style={{
-              flex: 1,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              fontSize: 'var(--font-size-xs)',
-              color: 'var(--text-muted)',
-              fontFamily: 'var(--font-mono)',
-            }}
-          >
-            → {summary}
-          </span>
-        )}
-        {/* 状态徽标 */}
-        <span
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 3,
-            padding: '1px 6px',
-            borderRadius: 'var(--radius-full)',
-            background: `color-mix(in srgb, ${color} 10%, transparent)`,
-            color,
-            fontSize: 10,
-            fontWeight: 600,
-            lineHeight: 1.4,
-            flexShrink: 0,
-          }}
-        >
-          <Icon size={10} className={spin ? 'buddy-spin' : undefined} />
-          {label}
-        </span>
-        <span style={{ flex: expanded ? 1 : 0 }} />
-        {expanded ? (
-          <ChevronDown size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-        ) : (
-          <ChevronRight size={13} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-        )}
+    <section className={`tool-detail-block ${isError ? 'is-error' : ''}`}>
+      <div className="tool-detail-label">
+        <Icon size={12} aria-hidden="true" />
+        <span>{label}</span>
       </div>
-
-      {/* ── 展开内容 ── */}
-      {expanded && (
-        <div
-          style={{
-            padding: '0 var(--space-2) var(--space-2) var(--space-2)',
-            borderTop: '1px solid var(--border-subtle)',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 'var(--space-2)',
-            width: '100%',
-            boxSizing: 'border-box',
-            background: 'transparent',
-          }}
-        >
-          {/* ── ask_user 特殊渲染 ── */}
-          {isAskUser && (
-            <AskUserCard toolCall={toolCall} hasResult={hasResult} />
-          )}
-
-          {/* ── 普通 tool 参数 ── */}
-          {!isAskUser && (
-            <div>
-              <div style={{
-                fontSize: 10, color: 'var(--text-tertiary)', margin: 'var(--space-2) 0 4px',
-                textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 700,
-              }}>
-                参数
-              </div>
-              <CodeBlock language="json" source={argsText} />
-            </div>
-          )}
-
-          {/* ── 结果 ── */}
-          {hasResult && toolCall.result && (
-            <div>
-              <div style={{
-                fontSize: 10,
-                color: toolCall.is_error_result ? 'var(--state-error)' : 'var(--text-tertiary)',
-                margin: 'var(--space-1) 0 4px',
-                textTransform: 'uppercase',
-                letterSpacing: '0.04em',
-                fontWeight: 700,
-              }}>
-                {toolCall.is_error_result ? '错误' : '结果'}
-              </div>
-              <CodeBlock language="text" source={toolCall.result} />
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-},
-(prevProps, nextProps) => {
-  return (
-    prevProps.toolCall === nextProps.toolCall &&
-    prevProps.isStreaming === nextProps.isStreaming
-  );
-});
-
-// ── ask_user 卡片(展开时显示) ──
-
-function AskUserCard({ toolCall, hasResult }: { toolCall: ToolCall; hasResult: boolean }) {
-  const parsed = parseAskUserArguments(toolCall.arguments);
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-      {/* header chip */}
-      {parsed.header && (
-        <div style={{
-          display: 'inline-flex', alignItems: 'center', gap: 5, alignSelf: 'flex-start',
-          marginTop: 'var(--space-2)',
-          padding: '3px 10px', borderRadius: 'var(--radius-full)',
-          background: 'var(--primary-tint-soft)', color: 'var(--buddy-primary)', fontSize: 11, fontWeight: 700,
-        }}>
-          <HelpCircle size={12} />
-          {parsed.header}
-          {parsed.multiSelect && <span style={{ color: 'var(--text-tertiary)', fontWeight: 400 }}>· 多选</span>}
-        </div>
-      )}
-      {!hasResult && (
-        <div style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 'var(--space-1)',
-          alignSelf: 'flex-start',
-          padding: '3px 8px',
-          borderRadius: 'var(--radius-full)',
-          background: 'var(--primary-tint-soft)',
-          color: 'var(--buddy-primary)',
-          fontSize: 'var(--font-size-xs)',
-          fontWeight: 600,
-        }}>
-          等待你的回答
-        </div>
-      )}
-      {/* question */}
-      {parsed.question && (
-        <div style={{ fontSize: 'var(--font-size-base)', color: 'var(--text-primary)', fontWeight: 500, lineHeight: 1.5 }}>
-          {parsed.question}
-        </div>
-      )}
-      {/* options — 横向排列,与 QuestionModal 保持一致 */}
-      {parsed.options && parsed.options.length > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-          {parsed.options.map((opt, i) => (
-            <span key={i} style={{
-              display: 'inline-flex', alignItems: 'center', gap: 5,
-              padding: '4px 10px', border: '1px solid var(--border-subtle)',
-              borderRadius: 'var(--radius-md)', background: 'var(--bg-surface)',
-              fontSize: 'var(--font-size-xs)', fontWeight: 500,
-              color: 'var(--text-primary)', whiteSpace: 'nowrap',
-            }}>
-              {opt.label}
-              {opt.requiresInput && (
-                <span style={{ fontSize: 9, padding: '0px 4px', borderRadius: 'var(--radius-full)', background: 'var(--bg-sunken)', color: 'var(--text-tertiary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
-                  input
-                </span>
-              )}
-              {opt.description && (
-                <span style={{ color: 'var(--text-muted)', fontWeight: 400 }} title={opt.description}>
-                  — {opt.description.length > 30 ? opt.description.slice(0, 30) + '…' : opt.description}
-                </span>
-              )}
-            </span>
-          ))}
-        </div>
-      )}
-      {/* answer */}
-      {hasResult && toolCall.result && (
-        <div style={{
-          fontSize: 'var(--font-size-sm)', color: 'var(--text-muted)',
-          padding: '6px 10px', background: 'var(--bg-surface)', borderRadius: 'var(--radius-sm)', whiteSpace: 'pre-wrap',
-        }}>
-          <span style={{ color: 'var(--text-tertiary)' }}>用户回应: </span>
-          <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{toolCall.result}</span>
-        </div>
-      )}
-    </div>
+      <CodeBlock language={language} source={source} />
+    </section>
   );
 }
+
+export const ToolSection = memo(
+  function ToolSection({ toolCall, isStreaming }: ToolSectionProps) {
+    const shouldReduceMotion = useReducedMotion();
+    const isAwaitingAnswer = useChatStore(
+      (state) => state.pendingQuestion?.id === toolCall.id,
+    );
+    const statusMeta: StatusMeta = isAwaitingAnswer
+      ? {
+          label: '等待回答',
+          Icon: HelpCircle,
+          tone: 'info',
+          spin: false,
+        }
+      : getStatusMeta(toolCall.status);
+    const toolMeta = getToolMeta(toolCall.name);
+    const initialExpanded =
+      isAwaitingAnswer ||
+      (isStreaming &&
+        (toolCall.status === 'calling' || toolCall.status === 'executing'));
+    const [expanded, setExpanded] = useState(initialExpanded);
+    const [userToggled, setUserToggled] = useState(false);
+
+    useEffect(() => {
+      if (initialExpanded) {
+        setExpanded(true);
+        setUserToggled(false);
+      } else if (!userToggled) {
+        setExpanded(false);
+      }
+    }, [initialExpanded, userToggled]);
+
+    const toggle = useCallback(() => {
+      setUserToggled(true);
+      setExpanded((previous) => !previous);
+    }, []);
+
+    const hasResult =
+      toolCall.status === 'done' || toolCall.status === 'error';
+    const isInterrupted = toolCall.status === 'interrupted';
+    const summary = actionSummary(toolCall);
+    const isAskUser = toolCall.name === 'ask_user';
+    const StatusIcon = statusMeta.Icon;
+    const ToolIcon = toolMeta.Icon;
+
+    return (
+      <div
+        className={`tool-section is-${toolCall.status || 'calling'} ${
+          expanded ? 'is-expanded' : ''
+        } ${isAskUser ? 'is-ask-user' : ''} ${
+          isAwaitingAnswer ? 'is-awaiting-user' : ''
+        }`}
+      >
+        <button
+          className="tool-section-trigger"
+          type="button"
+          onClick={toggle}
+          aria-expanded={expanded}
+          aria-label={`${toolMeta.label}：${toolCall.name}`}
+        >
+          <span className="tool-section-icon">
+            <ToolIcon size={14} aria-hidden="true" />
+          </span>
+
+          <span className="tool-section-main">
+            <span className="tool-section-title">
+              <span>{toolMeta.label}</span>
+              <code>{toolCall.name}</code>
+            </span>
+            {!expanded && summary && (
+              <span className="tool-section-summary" title={summary}>
+                {summary}
+              </span>
+            )}
+          </span>
+
+          <span className={`tool-status-badge is-${statusMeta.tone}`}>
+            <StatusIcon
+              size={11}
+              className={statusMeta.spin ? 'buddy-spin' : undefined}
+              aria-hidden="true"
+            />
+            {statusMeta.label}
+          </span>
+
+          <ChevronDown
+            className="tool-section-chevron"
+            size={14}
+            aria-hidden="true"
+          />
+        </button>
+
+        <AnimatePresence initial={false}>
+          {expanded && (
+            <motion.div
+              className="tool-section-expand"
+              initial={
+                shouldReduceMotion
+                  ? { opacity: 1 }
+                  : { height: 0, opacity: 0, y: -2 }
+              }
+              animate={{ height: 'auto', opacity: 1, y: 0 }}
+              exit={
+                shouldReduceMotion
+                  ? { opacity: 0 }
+                  : { height: 0, opacity: 0, y: -2 }
+              }
+              transition={{
+                duration: shouldReduceMotion ? 0 : 0.16,
+                ease: [0.2, 0, 0, 1],
+              }}
+            >
+              <div className="tool-section-body">
+                {isAskUser ? (
+                  <AskUserCard
+                    toolCall={toolCall}
+                    hasResult={hasResult}
+                    isInterrupted={isInterrupted}
+                  />
+                ) : (
+                  <DetailBlock
+                    label="调用参数"
+                    Icon={Braces}
+                    language="json"
+                    source={prettyArgs(toolCall.arguments)}
+                  />
+                )}
+
+                {hasResult && !isAskUser && (
+                  <DetailBlock
+                    label={toolCall.is_error_result ? '执行错误' : '执行结果'}
+                    Icon={FileCheck2}
+                    language="text"
+                    source={toolCall.result || '(无返回内容)'}
+                    isError={toolCall.is_error_result}
+                  />
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    );
+  },
+  (previous, next) =>
+    previous.toolCall === next.toolCall &&
+    previous.isStreaming === next.isStreaming,
+);

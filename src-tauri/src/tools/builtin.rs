@@ -2,11 +2,12 @@
 // 内置 file tool 实现
 // ============================================================================
 //
-// 四个 tool:
+// 基础文件 tool:
 //   - read_file      (ReadOnly) — 读取文本文件内容
 //   - create_file    (Write)    — 创建新文件,目标必须不存在
 //   - overwrite_file (Write)    — 覆盖现有文件,目标必须存在
 //   - append_file    (Write)    — 追加或创建
+// 目录浏览、文件搜索与局部编辑见 file_tools.rs。
 //
 // 路径安全(Q3 决策):write 类必须以 AppConfig.allowed_paths 某条为前缀;
 //                   allowed_paths 为空时不限制;
@@ -22,7 +23,7 @@
 use super::{Tool, ToolContext, ToolError, ToolOutput, ToolSafety};
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
@@ -34,36 +35,51 @@ use tokio::io::AsyncWriteExt;
 ///
 /// allowed_paths 为空 → 返回 Ok(不限制)
 /// 否则要求 path 至少有一条前缀匹配(prefix match,不要求完全相等)
-fn check_write_allowed(path: &Path, allowed_paths: &[String]) -> Result<(), ToolError> {
+pub(super) fn check_write_allowed(
+    path: &Path,
+    allowed_paths: &[String],
+) -> Result<(), ToolError> {
     if allowed_paths.is_empty() {
         return Ok(());
     }
 
-    let path_str = path.to_string_lossy();
+    let normalized_path = normalize_path(path);
 
     for allowed in allowed_paths {
-        // 允许前缀是目录的情况: "/foo" 接受 "/foo/bar.txt"
-        // 也接受完全相等
-        if path_str == allowed.as_str() {
-            return Ok(());
+        if allowed.trim().is_empty() {
+            continue;
         }
-
-        // 标准化前缀,确保以 "/" 结尾(防止 "/foo-bar" 误匹配 "/foo")
-        let allowed_with_sep = if allowed.ends_with('/') {
-            allowed.clone()
-        } else {
-            format!("{}/", allowed)
-        };
-
-        if path_str.starts_with(&allowed_with_sep) {
+        let normalized_allowed = normalize_path(Path::new(allowed));
+        if normalized_path == normalized_allowed
+            || normalized_path.starts_with(&normalized_allowed)
+        {
             return Ok(());
         }
     }
 
     Err(ToolError::PermissionDenied(format!(
         "路径 {} 不在 allowed_paths 白名单中",
-        path_str
+        path.display()
     )))
+}
+
+/// 只做词法规范化,消除 `.` 与 `..`,避免通过父目录片段绕过路径白名单。
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() && !path.has_root() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+        }
+    }
+    normalized
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -318,9 +334,9 @@ impl Tool for AppendFileTool {
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // 这个 tool 不在本地真正"执行"任何文件操作 — 它的作用是阻塞当前 turn 的
-// 工具循环,直到前端用户在 QuestionModal 里做出选择。命令 (commands.rs) 中
+// 工具循环,直到前端用户在内联问答卡里做出选择。命令 (commands.rs) 中
 // 识别到 ask_user 调用时,会:
-//   1. 发射 ToolQuestionRequired 事件(让前端弹 QuestionModal)
+//   1. 发射 ToolQuestionRequired 事件(让前端显示内联问答卡)
 //   2. 等待 answer_tool_question 命令 invoke,把答案作为 tool result 写回
 //
 // 因此 execute() 永远不会被调用 — 如果走到这里,说明调用链出错,
@@ -464,9 +480,12 @@ pub fn builtin_tools(allowed_paths: Vec<String>) -> Vec<std::sync::Arc<dyn Tool>
     use std::sync::Arc;
     vec![
         Arc::new(ReadFileTool),
+        Arc::new(super::file_tools::ListDirectoryTool),
+        Arc::new(super::file_tools::SearchFilesTool),
         Arc::new(CreateFileTool { allowed_paths: allowed_paths.clone() }),
         Arc::new(OverwriteFileTool { allowed_paths: allowed_paths.clone() }),
-        Arc::new(AppendFileTool { allowed_paths }),
+        Arc::new(AppendFileTool { allowed_paths: allowed_paths.clone() }),
+        Arc::new(super::file_tools::EditFileTool { allowed_paths }),
         Arc::new(AskUserTool),
     ]
 }
@@ -516,6 +535,13 @@ mod tests {
     fn test_check_write_allowed_rejects_outside() {
         let allowed = vec!["/Users/me/projects".to_string()];
         let p = Path::new("/etc/passwd");
+        assert!(check_write_allowed(p, &allowed).is_err());
+    }
+
+    #[test]
+    fn test_check_write_allowed_rejects_parent_escape() {
+        let allowed = vec!["/Users/me/projects".to_string()];
+        let p = Path::new("/Users/me/projects/../../etc/passwd");
         assert!(check_write_allowed(p, &allowed).is_err());
     }
 
@@ -739,8 +765,10 @@ mod tests {
         let tools = builtin_tools(vec![]);
         for t in &tools {
             match t.name() {
-                "read_file" | "ask_user" => assert_eq!(t.safety(), ToolSafety::ReadOnly),
-                "create_file" | "overwrite_file" | "append_file" => {
+                "read_file" | "list_directory" | "search_files" | "ask_user" => {
+                    assert_eq!(t.safety(), ToolSafety::ReadOnly)
+                }
+                "create_file" | "overwrite_file" | "append_file" | "edit_file" => {
                     assert_eq!(t.safety(), ToolSafety::Write)
                 }
                 _ => panic!("unexpected tool: {}", t.name()),

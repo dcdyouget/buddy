@@ -1,4 +1,10 @@
-import { Children, memo, useMemo } from 'react';
+import {
+  Children,
+  isValidElement,
+  memo,
+  useMemo,
+  type ReactNode,
+} from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { isTauri } from '@tauri-apps/api/core';
@@ -8,6 +14,166 @@ import {
   normalizeMarkdownEmphasis,
 } from '@/utils/markdownNormalizer';
 import { CodeBlock } from './CodeBlock';
+
+interface MarkdownAstNode {
+  type: string;
+  tagName?: string;
+  value?: string;
+  properties?: Record<string, unknown>;
+  children?: MarkdownAstNode[];
+}
+
+const STREAM_EFFECT_EXCLUDED_TAGS = new Set([
+  'code',
+  'pre',
+  'script',
+  'style',
+]);
+const STREAM_SETTLE_TRAIL_LENGTH = 9;
+
+/**
+ * 标记刚出现的字符，并把四角星插到下一个字符的位置。
+ * 代码块不参与效果，避免破坏代码排版和复制体验。
+ */
+function createStreamingEffectPlugin(
+  revealCount: number,
+  revealKey: number,
+  showStar: boolean,
+) {
+  return () => (tree: MarkdownAstNode) => {
+    let remaining =
+      showStar && revealCount > 0 ? STREAM_SETTLE_TRAIL_LENGTH : 0;
+    let settleAge = 0;
+    const phaseClass =
+      revealKey % 2 === 0 ? 'is-phase-a' : 'is-phase-b';
+
+    const decorateFromEnd = (node: MarkdownAstNode) => {
+      if (remaining <= 0 || !node.children) return;
+      if (
+        node.tagName &&
+        STREAM_EFFECT_EXCLUDED_TAGS.has(node.tagName)
+      ) {
+        return;
+      }
+
+      for (let index = node.children.length - 1; index >= 0; index -= 1) {
+        if (remaining <= 0) break;
+        const child = node.children[index];
+
+        if (child.type !== 'text' || typeof child.value !== 'string') {
+          decorateFromEnd(child);
+          continue;
+        }
+
+        const characters = Array.from(child.value);
+        const agesByIndex = new Map<number, number>();
+        for (
+          let characterIndex = characters.length - 1;
+          characterIndex >= 0 && remaining > 0;
+          characterIndex -= 1
+        ) {
+          // Markdown 会在块之间生成结构性换行；它们没有可见字形，
+          // 不能占用字符轨迹或成为星标锚点。
+          if (/^\s$/u.test(characters[characterIndex])) continue;
+          agesByIndex.set(characterIndex, settleAge);
+          settleAge += 1;
+          remaining -= 1;
+        }
+        if (agesByIndex.size === 0) continue;
+
+        const replacements: MarkdownAstNode[] = [];
+        let stableBuffer = '';
+        const flushStableBuffer = () => {
+          if (!stableBuffer) return;
+          replacements.push({ type: 'text', value: stableBuffer });
+          stableBuffer = '';
+        };
+
+        characters.forEach((character, characterIndex) => {
+          const age = agesByIndex.get(characterIndex);
+          if (age === undefined) {
+            stableBuffer += character;
+            return;
+          }
+          flushStableBuffer();
+          replacements.push({
+            type: 'element',
+            tagName: 'span',
+            properties: {
+              className: [
+                'streaming-char-settle',
+                phaseClass,
+                `is-age-${age}`,
+              ],
+            },
+            children: [{ type: 'text', value: character }],
+          });
+        });
+        flushStableBuffer();
+
+        node.children.splice(index, 1, ...replacements);
+      }
+    };
+
+    decorateFromEnd(tree);
+    if (!showStar) return;
+
+    const starNode: MarkdownAstNode = {
+      type: 'element',
+      tagName: 'span',
+      properties: {
+        className: ['streaming-next-star', phaseClass],
+        ariaHidden: 'true',
+      },
+      children: [],
+    };
+
+    const insertStarAtEnd = (node: MarkdownAstNode): boolean => {
+      if (!node.children) return false;
+      if (
+        node.tagName &&
+        STREAM_EFFECT_EXCLUDED_TAGS.has(node.tagName)
+      ) {
+        return false;
+      }
+
+      for (let index = node.children.length - 1; index >= 0; index -= 1) {
+        const child = node.children[index];
+        const childClasses = child.properties?.className;
+        if (
+          Array.isArray(childClasses) &&
+          childClasses.includes('streaming-char-settle')
+        ) {
+          node.children.splice(index + 1, 0, starNode);
+          return true;
+        }
+        if (
+          child.type === 'text' &&
+          typeof child.value === 'string' &&
+          /\S/u.test(child.value)
+        ) {
+          node.children.splice(index + 1, 0, starNode);
+          return true;
+        }
+        if (insertStarAtEnd(child)) return true;
+      }
+      return false;
+    };
+
+    insertStarAtEnd(tree);
+  };
+}
+
+function StreamingNextStar({ revealKey }: { revealKey: number }) {
+  const phaseClass =
+    revealKey % 2 === 0 ? 'is-phase-a' : 'is-phase-b';
+  return (
+    <span
+      className={`streaming-next-star ${phaseClass}`}
+      aria-hidden="true"
+    />
+  );
+}
 
 /**
  * 判断 URL 是否为外链（http/https/mailto 等）。内部锚点（#/）不算。
@@ -39,22 +205,34 @@ async function openInDefaultApp(url: string) {
  * 共享的 markdown 组件映射，避免每次渲染都重新创建
  */
 const COMPONENTS = {
-  code({ className, children, ...props }: any) {
-    const match = /language-(\w+)/.exec(className || '');
-    const codeStr = String(children).replace(/\n$/, '');
-    if (match) {
-      return <CodeBlock language={match[1]} source={codeStr} />;
+  pre({ children }: { children?: ReactNode }) {
+    const childNodes = Children.toArray(children);
+    const codeChild = childNodes.length === 1 ? childNodes[0] : null;
+
+    if (
+      isValidElement<{
+        className?: string;
+        children?: ReactNode;
+      }>(codeChild)
+    ) {
+      const className = codeChild.props.className || '';
+      const languageMatch = /language-([\w-]+)/.exec(className);
+      const source = String(codeChild.props.children ?? '').replace(/\n$/, '');
+
+      return (
+        <CodeBlock
+          language={languageMatch?.[1] || 'text'}
+          source={source}
+        />
+      );
     }
+
+    return <pre>{children}</pre>;
+  },
+  code({ className, children, ...props }: any) {
     return (
       <code
-        className={className}
-        style={{
-          fontFamily: 'var(--font-mono)',
-          fontSize: '13px',
-          background: 'var(--bg-sunken)',
-          padding: '2px 4px',
-          borderRadius: 'var(--radius-sm)',
-        }}
+        className={`markdown-inline-code ${className || ''}`.trim()}
         {...props}
       >
         {children}
@@ -80,6 +258,7 @@ const COMPONENTS = {
     const external = isExternalUrl(href);
     return (
       <a
+        className="markdown-link"
         href={href}
         rel="noopener noreferrer"
         // 外链点击时拦截，强制走系统默认应用（Tauri shell.open / 浏览器 window.open）
@@ -88,15 +267,17 @@ const COMPONENTS = {
           e.preventDefault();
           openInDefaultApp(href);
         }}
-        style={{
-          color: 'var(--buddy-primary)',
-          textDecoration: 'underline',
-          cursor: 'pointer',
-        }}
         {...props}
       >
         {children}
       </a>
+    );
+  },
+  table({ children }: any) {
+    return (
+      <div className="markdown-table-wrap">
+        <table>{children}</table>
+      </div>
     );
   },
 };
@@ -119,6 +300,10 @@ const StableMarkdown = memo(
 interface StreamingMarkdownProps {
   content: string;
   isStreaming: boolean;
+  /** 本次平滑渲染新增的字符数，仅用于正文入场光效。 */
+  revealCount?: number;
+  /** 每次字符批次递增，用于强制连续光效重新播放。 */
+  revealKey?: number;
 }
 
 /**
@@ -144,7 +329,12 @@ interface StreamingMarkdownProps {
  * 处更新一次，不稳定部分始终保持很短。相比每个 token 全量解析，
  * 复杂度从 O(n²) 降低到 O(n)。
  */
-export function StreamingMarkdown({ content, isStreaming }: StreamingMarkdownProps) {
+export function StreamingMarkdown({
+  content,
+  isStreaming,
+  revealCount = 0,
+  revealKey = 0,
+}: StreamingMarkdownProps) {
   const normalizedContent = useMemo(
     () => normalizeMarkdownEmphasis(content),
     [content],
@@ -189,6 +379,18 @@ export function StreamingMarkdown({ content, isStreaming }: StreamingMarkdownPro
     };
   }, [normalizedContent, isStreaming]);
 
+  const effectPlugin = useMemo(
+    () =>
+      createStreamingEffectPlugin(
+        revealCount,
+        revealKey,
+        isStreaming && Boolean(unstablePart),
+      ),
+    [isStreaming, revealCount, revealKey, unstablePart],
+  );
+  const decorateUnstablePart =
+    isStreaming && Boolean(unstablePart);
+
   return (
     <div className="ai-message-content">
       {/* 稳定部分：已写完整的段落，memo 后不会随 token 重解析 */}
@@ -196,13 +398,18 @@ export function StreamingMarkdown({ content, isStreaming }: StreamingMarkdownPro
 
       {/* 不稳定部分：当前正在写的段落/标题/列表，跟随 token 更新 */}
       {unstablePart && (
-        <>
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={COMPONENTS}>
-            {unstablePart}
-          </ReactMarkdown>
-          {/* 光标嵌在内容末尾，随文字增长移动 */}
-          {isStreaming && <span className="buddy-cursor" />}
-        </>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          rehypePlugins={
+            decorateUnstablePart ? [effectPlugin] : undefined
+          }
+          components={COMPONENTS}
+        >
+          {unstablePart}
+        </ReactMarkdown>
+      )}
+      {isStreaming && !unstablePart && (
+        <StreamingNextStar revealKey={revealKey} />
       )}
     </div>
   );

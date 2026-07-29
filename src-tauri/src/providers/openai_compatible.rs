@@ -39,6 +39,15 @@ const FETCH_MODELS_TIMEOUT: Duration = Duration::from_secs(15);
 // ============================================================================
 pub struct OpenAICompatibleProvider;
 
+fn has_valid_tool_arguments(tool_call: &ToolCall) -> bool {
+    !tool_call.id.trim().is_empty()
+        && !tool_call.name.trim().is_empty()
+        && matches!(
+            serde_json::from_str::<Value>(&tool_call.arguments),
+            Ok(Value::Object(_))
+        )
+}
+
 impl OpenAICompatibleProvider {
     /// 将内部消息格式转换为 OpenAI API 格式
     ///
@@ -49,35 +58,81 @@ impl OpenAICompatibleProvider {
             "role": "system",
             "content": super::BUDDY_SYSTEM_PROMPT,
         })];
-        // 第一遍：收集所有 assistant 消息中有效的 tool_call.id
-        // 用于后续校验 tool 消息的 tool_call_id 是否为孤儿引用
+        // 只有参数完整、且存在对应 tool_result 的调用才允许进入下一次请求。
+        // 主动停止流式输出时，assistant 中可能留下半截 arguments；MiniMax 会直接以
+        // invalid function arguments json string (2013) 拒绝整次请求。
+        let tool_result_ids: std::collections::HashSet<&str> = messages
+            .iter()
+            .filter(|m| m.role == MessageRole::Tool)
+            .filter_map(|m| m.tool_call_id.as_deref())
+            .filter(|id| !id.trim().is_empty())
+            .collect();
+
         let valid_tool_call_ids: std::collections::HashSet<&str> = messages
             .iter()
             .filter(|m| m.role == MessageRole::Assistant)
             .filter_map(|m| m.tool_calls.as_ref())
-            .flat_map(|calls| calls.iter().map(|tc| tc.id.as_str()))
+            .flat_map(|calls| calls.iter())
+            .filter(|tc| {
+                has_valid_tool_arguments(tc) && tool_result_ids.contains(tc.id.as_str())
+            })
+            .map(|tc| tc.id.as_str())
             .collect();
 
         let converted: Vec<Value> = messages
             .iter()
             .filter_map(|m| {
-                // 孤儿 tool 消息：有 tool_call_id 但找不到对应的 assistant tool_call
-                // 整条过滤掉，不发个 API（MiniMax 不允许不带 tool_call_id 的 tool 消息）
+                // 孤儿或未完成配对的 tool 消息整条过滤掉。
                 if m.role == MessageRole::Tool {
                     let tc_id = m.tool_call_id.as_deref().unwrap_or("");
-                    if !tc_id.is_empty() && !valid_tool_call_ids.contains(tc_id) {
+                    if tc_id.is_empty() || !valid_tool_call_ids.contains(tc_id) {
                         warn!(
-                            "[openai::convert_messages] 过滤孤儿 tool 消息, tool_call_id='{}' 找不到对应的 assistant tool_call",
+                            "[openai::convert_messages] 过滤无效 tool 消息, tool_call_id='{}'",
                             tc_id
                         );
                         return None;
                     }
                 }
 
+                let original_has_tool_calls = m.role == MessageRole::Assistant
+                    && m.tool_calls.as_ref().is_some_and(|calls| !calls.is_empty());
+                let valid_calls: Vec<&ToolCall> = if m.role == MessageRole::Assistant {
+                    m.tool_calls
+                        .iter()
+                        .flatten()
+                        .filter(|tc| {
+                            if !has_valid_tool_arguments(tc) {
+                                warn!(
+                                    "[openai::convert_messages] 丢弃参数不完整的 tool_call, id='{}', name='{}'",
+                                    tc.id, tc.name
+                                );
+                                return false;
+                            }
+                            if !tool_result_ids.contains(tc.id.as_str()) {
+                                warn!(
+                                    "[openai::convert_messages] 丢弃没有结果的 tool_call, id='{}', name='{}'",
+                                    tc.id, tc.name
+                                );
+                                return false;
+                            }
+                            true
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
+                // 纯工具调用消息在中断后若没有任何可发送的调用，就不能留下空 assistant。
+                if original_has_tool_calls
+                    && valid_calls.is_empty()
+                    && m.content.trim().is_empty()
+                {
+                    return None;
+                }
+
                 // content: assistant 消息有 tool_calls 时 content 必须为 null
                 // (OpenAI 协议规范；MiniMax 等 Provider 严格校验此字段)
-                let has_tool_calls = m.role == MessageRole::Assistant
-                    && m.tool_calls.as_ref().is_some_and(|c| !c.is_empty());
+                let has_tool_calls = !valid_calls.is_empty();
                 let content_val = if has_tool_calls {
                     json!(null)
                 } else {
@@ -102,10 +157,10 @@ impl OpenAICompatibleProvider {
                     }
                 }
                 if matches!(m.role, MessageRole::Assistant) {
-                    if let Some(calls) = &m.tool_calls {
+                    if !valid_calls.is_empty() {
                         // 转换为 OpenAI 兼容的 tool_calls 格式：
                         //   [{id, type:"function", function:{name, arguments}}]
-                        let openai_calls: Vec<Value> = calls
+                        let openai_calls: Vec<Value> = valid_calls
                             .iter()
                             .map(|tc| {
                                 json!({
@@ -868,13 +923,22 @@ mod tests {
     }
 
     fn make_assistant_with_tool_call(id: &str, tc_id: &str, tc_name: &str) -> Message {
+        make_assistant_with_tool_arguments(id, tc_id, tc_name, "{}")
+    }
+
+    fn make_assistant_with_tool_arguments(
+        id: &str,
+        tc_id: &str,
+        tc_name: &str,
+        arguments: &str,
+    ) -> Message {
         Message {
             id: id.to_string(), role: MessageRole::Assistant, content: String::new(),
             blocks: None, model_id: None, created_at: 0,
             tool_calls: Some(vec![ToolCall {
                 id: tc_id.to_string(),
                 name: tc_name.to_string(),
-                arguments: "{}".to_string(),
+                arguments: arguments.to_string(),
             }]),
             tool_call_id: None, tool_name: None, is_error: None,
             parent_message_id: None,
@@ -902,6 +966,34 @@ mod tests {
         // 转换后只剩 system prompt 注入(无其他对话消息)
         let out = OpenAICompatibleProvider::convert_messages(&[make_tool_msg("t1", "orphan_id", "hi")]);
         assert_eq!(out.len(), 1, "只剩 system 注入,孤儿 tool 应被过滤");
+        assert_eq!(out[0]["role"], "system");
+    }
+
+    #[test]
+    fn test_convert_discards_partial_tool_arguments_after_abort() {
+        let msgs = [
+            make_assistant_with_tool_arguments(
+                "a1",
+                "call_partial",
+                "ask_user",
+                r#"{"question":"未完成"#,
+            ),
+            make_tool_msg("t1", "call_partial", "cancelled"),
+        ];
+
+        let out = OpenAICompatibleProvider::convert_messages(&msgs);
+
+        assert_eq!(out.len(), 1, "半截参数及其 tool_result 都不应发给 Provider");
+        assert_eq!(out[0]["role"], "system");
+    }
+
+    #[test]
+    fn test_convert_discards_tool_call_without_result() {
+        let out = OpenAICompatibleProvider::convert_messages(&[
+            make_assistant_with_tool_call("a1", "call_unfinished", "read_file"),
+        ]);
+
+        assert_eq!(out.len(), 1, "未完成配对的纯工具 assistant 消息应被过滤");
         assert_eq!(out[0]["role"], "system");
     }
 

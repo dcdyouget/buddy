@@ -57,7 +57,12 @@ export type ContentBlock =
   | { type: 'thinking'; content: string; is_open: boolean };
 
 /** 工具调用的执行状态（前端展示用，后端不持久化） */
-export type ToolCallStatus = 'calling' | 'executing' | 'done' | 'error';
+export type ToolCallStatus =
+  | 'calling'
+  | 'executing'
+  | 'done'
+  | 'error'
+  | 'interrupted';
 
 /** 工具调用（对应 Rust ToolCall） */
 export interface ToolCall {

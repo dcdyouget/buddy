@@ -1,84 +1,10 @@
-import { memo, useState } from 'react';
-import { Fragment } from 'react';
-import { ArrowUp, Check, Copy, CornerDownLeft } from 'lucide-react';
+import { Fragment, memo, useEffect, useRef } from 'react';
 import type { Message, ContentBlock, ToolCall } from '@/types';
-import { parseThinkBlocks, type TextBlock } from '@/utils/thinkParser';
+import { parseThinkBlocks } from '@/utils/thinkParser';
+import { MessageActions } from './MessageActions';
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { ThinkSection } from './ThinkSection';
 import { ToolSection } from './ToolSection';
-
-/**
- * 把秒级 Unix 时间戳格式化为本地时区的 YYYY-MM-DD HH:MM 字符串。
- * 例如 1752135600 → "2025-07-10 10:30"（按系统时区显示）
- */
-function formatMessageTime(unixSeconds: number): string {
-  const d = new Date(unixSeconds * 1000);
-  const pad = (n: number) => n.toString().padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(
-    d.getHours(),
-  )}:${pad(d.getMinutes())}`;
-}
-
-/**
- * 提取消息里"对用户可见"的回答正文，不含思考过程。
- * - v2.0 blocks：按顺序拼接所有 type === 'text' 的块
- * - v1.0 旧格式：用 thinkParser 剥掉 思考 段
- */
-function getAnswerText(message: Message): string {
-  if (message.blocks && message.blocks.length > 0) {
-    return message.blocks
-      .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
-      .map((b) => b.content)
-      .join('\n\n')
-      .trim();
-  }
-  return parseThinkBlocks(message.content)
-    .filter((s): s is TextBlock => s.type === 'text')
-    .map((s) => s.content)
-    .join('\n\n')
-    .trim();
-}
-
-/**
- * 渲染一个嵌套在父 assistant 消息内部的"用户回应"小气泡。
- * 视觉上用 ↳ 前缀 + 缩进,与主消息气泡明显区分。
- */
-function ChildResponseBubble({ response }: { response: Message }) {
-  return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'flex-start',
-        gap: 'var(--space-2)',
-        marginTop: 'var(--space-2)',
-        marginLeft: 'var(--space-4)',
-        paddingLeft: 'var(--space-3)',
-        borderLeft: '2px solid var(--border-default)',
-      }}
-    >
-      <CornerDownLeft
-        size={13}
-        style={{ color: 'var(--text-tertiary)', flexShrink: 0, marginTop: 3 }}
-      />
-      <div
-        style={{
-          flex: 1,
-          padding: 'var(--space-2) var(--space-3)',
-          borderRadius: 'var(--radius-md) var(--radius-md) var(--radius-sm) var(--radius-md)',
-          background: 'var(--primary-tint-soft)',
-          color: 'var(--text-primary)',
-          fontSize: '13px',
-          lineHeight: 1.5,
-          overflowWrap: 'break-word',
-          wordBreak: 'break-word',
-          minWidth: 0,
-        }}
-      >
-        <span style={{ whiteSpace: 'pre-wrap' }}>{response.content}</span>
-      </div>
-    </div>
-  );
-}
 
 /**
  * MessageBubble 组件的 Props
@@ -97,12 +23,8 @@ interface MessageBubbleProps {
    * 非流式消息可省略 — 直接读 message.tool_calls。
    */
   liveToolCalls?: ToolCall[];
-  /**
-   * 父 assistant 消息的子回应(用户对模型问题的回答)。
-   * 由 ChatPage 预先按 parent_message_id 筛选后传入,
-   * 在 assistant 消息块的下方以小气泡形式渲染。
-   */
-  childResponses?: Message[];
+  streamingRevealCount?: number;
+  streamingRevealRevision?: number;
 }
 
 /**
@@ -117,10 +39,14 @@ function AssistantContent({
   message,
   isStreaming,
   liveToolCalls,
+  streamingRevealCount,
+  streamingRevealRevision,
 }: {
   message: Message;
   isStreaming: boolean;
   liveToolCalls?: ToolCall[];
+  streamingRevealCount: number;
+  streamingRevealRevision: number;
 }) {
   // 合并 live 与已持久化的 tool_calls:以 id 去重,live 优先
   const persisted = message.tool_calls || [];
@@ -175,7 +101,7 @@ function AssistantContent({
           key={`block-think-${i}`}
           content={block.content}
           isStreaming={thinkStreaming}
-          defaultExpanded={thinkStreaming}
+          defaultExpanded={false}
         />
       );
     }
@@ -184,6 +110,8 @@ function AssistantContent({
         key={`block-text-${i}`}
         content={block.content}
         isStreaming={isLast && isStreaming}
+        revealCount={isLast ? streamingRevealCount : 0}
+        revealKey={streamingRevealRevision}
       />
     );
   };
@@ -234,33 +162,25 @@ export const MessageBubble = memo(function MessageBubble({
   isContinuation = false,
   continuesToNext = false,
   liveToolCalls,
-  childResponses,
+  streamingRevealCount = 0,
+  streamingRevealRevision = 0,
 }: MessageBubbleProps) {
   const isUser = message.role === 'user';
-  const [copied, setCopied] = useState(false);
-  const hasChildResponses = (childResponses?.length ?? 0) > 0;
+  const hasStreamedRef = useRef(isStreaming);
+  useEffect(() => {
+    if (isStreaming) hasStreamedRef.current = true;
+  }, [isStreaming]);
+
+  const hasAnswerText = Boolean(
+    message.content.trim() ||
+    message.blocks?.some(
+      (block) => block.type === 'text' && block.content.trim(),
+    ),
+  );
   const showMessageMeta =
     !isStreaming &&
-    !hasChildResponses &&
     !continuesToNext &&
-    Boolean(message.content);
-
-  const handleBackToQuestion = () => {
-    if (!questionId) return;
-    document.getElementById(questionId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
-
-  const handleCopy = async () => {
-    const text = getAnswerText(message);
-    if (!text) return;
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch (err) {
-      console.error('复制失败', err);
-    }
-  };
+    hasAnswerText;
 
   return (
     <div
@@ -319,76 +239,15 @@ export const MessageBubble = memo(function MessageBubble({
               message={message}
               isStreaming={isStreaming}
               liveToolCalls={liveToolCalls}
+              streamingRevealCount={streamingRevealCount}
+              streamingRevealRevision={streamingRevealRevision}
             />
-            {/* 嵌套渲染:用户对模型问题的回应,以小气泡形式挂在父消息内 */}
-            {childResponses && childResponses.length > 0 && (
-              <div data-testid="child-responses">
-                {childResponses.map((r) => (
-                  <ChildResponseBubble key={r.id} response={r} />
-                ))}
-              </div>
-            )}
             {showMessageMeta && (
-              <div
-                className="message-actions"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 'var(--space-2)',
-                  marginTop: 'var(--space-2)',
-                }}
-              >
-                <span
-                  className="message-time"
-                  title={new Date(message.created_at * 1000).toLocaleString()}
-                  style={{
-                    fontSize: '12px',
-                    fontVariantNumeric: 'tabular-nums',
-                    userSelect: 'none',
-                  }}
-                >
-                  {formatMessageTime(message.created_at)}
-                </span>
-                <button
-                  className={`message-action-button ${copied ? 'is-copied' : ''}`}
-                  onClick={handleCopy}
-                  title={copied ? '已复制' : '复制回答'}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    padding: '2px 8px',
-                    border: 'none',
-                    borderRadius: 'var(--radius-sm)',
-                    fontSize: '12px',
-                    cursor: 'pointer',
-                    transition: 'color 0.15s, background 0.15s',
-                  }}
-                >
-                  {copied ? <Check size={13} /> : <Copy size={13} />}
-                </button>
-                {questionId && (
-                  <button
-                    className="message-action-button"
-                    onClick={handleBackToQuestion}
-                    title="回到问题"
-                    aria-label="回到问题"
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                      padding: '2px 8px',
-                      border: 'none',
-                      borderRadius: 'var(--radius-sm)',
-                      fontSize: '12px',
-                      cursor: 'pointer',
-                      transition: 'color 0.15s, background 0.15s',
-                    }}
-                  >
-                    <ArrowUp size={13} />
-                  </button>
-                )}
-              </div>
+              <MessageActions
+                message={message}
+                questionId={questionId}
+                animateIn={hasStreamedRef.current}
+              />
             )}
           </>
         )}
@@ -407,6 +266,7 @@ export const MessageBubble = memo(function MessageBubble({
     prevProps.isContinuation === nextProps.isContinuation &&
     prevProps.continuesToNext === nextProps.continuesToNext &&
     prevProps.liveToolCalls === nextProps.liveToolCalls &&
-    prevProps.childResponses === nextProps.childResponses
+    prevProps.streamingRevealCount === nextProps.streamingRevealCount &&
+    prevProps.streamingRevealRevision === nextProps.streamingRevealRevision
   );
 });

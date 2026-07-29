@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 pub mod builtin;
+pub mod file_tools;
 #[allow(unused_imports)]
 pub use builtin::*;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

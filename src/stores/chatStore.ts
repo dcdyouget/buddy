@@ -35,6 +35,10 @@ interface ChatState {
   streamingTokens: number;
   streamingModelId: string | null;
   streamingBlocks: ContentBlock[];
+  /** 最近一次写入正文的字符数，用于前端逐字炫光。 */
+  streamingRevealCount: number;
+  /** 每次正文写入递增，确保连续字符批次重新播放动画。 */
+  streamingRevealRevision: number;
   error: string | null;
 
   // P8: Tool 审批状态
@@ -48,16 +52,6 @@ interface ChatState {
   // P11: 当前等待回答的 ask_user 问题(后端 ToolQuestionRequired 事件触发)
   pendingQuestion: PendingQuestion | null;
 
-  // P10: "回应模型问题"模式
-  // 当模型在一次回答末尾提出问题时(启发式:文本以 ? 或 ？ 结尾),
-  // 进入此状态。ChatPage 会用 UserResponseInput 替换 InputDock,
-  // 用户填写的回应会以 parent_message_id 指向这条 assistant 消息,
-  // 在 UI 上嵌套渲染在父消息内部。
-  waitingForResponse: {
-    parentMessageId: string;
-    question: string;
-  } | null;
-
   // P9: 当前流式轮次中正在进行的工具调用（按 id 索引）
   // 流式结束后会被合并到最后一条 assistant 消息的 tool_calls 字段中
   activeToolCalls: Record<string, ToolCall>;
@@ -66,10 +60,14 @@ interface ChatState {
   // rAF 循环再从队头逐字消费到 streamingBlocks，避免突发的 SSE chunk
   // 导致 React 批量 re-render 产生的「一卡一卡」视觉
   pendingTextBuffer: string;
+  /** 文本仍在逐字显示时，延后提交 text_end，避免尾部被一次性冲出。 */
+  pendingTextEnd: { contentIndex: number; content: string } | null;
+  /** 后端已结束，但前端仍在消费逐字动画队列。 */
+  streamDonePending: boolean;
 
   // ── 操作 ──
   setDraftInput: (text: string) => void;
-  sendMessage: (content: string, modelId: string, parentMessageId?: string) => Promise<void>;
+  sendMessage: (content: string, modelId: string) => Promise<void>;
   stopGeneration: () => Promise<void>;
   appendTextToken: (token: string) => void;
   appendThinkingToken: (token: string) => void;
@@ -89,11 +87,9 @@ interface ChatState {
   handleToolResult: (id: string, name: string, content: string, isError: boolean) => void;
   handleToolApprovalRequired: (id: string, name: string, args: string, reason: string) => void;
   setToolApproval: (approval: ChatState['toolApproval']) => void;
-  // P10: 回应模型问题的状态控制
-  setWaitingForResponse: (wfr: ChatState['waitingForResponse']) => void;
   // P11: ask_user 问题的状态控制
   setPendingQuestion: (q: PendingQuestion | null) => void;
-  answerPendingQuestion: (selected: number[], inputs?: string[], custom?: string) => Promise<void>;
+  answerPendingQuestion: (selected: number[], inputs?: string[], custom?: string) => Promise<boolean>;
   handleStreamDone: () => void;
   handleStreamError: (reason: string, message: string) => void;
   finalizeMessage: () => void;
@@ -137,6 +133,130 @@ function parseThinkFromText(text: string): ContentBlock[] {
   });
 }
 
+const THINK_OPEN_TAG = '<think>';
+const THINK_CLOSE_TAG = '</think>';
+
+/** 判断原始文本当前是否处于尚未闭合的 <think> 标签中。 */
+function hasOpenInlineThink(text: string): boolean {
+  const lastOpen = text.lastIndexOf(THINK_OPEN_TAG);
+  const lastClose = text.lastIndexOf(THINK_CLOSE_TAG);
+  return lastOpen > lastClose;
+}
+
+/**
+ * 把一段 text_delta 增量写入 blocks，并在完整收到 <think> / </think> 标签时
+ * 立即切换块类型。标签可以横跨多个 SSE chunk 或多个渲染帧。
+ */
+function appendThinkAwareText(
+  sourceBlocks: ContentBlock[],
+  delta: string,
+  continuesInlineThink: boolean,
+): ContentBlock[] {
+  const blocks = [...sourceBlocks];
+  let remaining = delta;
+  let mode: 'text' | 'thinking' = continuesInlineThink ? 'thinking' : 'text';
+
+  // 结构化 reasoning 事件产生的 thinking 块不属于 text_delta。
+  // 正文开始时先将它闭合，再创建普通文本块。
+  const initialLast = blocks[blocks.length - 1];
+  if (
+    mode === 'text' &&
+    initialLast?.type === 'thinking' &&
+    initialLast.is_open
+  ) {
+    blocks[blocks.length - 1] = { ...initialLast, is_open: false };
+  }
+
+  while (remaining.length > 0) {
+    if (mode === 'text') {
+      const last = blocks[blocks.length - 1];
+      const previousText = last?.type === 'text' ? last.content : '';
+      const combined = previousText + remaining;
+      const openIndex = combined.indexOf(THINK_OPEN_TAG);
+
+      if (openIndex === -1) {
+        if (last?.type === 'text') {
+          blocks[blocks.length - 1] = { ...last, content: combined };
+        } else {
+          blocks.push({ type: 'text', content: combined });
+        }
+        break;
+      }
+
+      const beforeThink = combined.slice(0, openIndex);
+      if (last?.type === 'text') {
+        if (beforeThink) {
+          blocks[blocks.length - 1] = { ...last, content: beforeThink };
+        } else {
+          blocks.pop();
+        }
+      } else if (beforeThink) {
+        blocks.push({ type: 'text', content: beforeThink });
+      }
+
+      blocks.push({ type: 'thinking', content: '', is_open: true });
+      remaining = combined.slice(openIndex + THINK_OPEN_TAG.length);
+      mode = 'thinking';
+      continue;
+    }
+
+    const last = blocks[blocks.length - 1];
+    const previousThinking =
+      last?.type === 'thinking' && last.is_open ? last.content : '';
+    const combined = previousThinking + remaining;
+    const closeIndex = combined.indexOf(THINK_CLOSE_TAG);
+
+    if (closeIndex === -1) {
+      if (last?.type === 'thinking' && last.is_open) {
+        blocks[blocks.length - 1] = { ...last, content: combined };
+      } else {
+        blocks.push({ type: 'thinking', content: combined, is_open: true });
+      }
+      break;
+    }
+
+    const thinkingContent = combined.slice(0, closeIndex);
+    if (last?.type === 'thinking' && last.is_open) {
+      blocks[blocks.length - 1] = {
+        ...last,
+        content: thinkingContent,
+        is_open: false,
+      };
+    } else {
+      blocks.push({
+        type: 'thinking',
+        content: thinkingContent,
+        is_open: false,
+      });
+    }
+
+    remaining = combined.slice(closeIndex + THINK_CLOSE_TAG.length);
+    mode = 'text';
+  }
+
+  return blocks;
+}
+
+/** text_end 到达时，避免把已经增量解析好的块再次插入一遍。 */
+function endsWithBlocks(
+  blocks: ContentBlock[],
+  suffix: ContentBlock[],
+): boolean {
+  if (suffix.length === 0 || suffix.length > blocks.length) return false;
+  const offset = blocks.length - suffix.length;
+  return suffix.every((expected, index) => {
+    const actual = blocks[offset + index];
+    if (actual.type !== expected.type || actual.content !== expected.content) {
+      return false;
+    }
+    return (
+      actual.type !== 'thinking' ||
+      expected.type !== 'thinking' ||
+      actual.is_open === expected.is_open
+    );
+  });
+}
+
 /**
  * 在 messages 数组中从尾部向前查找最后一条 role === 'assistant' 的消息索引。
  * 返回 -1 表示没有 assistant 消息。
@@ -152,14 +272,71 @@ function findLastAssistantIdx(messages: Message[]): number {
   return -1;
 }
 
+/**
+ * 只有已获得 tool_result 且参数是完整 JSON 对象的调用才能进入后续对话历史。
+ * 流式中断时 calling/executing 状态的 arguments 可能只有半截，必须丢弃。
+ */
+function getPersistableToolCalls(
+  activeToolCalls: Record<string, ToolCall>,
+): ToolCall[] {
+  return Object.values(activeToolCalls).filter((toolCall) => {
+    if (toolCall.status !== 'done' && toolCall.status !== 'error') {
+      return false;
+    }
+    if (!toolCall.id.trim() || !toolCall.name.trim()) return false;
+
+    try {
+      const parsed = JSON.parse(toolCall.arguments);
+      return Boolean(
+        parsed &&
+          typeof parsed === 'object' &&
+          !Array.isArray(parsed),
+      );
+    } catch {
+      return false;
+    }
+  });
+}
+
 const HISTORY_PAGE_SIZE = 10;
 
-function hydrateHistoryMessages(messages: Message[]): Message[] {
-  return messages.map((msg) => {
-    if (msg.role === 'assistant' && (!msg.blocks || msg.blocks.length === 0) && msg.content) {
-      return { ...msg, blocks: parseThinkFromText(msg.content) };
+export function hydrateHistoryMessages(messages: Message[]): Message[] {
+  const toolResults = new Map<string, Message>();
+  for (const message of messages) {
+    if (message.role === 'tool' && message.tool_call_id) {
+      toolResults.set(message.tool_call_id, message);
     }
-    return msg;
+  }
+
+  return messages.map((msg) => {
+    if (msg.role !== 'assistant') return msg;
+
+    const hydrated = { ...msg };
+    if ((!hydrated.blocks || hydrated.blocks.length === 0) && hydrated.content) {
+      hydrated.blocks = parseThinkFromText(hydrated.content);
+    }
+    if (hydrated.tool_calls?.length) {
+      hydrated.tool_calls = hydrated.tool_calls.map((toolCall) => {
+        const result = toolResults.get(toolCall.id);
+        if (result) {
+          const isError = result.is_error === true;
+          return {
+            ...toolCall,
+            status: isError ? 'error' : 'done',
+            result: result.content,
+            is_error_result: isError,
+          };
+        }
+
+        // 后端历史中的 ToolCall 不持久化 UI 状态。找不到对应 tool
+        // result 时，说明调用在进程退出或主动停止时被中断。
+        if (!toolCall.status) {
+          return { ...toolCall, status: 'interrupted' };
+        }
+        return toolCall;
+      });
+    }
+    return hydrated;
   });
 }
 
@@ -174,12 +351,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
   streamingTokens: 0,
   streamingModelId: null,
   streamingBlocks: [],
+  streamingRevealCount: 0,
+  streamingRevealRevision: 0,
   error: null,
   toolApproval: null,
   activeToolCalls: {},
-  waitingForResponse: null,
   pendingQuestion: null,
   pendingTextBuffer: '',
+  pendingTextEnd: null,
+  streamDonePending: false,
   /** 设置输入框草稿文本（用于接收外部选中的文本） */
   setDraftInput: (text: string) => {
     set({ draftInput: text });
@@ -192,7 +372,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
    * 3. 浏览器模式：使用 setInterval 逐字输出 mock 回复
    * 4. Tauri 模式：调用 Rust 后端 send_message 命令
    */
-  sendMessage: async (content: string, modelId: string, parentMessageId?: string) => {
+  sendMessage: async (content: string, modelId: string) => {
     const { messages } = get();
 
     // 构建用户消息
@@ -202,7 +382,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       content,
       model_id: null,
       created_at: Math.floor(Date.now() / 1000),
-      parent_message_id: parentMessageId,
     };
 
     // 构建空的助手消息，内容将在流式过程中逐步填充
@@ -224,11 +403,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamingTokens: 0,
       streamingModelId: modelId,
       streamingBlocks: [],
+      streamingRevealCount: 0,
+      streamingRevealRevision: 0,
       pendingTextBuffer: '',
+      pendingTextEnd: null,
+      streamDonePending: false,
       error: null,
       activeToolCalls: {},
       toolApproval: null,
-      waitingForResponse: null, // 一旦开始新一轮,清除回应模式
       pendingQuestion: null, // 清除任何挂起的 ask_user 问题
     });
 
@@ -317,6 +499,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({
       messages: updated,
       streamingTokens: get().streamingTokens + 1,
+      streamingRevealCount: Array.from(token).length,
+      streamingRevealRevision: get().streamingRevealRevision + 1,
     });
   },
 
@@ -366,21 +550,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   /** 文本块结束 */
   handleTextEnd: (contentIndex: number, content: string) => {
+    if (get().pendingTextBuffer.length > 0) {
+      set({ pendingTextEnd: { contentIndex, content } });
+      return;
+    }
+
     if (contentIndex === 0) {
       // OpenAI 单块模式:每个 turn 都会发 text_end(idx=0, content=本 turn 完整文本)
       // 这里解析 `content` 中的 <think>…</think> 标签,把它拆成 thinking + text 块。
       // (在 commit 788f29c 中错误地只 push 空分隔块,导致 DeepSeek/Qwen 风格响应在
       // 流式期间把 <<think>> 标签作为原始文本显示 —— 用户看 `<think>我先想一下</think>实际…`)。
       // 同时 push 一个空 text 块作为下一轮的起点分隔,避免下轮 smoothTextDelta 把字符
-      // 追加到本 turn 的 text 块尾部。
-      //
-      // FIX: 必须在替换 blocks 之前清空 pendingTextBuffer，否则 rAF 循环可能
-      // 在 text_end 之后继续消费缓冲中的残留字符，追加到已替换完成的 blocks 尾部，
-      // 导致消息最后几个字重复显示（text_end 的完整文本 + 缓冲区残留 = 重复）。
-      get().flushTextBuffer();
+      // 追加到本 turn 的 text 块尾部。缓冲未清空时会在函数入口延后提交。
       const blocks = [...get().streamingBlocks];
       if (content.length > 0) {
         const parsed = parseThinkFromText(content);
+        if (endsWithBlocks(blocks, parsed)) {
+          blocks.push({ type: 'text', content: '' });
+          set({ streamingBlocks: blocks });
+          return;
+        }
         // 找到本 turn 对应的 text 块位置:
         // - 若末尾是空 text 块(说明上一轮 text_end 已推入分隔符),则倒数第二块是本 turn 的 text
         // - 否则末尾就是本 turn 的 text
@@ -403,8 +592,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
       set({ streamingBlocks: blocks });
     } else {
       // Anthropic 多块模式:每个 text_end 只更新对应索引的 block
-      // 同样需要先清空缓冲，防止 text_end 之后 rAF 继续追加残留字符
-      get().flushTextBuffer();
       const blocks = [...get().streamingBlocks];
       while (blocks.length <= contentIndex) {
         blocks.push({ type: 'text', content: '' });
@@ -464,18 +651,27 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ streamingBlocks: blocks });
   },
 
-  /** 流式完成：先清缓冲，再将 streamingBlocks 附加到消息 */
+  /** 流式完成：等逐字动画队列清空，再将 streamingBlocks 附加到消息 */
   handleStreamDone: () => {
-    get().flushTextBuffer();
+    if (get().pendingTextBuffer.length > 0) {
+      set({ streamDonePending: true });
+      return;
+    }
+
+    const pendingEnd = get().pendingTextEnd;
+    if (pendingEnd) {
+      set({ pendingTextEnd: null });
+      get().handleTextEnd(pendingEnd.contentIndex, pendingEnd.content);
+    }
+
     const { messages, streamingBlocks, activeToolCalls } = get();
     const updated = [...messages];
     // 找到最后一条 assistant 消息 —— 它才是 streamingBlocks / tool_calls 的目标。
     // 注意: handleToolResult 会在 messages 末尾 push role='tool' 的消息,
     // 所以 messages 的最后一条可能是 tool 消息而不是 assistant。
     const lastAssistantIdx = findLastAssistantIdx(updated);
-    let lastAssistant: Message | null = null;
     if (lastAssistantIdx >= 0) {
-      lastAssistant = { ...updated[lastAssistantIdx] } as Message;
+      const lastAssistant = { ...updated[lastAssistantIdx] } as Message;
       // 闭合所有 thinking block,并去掉尾部由 text_end 推入的空文本分隔块
       const closedBlocks = streamingBlocks.map((b: ContentBlock) =>
         b.type === 'thinking' ? { ...b, is_open: false } : b,
@@ -489,28 +685,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
       }
       lastAssistant.blocks = closedBlocks;
-      // 把累积的 tool_calls 合并到最后一条 assistant 消息
-      const toolCallsList = Object.values(activeToolCalls);
+      // 仅保留已完成且参数完整的 tool_calls。
+      // 主动停止时，calling/executing 调用仍可能只有半截 JSON，不能进入下一轮。
+      const toolCallsList = getPersistableToolCalls(activeToolCalls);
       if (toolCallsList.length > 0) {
         lastAssistant.tool_calls = toolCallsList;
+      } else {
+        delete lastAssistant.tool_calls;
       }
       updated[lastAssistantIdx] = lastAssistant;
-    }
-
-    // P10: 启发式判断模型是否在"提问" —— 本轮没有 tool_call,文本以 ? 或 ？ 结尾
-    // 如果是,把状态切到 waitingForResponse,ChatPage 会切换到 UserResponseInput
-    let waitingForResponse: ChatState['waitingForResponse'] = null;
-    if (lastAssistant) {
-      const hadToolCalls = (lastAssistant.tool_calls?.length ?? 0) > 0;
-      if (!hadToolCalls) {
-        const text = (lastAssistant.content || '').trim();
-        if (text.endsWith('?') || text.endsWith('？')) {
-          waitingForResponse = {
-            parentMessageId: lastAssistant.id,
-            question: text,
-          };
-        }
-      }
     }
 
     set({
@@ -520,29 +703,29 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamingModelId: null,
       streamingBlocks: [],
       pendingTextBuffer: '',
+      pendingTextEnd: null,
+      streamDonePending: false,
       toolApproval: null,
       activeToolCalls: {},
-      waitingForResponse,
-      // pendingQuestion 由 answerPendingQuestion 自身清空,这里不动
-      // (后端通过 tool_result 事件来,在此之前 modal 一直挂着)
+      pendingQuestion: null,
     });
   },
 
   /** 流式错误：先清缓冲再重置状态 */
   handleStreamError: (_reason: string, message: string) => {
     get().flushTextBuffer();
-    // 错误时把仍未完成的 tool_calls 也合并到消息（标记 error），便于用户回看
+    // 错误时仅保留此前已经完成的调用，不能把半截调用伪装成 error 后写入历史。
     const { messages, activeToolCalls } = get();
     let updated = messages;
     const lastAssistantIdx = findLastAssistantIdx(messages);
-    if (Object.keys(activeToolCalls).length > 0 && lastAssistantIdx >= 0) {
+    const toolCallsList = getPersistableToolCalls(activeToolCalls);
+    if (lastAssistantIdx >= 0) {
       const lastAssistant = { ...messages[lastAssistantIdx] } as Message;
-      lastAssistant.tool_calls = Object.values(activeToolCalls).map((tc) => ({
-        ...tc,
-        status: tc.status === 'done' ? 'done' : 'error',
-        result: tc.result ?? message,
-        is_error_result: tc.is_error_result ?? true,
-      }));
+      if (toolCallsList.length > 0) {
+        lastAssistant.tool_calls = toolCallsList;
+      } else {
+        delete lastAssistant.tool_calls;
+      }
       updated = [...messages];
       updated[lastAssistantIdx] = lastAssistant;
     }
@@ -553,13 +736,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamingModelId: null,
       streamingBlocks: [],
       pendingTextBuffer: '',
+      pendingTextEnd: null,
+      streamDonePending: false,
       error: message,
       activeToolCalls: {},
-      // 出错时也清掉挂起的 ask_user 问题 —— 不清的话 modal 会永久挂着,
-      // 用户关窗后再开,modal 还在,无法 dismiss。
+      toolApproval: null,
       pendingQuestion: null,
-      // 同步清掉回应模式,避免 InputDock 错误地被替换成 UserResponseInput。
-      waitingForResponse: null,
     });
   },
 
@@ -575,35 +757,52 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const { pendingTextBuffer, messages, streamingBlocks } = get();
     if (pendingTextBuffer.length === 0) return;
 
-    const chars = pendingTextBuffer.slice(0, count);
-    const rest = pendingTextBuffer.slice(count);
+    const bufferedCharacters = Array.from(pendingTextBuffer);
+    const chars = bufferedCharacters.slice(0, count).join('');
+    const rest = bufferedCharacters.slice(count).join('');
 
     // 改用 findLastAssistantIdx: handleToolResult 可能把 tool 消息 push 到末尾
     const updated = [...messages];
     const idx = findLastAssistantIdx(updated);
     if (idx < 0) return;
     const lastMsg = { ...updated[idx] } as Message;
+    const continuesInlineThink = hasOpenInlineThink(lastMsg.content || '');
     lastMsg.content = (lastMsg.content || '') + chars;
     updated[idx] = lastMsg;
 
-    // 增量追加到 streamingBlocks（不完全 parseThinkFromText，避免 O(n²)）
-    const blocks = [...streamingBlocks];
-    const lastBlock = blocks[blocks.length - 1];
-    if (lastBlock && lastBlock.type === 'text') {
-      blocks[blocks.length - 1] = { ...lastBlock, content: lastBlock.content + chars };
-    } else {
-      if (lastBlock && lastBlock.type === 'thinking' && lastBlock.is_open) {
-        blocks[blocks.length - 1] = { ...lastBlock, is_open: false };
-      }
-      blocks.push({ type: 'text', content: chars });
-    }
+    // 增量识别内嵌 think 标签；完整收到开始标签后立即创建思考块，
+    // 不再等待 text_end 或 </think> 到达。
+    const blocks = appendThinkAwareText(
+      streamingBlocks,
+      chars,
+      continuesInlineThink,
+    );
 
     set({
       pendingTextBuffer: rest,
       messages: updated,
       streamingBlocks: blocks,
       streamingTokens: get().streamingTokens + 1,
+      streamingRevealCount: Array.from(chars).length,
+      streamingRevealRevision: get().streamingRevealRevision + 1,
     });
+
+    if (rest.length === 0) {
+      const pendingEnd = get().pendingTextEnd;
+      if (pendingEnd) {
+        set({ pendingTextEnd: null });
+        get().handleTextEnd(pendingEnd.contentIndex, pendingEnd.content);
+      }
+
+      if (
+        get().streamDonePending &&
+        get().pendingTextBuffer.length === 0 &&
+        !get().pendingTextEnd
+      ) {
+        set({ streamDonePending: false });
+        get().handleStreamDone();
+      }
+    }
   },
 
   /** 将缓冲区剩余字符全部推入（done/error 前调用，防止丢字） */
@@ -663,16 +862,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const total = await getMessageCount();
       const offset = Math.max(0, total - HISTORY_PAGE_SIZE);
       const history = await load(offset, HISTORY_PAGE_SIZE);
-      const hydrated = hydrateHistoryMessages(history || []);
-      const loadedIds = new Set(hydrated.map((message) => message.id));
+      const loadedIds = new Set((history || []).map((message) => message.id));
 
-      set((state) => ({
-        // 启动加载期间若用户已发送消息，保留那些尚未被磁盘页覆盖的本地消息。
-        messages: [...hydrated, ...state.messages.filter((message) => !loadedIds.has(message.id))],
-        historyOffset: offset,
-        hasMoreHistory: offset > 0,
-        isLoadingHistory: false,
-      }));
+      set((state) => {
+        // 先合并完整消息页，再关联 tool_call 与 tool result，兼容分页边界。
+        const merged = [
+          ...(history || []),
+          ...state.messages.filter((message) => !loadedIds.has(message.id)),
+        ];
+        return {
+          messages: hydrateHistoryMessages(merged),
+          historyOffset: offset,
+          hasMoreHistory: offset > 0,
+          isLoadingHistory: false,
+        };
+      });
     } catch (e) {
       set({ isLoadingHistory: false });
       console.error('[Buddy] 加载历史消息失败:', e);
@@ -690,12 +894,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const limit = historyOffset - nextOffset;
       const { loadMessages: load } = await import('@/api/storage');
       const history = await load(nextOffset, limit);
-      const hydrated = hydrateHistoryMessages(history || []);
 
       set((state) => {
         const existingIds = new Set(state.messages.map((message) => message.id));
+        const merged = [
+          ...(history || []).filter((message) => !existingIds.has(message.id)),
+          ...state.messages,
+        ];
         return {
-          messages: [...hydrated.filter((message) => !existingIds.has(message.id)), ...state.messages],
+          messages: hydrateHistoryMessages(merged),
           historyOffset: nextOffset,
           hasMoreHistory: nextOffset > 0,
           isLoadingHistory: false,
@@ -815,11 +1022,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ toolApproval: approval });
   },
 
-  /** 设置/清除"等待用户回应"状态 */
-  setWaitingForResponse: (wfr) => {
-    set({ waitingForResponse: wfr });
-  },
-
   /** 设置当前等待回答的 ask_user 问题 */
   setPendingQuestion: (q) => {
     set({ pendingQuestion: q });
@@ -834,11 +1036,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
    */
   answerPendingQuestion: async (selected, inputs, custom) => {
     const { pendingQuestion } = get();
-    if (!pendingQuestion) return;
+    if (!pendingQuestion) return false;
     if (isBrowser) {
       // 浏览器 mock 直接清空
       set({ pendingQuestion: null });
-      return;
+      return true;
     }
     try {
       const { answerToolQuestion } = await import('@/api/chat');
@@ -848,10 +1050,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
         inputs: inputs ?? [],
         custom: custom ?? null,
       });
+      set({ pendingQuestion: null });
+      return true;
     } catch (e) {
       console.error('[Buddy] 回答 ask_user 失败:', e);
-    } finally {
-      set({ pendingQuestion: null });
+      return false;
     }
   },
   clearMessages: () => {
@@ -861,6 +1064,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       error: null,
       activeToolCalls: {},
       toolApproval: null,
+      streamingRevealCount: 0,
+      streamingRevealRevision: 0,
+      pendingTextBuffer: '',
+      pendingTextEnd: null,
+      streamDonePending: false,
       historyOffset: 0,
       hasMoreHistory: false,
       isLoadingHistory: false,
@@ -869,7 +1077,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   /** 设置完整的消息列表（用于加载历史对话） */
   setMessages: (messages: Message[]) => {
-    set({ messages });
+    set({ messages: hydrateHistoryMessages(messages) });
   },
 
   /** 设置错误信息并停止流式状态 */

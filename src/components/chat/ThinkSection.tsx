@@ -6,9 +6,9 @@ import { StreamingMarkdown } from './StreamingMarkdown';
  * ThinkSection — 可折叠的思考区块
  *
  * 视觉特征：
- * - 左侧紫/amber 渐变边框,与常规文本明显区分
- * - 折叠时展示第一行思考内容作为预览
- * - 流式写入时自动展开 + pulsing dot
+ * - 左侧蓝色边框,与常规文本明显区分
+ * - 流式折叠时展示最新一段思考，完成后展示第一行
+ * - 流式写入时默认折叠 + 轻量呼吸/流光动效，可由用户手动展开
  * - 完成后默认折叠,click 展开
  */
 
@@ -22,6 +22,14 @@ interface ThinkSectionProps {
 function firstLinePreview(content: string): string {
   const line = content.split('\n')[0] || '';
   return line.length > 80 ? line.slice(0, 80) + '…' : line;
+}
+
+/** 提取最新思考内容，压成单行并保留末尾 96 个 Unicode 字符。 */
+function latestContentPreview(content: string): string {
+  const normalized = content.replace(/\s+/g, ' ').trim();
+  const characters = Array.from(normalized);
+  if (characters.length <= 96) return normalized;
+  return `…${characters.slice(-96).join('')}`;
 }
 
 export const ThinkSection = memo(function ThinkSection({
@@ -46,10 +54,15 @@ export const ThinkSection = memo(function ThinkSection({
     setExpanded((prev) => !prev);
   }, []);
 
-  const preview = firstLinePreview(content);
+  const preview = isStreaming
+    ? latestContentPreview(content)
+    : firstLinePreview(content);
 
   return (
     <div
+      className={`think-section ${isStreaming ? 'is-streaming' : ''} ${
+        expanded ? 'is-expanded' : ''
+      }`}
       onClick={toggle}
       role="button"
       tabIndex={0}
@@ -63,7 +76,7 @@ export const ThinkSection = memo(function ThinkSection({
         borderTop: '1px solid var(--border-default)',
         borderRight: '1px solid var(--border-default)',
         borderBottom: '1px solid var(--border-default)',
-        borderLeft: '2px solid var(--buddy-primary)',
+        borderLeft: '2px solid var(--tool-ui-accent)',
         borderRadius: 'var(--radius-md)',
         borderTopLeftRadius: 0,
         borderBottomLeftRadius: 0,
@@ -73,10 +86,12 @@ export const ThinkSection = memo(function ThinkSection({
         width: '100%',
         boxSizing: 'border-box',
         background: 'var(--panel-surface)',
+        position: 'relative',
       }}
     >
       {/* ── Header ── */}
       <div
+        className="think-section-header"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -97,8 +112,13 @@ export const ThinkSection = memo(function ThinkSection({
           e.currentTarget.style.background = 'transparent';
         }}
       >
-        <Brain size={14} style={{ color: 'var(--buddy-primary)', flexShrink: 0 }} />
+        <Brain
+          className="think-section-icon"
+          size={14}
+          style={{ color: 'var(--tool-ui-accent)', flexShrink: 0 }}
+        />
         <span
+          className="think-section-label"
           style={{
             fontWeight: 600,
             fontSize: 'var(--font-size-sm)',
@@ -108,20 +128,16 @@ export const ThinkSection = memo(function ThinkSection({
           {isStreaming ? '正在思考' : '思考过程'}
         </span>
         {isStreaming && (
-          <span
-            style={{
-              width: 5,
-              height: 5,
-              borderRadius: 'var(--radius-full)',
-              background: 'var(--buddy-primary)',
-              opacity: 0.7,
-              flexShrink: 0,
-            }}
-          />
+          <span className="think-section-loader" aria-label="思考中">
+            <span />
+            <span />
+            <span />
+          </span>
         )}
-        {/* 折叠时显示第一行预览 */}
+        {/* 流式时显示最新思考，完成后显示第一行预览 */}
         {!expanded && preview && (
           <span
+            className="think-section-preview"
             style={{
               flex: 1,
               overflow: 'hidden',
@@ -146,6 +162,7 @@ export const ThinkSection = memo(function ThinkSection({
       {/* ── 展开内容 ── */}
       {expanded && (
         <div
+          className="think-section-content"
           style={{
             padding: '0 var(--space-2) var(--space-2) var(--space-2)',
             borderTop: '1px solid var(--border-subtle)',

@@ -250,8 +250,8 @@ pub enum StreamEvent {
         /// 审批原因(写文件时是 "write to <path>")
         reason: String,
     },
-    /// 模型调用了 ask_user tool — 需要用户在 QuestionModal 中做出选择
-    /// 前端弹 QuestionModal,点击选项/输入自定义答案后
+    /// 模型调用了 ask_user tool — 需要用户在内联工具卡片中做出选择
+    /// 前端在 AskUserCard 点击选项/输入自定义答案后
     /// invoke('answer_tool_question', {id, selected, custom})
     ToolQuestionRequired {
         id: String,
