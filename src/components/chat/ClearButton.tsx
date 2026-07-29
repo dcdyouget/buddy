@@ -1,3 +1,4 @@
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { X } from 'lucide-react';
 
 /**
@@ -16,30 +17,28 @@ interface ClearButtonProps {
  * 渲染为一个圆形的小按钮，内含 X 图标。
  */
 export function ClearButton({ visible, onClear }: ClearButtonProps) {
-  // 不可见时不渲染任何内容
-  if (!visible) return null;
+  const shouldReduceMotion = useReducedMotion();
 
   return (
-    <button
-      onClick={onClear}
-      title="清除输入"
-      style={{
-        width: 20,
-        height: 20,
-        borderRadius: 'var(--radius-full)',
-        border: 'none',
-        background: 'var(--bg-sunken)',
-        color: 'var(--text-muted)',
-        cursor: 'pointer',
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 0,
-        transition: `all var(--duration-fast) var(--ease-standard)`,
-        flexShrink: 0,
-      }}
-    >
-      <X size={12} />
-    </button>
+    <AnimatePresence initial={false}>
+      {visible && (
+        <motion.button
+          className="clear-input-button"
+          initial={shouldReduceMotion ? false : { opacity: 0, scale: 0.82 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.82 }}
+          transition={{
+            duration: shouldReduceMotion ? 0 : 0.12,
+            ease: [0.2, 0, 0, 1],
+          }}
+          whileTap={shouldReduceMotion ? undefined : { scale: 0.9 }}
+          onClick={onClear}
+          title="清除输入"
+          type="button"
+        >
+          <X size={12} />
+        </motion.button>
+      )}
+    </AnimatePresence>
   );
 }

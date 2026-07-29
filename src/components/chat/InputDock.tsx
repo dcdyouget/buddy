@@ -1,5 +1,5 @@
 import { useRef, useEffect, type KeyboardEvent, type PointerEvent } from 'react';
-import { ChevronDown, Send, Settings, Square } from 'lucide-react';
+import { Bot, Send, Settings, Square } from 'lucide-react';
 import { IconButton } from '@/components/shared/IconButton';
 import { ClearButton } from './ClearButton';
 import type { ModelInfo } from '@/types';
@@ -8,7 +8,6 @@ import type { ModelInfo } from '@/types';
  * InputDock 组件的 Props
  * @param isStreaming - 是否正在流式生成中，控制输入栏的状态切换
  * @param streamingModelName - 流式生成时显示的模型名称
- * @param streamingTokens - 流式生成时显示的 token 计数
  * @param selectedModel - 当前选中的模型信息
  * @param draftInput - 输入框中的当前草稿文本
  * @param onDraftChange - 输入文本变化时的回调
@@ -19,7 +18,6 @@ import type { ModelInfo } from '@/types';
 interface InputDockProps {
   isStreaming: boolean;
   streamingModelName?: string;
-  streamingTokens?: number;
   selectedModel: ModelInfo | null;
   draftInput: string;
   onDraftChange: (text: string) => void;
@@ -46,7 +44,6 @@ interface InputDockProps {
 export function InputDock({
   isStreaming,
   streamingModelName,
-  streamingTokens,
   selectedModel,
   draftInput,
   onDraftChange,
@@ -168,8 +165,7 @@ export function InputDock({
               color: 'var(--text-muted)',
             }}
           >
-            {streamingModelName || 'AI'} · 生成中...{' '}
-            {streamingTokens ? `${streamingTokens} tokens` : ''}
+            {streamingModelName || 'AI'} · 生成中...
           </div>
           <IconButton
             icon={Square}
@@ -219,7 +215,8 @@ export function InputDock({
                 right: '6px',
                 top: '50%',
                 transform: 'translateY(-50%)',
-                display: hasContent ? 'flex' : 'none',
+                display: 'flex',
+                pointerEvents: hasContent ? 'auto' : 'none',
               }}
             >
               <ClearButton visible={hasContent} onClear={() => onDraftChange('')} />
@@ -230,6 +227,7 @@ export function InputDock({
             <IconButton
               icon={Settings}
               onClick={onSettingsClick}
+              className="settings-motion-button"
               size={24}
               iconSize={13}
               title="设置"
@@ -245,13 +243,20 @@ export function InputDock({
               aria-haspopup="menu"
               type="button"
             >
-              <ChevronDown size={11} strokeWidth={1.8} />
+              <span
+                key={selectedModel?.id || 'no-model'}
+                className="model-picker-icon"
+                aria-hidden="true"
+              >
+                <Bot size={14} strokeWidth={1.8} />
+              </span>
             </button>
           )}
 
           <IconButton
             icon={Send}
             onClick={onSend}
+            className={`send-motion-button ${hasContent ? 'is-ready' : ''}`}
             // 有内容时显示主色，无内容时显示默认色
             variant={hasContent ? 'primary' : 'default'}
             disabled={!hasContent}

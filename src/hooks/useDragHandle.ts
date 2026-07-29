@@ -9,11 +9,8 @@
 import { useEffect, useRef } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 
-/**
- * 这些元素需要保留点击、输入或文本选择行为。
- * 使用 closest 而不是只判断 target.tagName，避免点击按钮内的 SVG 时误触发拖动。
- */
-const NO_DRAG_SELECTOR = [
+/** 点击、输入类控件的整个区域都不能触发窗口拖动。 */
+const INTERACTIVE_SELECTOR = [
   'input',
   'textarea',
   'button',
@@ -22,12 +19,23 @@ const NO_DRAG_SELECTOR = [
   'label',
   '[contenteditable]:not([contenteditable="false"])',
   '[data-no-window-drag]',
+].join(',');
+
+/**
+ * 文本元素通常是块级元素，会占满一整行。
+ * 只有实际字形所在的范围需要保留文本选择，右侧留白仍应允许拖窗。
+ */
+const TEXT_CONTAINER_SELECTOR = [
   'p',
   'span',
   'pre',
   'code',
   'blockquote',
   'li',
+  'strong',
+  'em',
+  'del',
+  'time',
   'h1',
   'h2',
   'h3',
@@ -40,13 +48,66 @@ const NO_DRAG_SELECTOR = [
   'dd',
 ].join(',');
 
+interface PointerPosition {
+  clientX: number;
+  clientY: number;
+}
+
+function pointTouchesRenderedText(
+  container: Element,
+  { clientX, clientY }: PointerPosition,
+): boolean {
+  const document = container.ownerDocument;
+  const walker = document.createTreeWalker(
+    container,
+    NodeFilter.SHOW_TEXT,
+  );
+  const range = document.createRange();
+
+  // jsdom 或旧 WebView 缺少文字矩形 API 时，优先保留文本选择行为。
+  if (typeof range.getClientRects !== 'function') return true;
+
+  let textNode = walker.nextNode();
+  while (textNode) {
+    if (textNode.textContent?.trim()) {
+      range.selectNodeContents(textNode);
+      const rects = range.getClientRects();
+
+      for (let index = 0; index < rects.length; index += 1) {
+        const rect = rects[index];
+        const hitSlop = 2;
+        if (
+          clientX >= rect.left - hitSlop &&
+          clientX <= rect.right + hitSlop &&
+          clientY >= rect.top - hitSlop &&
+          clientY <= rect.bottom + hitSlop
+        ) {
+          return true;
+        }
+      }
+    }
+    textNode = walker.nextNode();
+  }
+
+  return false;
+}
+
 /**
- * 仅文字本身与可交互控件阻止拖动。
- * 消息气泡占满整行，不能把整个气泡都列为禁拖区域；否则文字四周的空白
- * 也无法拖窗。实际文本节点由下列语义元素匹配，气泡的空白区域则可拖动。
+ * 可交互控件始终阻止拖动；文本元素在没有坐标时采用保守判断，
+ * 有坐标时仅实际文字范围阻止拖动，同一块级元素内的留白可用于拖窗。
  */
-export function shouldStartWindowDrag(target: EventTarget | null): boolean {
-  return target instanceof Element && !target.closest(NO_DRAG_SELECTOR);
+export function shouldStartWindowDrag(
+  target: EventTarget | null,
+  position?: PointerPosition,
+): boolean {
+  if (!(target instanceof Element)) return false;
+  if (target.closest(INTERACTIVE_SELECTOR)) return false;
+
+  const textContainer = target.closest(TEXT_CONTAINER_SELECTOR);
+  if (!textContainer) return true;
+  if (!position) return false;
+
+  return !pointTouchesRenderedText(textContainer, position);
 }
 
 /**
@@ -67,7 +128,14 @@ export function useDragHandle() {
     const onMouseDown = (e: MouseEvent) => {
       if (e.button !== 0) return;
 
-      if (!shouldStartWindowDrag(e.target)) return;
+      if (
+        !shouldStartWindowDrag(e.target, {
+          clientX: e.clientX,
+          clientY: e.clientY,
+        })
+      ) {
+        return;
+      }
 
       try {
         getCurrentWindow().startDragging();

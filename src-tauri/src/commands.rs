@@ -68,7 +68,7 @@ pub struct ApprovalState {
 //
 // 当模型调用 ask_user tool 时, send_message 会:
 //   1. 解析 arguments(question/options/multi_select/header)
-//   2. 发射 ToolQuestionRequired 事件(让前端弹 QuestionModal)
+//   2. 发射 ToolQuestionRequired 事件(让前端显示内联问答卡)
 //   3. 创建 oneshot channel, 把 receiver 存进 QuestionState
 //   4. await receiver → 拿到用户选择
 //   5. 前端调用 answer_tool_question(id, selected, custom) → 通过 sender 推回
@@ -364,7 +364,7 @@ pub async fn send_message(
         // 本轮追踪:是否有至少一个 tool 执行成功(非 is_error)?
         let mut turn_has_success = false;
         for call in &out.tool_calls {
-            // ── ask_user 特殊分支:不进入普通 tool.execute,而是弹 QuestionModal 等回答 ──
+            // ── ask_user 特殊分支:不进入普通 tool.execute,而是显示内联问答卡等回答 ──
             if call.name == "ask_user" {
                 let args_value: serde_json::Value = match serde_json::from_str(&call.arguments) {
                     Ok(v) => v,
@@ -389,13 +389,23 @@ pub async fn send_message(
                     }
                 };
 
-                // 发射 ToolQuestionRequired,前端弹 QuestionModal
+                // 先登记等待槽位，再通知前端显示内联问答卡。
+                // 避免用户快速作答时 answer_tool_question 尚找不到对应 slot。
                 let q_options: Vec<QuestionOption> = parsed.options.iter().map(|o| QuestionOption {
                     label: o.label.clone(),
                     description: o.description.clone(),
                     requires_input: o.requires_input,
                     input_placeholder: o.input_placeholder.clone(),
                 }).collect();
+                let (tx, rx) = oneshot::channel::<AskUserAnswer>();
+                let q_state = app.state::<QuestionState>();
+                q_state.pending.lock().push(QuestionSlot {
+                    id: call.id.clone(),
+                    name: "ask_user".to_string(),
+                    arguments: call.arguments.clone(),
+                    options: parsed.options.clone(),
+                    tx: Some(tx),
+                });
                 emitter.tool_question_required(
                     &call.id,
                     "ask_user",
@@ -406,16 +416,6 @@ pub async fn send_message(
                 );
 
                 // 阻塞等待用户回答
-                let (tx, rx) = oneshot::channel::<AskUserAnswer>();
-                let q_state = app.state::<QuestionState>();
-                q_state.pending.lock().push(QuestionSlot {
-                    id: call.id.clone(),
-                    name: "ask_user".to_string(),
-                    arguments: call.arguments.clone(),
-                    options: parsed.options.clone(),
-                    tx: Some(tx),
-                });
-
                 let answer = tokio::select! {
                     _ = cancel_rx.changed() => {
                         // 取消时移除 slot,按 "用户跳过" 处理
@@ -712,7 +712,7 @@ fn format_ask_user_answer(options: &[AskUserOption], answer: &AskUserAnswer) -> 
 
 /// 用户回答 ask_user 的命令
 ///
-/// 前端在 QuestionModal 中用户做出选择后调用。
+/// 前端用户在内联 AskUserCard 中做出选择后调用。
 /// 把 AskUserAnswer 通过 oneshot 推回 send_message 的 await 点。
 #[tauri::command]
 pub async fn answer_tool_question(

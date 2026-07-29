@@ -123,7 +123,6 @@ export function EmptyPage() {
             selectedId={config?.selected_model_id || ''}
             onSelect={(id) => {
               useConfigStore.getState().setDefaultModel(id);
-              setShowDropdown(false);
             }}
             onClose={() => setShowDropdown(false)}
           />

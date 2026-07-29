@@ -2,21 +2,22 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { AlertCircle, ChevronDown, X } from 'lucide-react';
 import { useUIStore } from '@/stores/uiStore';
-import { useChatStore } from '@/stores/chatStore';
+import {
+  hydrateHistoryMessages,
+  useChatStore,
+} from '@/stores/chatStore';
 import { useShallow } from 'zustand/react/shallow';
 import { useConfigStore } from '@/stores/configStore';
 import { GlassPanel } from '@/components/shared/GlassPanel';
 import { IconButton } from '@/components/shared/IconButton';
 import { ApprovalModal } from '@/components/shared/ApprovalModal';
-import { QuestionModal } from '@/components/shared/QuestionModal';
 import { InputDock } from '@/components/chat/InputDock';
-import { UserResponseInput } from '@/components/chat/UserResponseInput';
 import { MessageBubble } from '@/components/chat/MessageBubble';
 import { ModelDropdown } from '@/components/chat/ModelDropdown';
 import { useDragHandle } from '@/hooks/useDragHandle';
 import { useSmoothTextRenderer } from '@/hooks/useSmoothTextRenderer';
 import { openNativeModelMenu } from '@/utils/modelMenu';
-import type { Message, ModelInfo } from '@/types';
+import type { ModelInfo } from '@/types';
 
 /** 用户离开底部超过该距离后，立即停止流式自动跟随。 */
 const BOTTOM_FOLLOW_TOLERANCE = 12;
@@ -43,11 +44,12 @@ export function ChatPage() {
     sendMessage,
     stopGeneration,
     isStreaming,
-    streamingTokens,
     streamingModelId,
     streamingBlocks,
+    streamingRevealCount,
+    streamingRevealRevision,
     activeToolCalls,
-    waitingForResponse,
+    pendingQuestionId,
     error,
     setError,
     hasMoreHistory,
@@ -61,11 +63,12 @@ export function ChatPage() {
       sendMessage: s.sendMessage,
       stopGeneration: s.stopGeneration,
       isStreaming: s.isStreaming,
-      streamingTokens: s.streamingTokens,
       streamingModelId: s.streamingModelId,
       streamingBlocks: s.streamingBlocks,
+      streamingRevealCount: s.streamingRevealCount,
+      streamingRevealRevision: s.streamingRevealRevision,
       activeToolCalls: s.activeToolCalls,
-      waitingForResponse: s.waitingForResponse,
+      pendingQuestionId: s.pendingQuestion?.id ?? null,
       error: s.error,
       setError: s.setError,
       hasMoreHistory: s.hasMoreHistory,
@@ -129,6 +132,7 @@ export function ChatPage() {
   const prevIsAtBottomRef = useRef(true);
   const prevShowButtonRef = useRef(false);
   const isLoadingOlderRef = useRef(false);
+  const lastSeenMessageCountRef = useRef(messages.length);
 
   /** 判断滚动容器是否仍在底部附近。容差保持很小，便于用户立即接管滚动。 */
   const checkAtBottom = useCallback((): boolean => {
@@ -177,7 +181,48 @@ export function ChatPage() {
     if (scrollRef.current && isAtBottom) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, streamingBlocks, isAtBottom, isHistoryVisible]);
+  }, [
+    messages,
+    streamingBlocks,
+    pendingQuestionId,
+    isAtBottom,
+    isHistoryVisible,
+  ]);
+
+  /**
+   * ask_user 的交互内容由 ToolSection 自己管理，选择选项或出现补充输入框时
+   * 不会改动 messages / streamingBlocks。监听最后一条消息的实际高度，
+   * 让处于底部跟随状态的用户始终能看到完整卡片。
+   */
+  useEffect(() => {
+    const scrollElement = scrollRef.current;
+    if (!scrollElement || !isHistoryVisible) return;
+
+    const rows = scrollElement.querySelectorAll<HTMLElement>('.message-row');
+    const lastRow = rows.item(rows.length - 1);
+    if (!lastRow) return;
+
+    let frameId = 0;
+    const followLastRow = () => {
+      if (!prevIsAtBottomRef.current) return;
+      window.cancelAnimationFrame(frameId);
+      frameId = window.requestAnimationFrame(() => {
+        const current = scrollRef.current;
+        if (current && prevIsAtBottomRef.current) {
+          current.scrollTop = current.scrollHeight;
+        }
+      });
+    };
+
+    const observer = new ResizeObserver(followLastRow);
+    observer.observe(lastRow);
+    followLastRow();
+
+    return () => {
+      observer.disconnect();
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [messages.length, isHistoryVisible]);
 
   /** 流式开始时重置为跟随模式 */
   useEffect(() => {
@@ -187,6 +232,13 @@ export function ChatPage() {
       prevIsAtBottomRef.current = true;
     }
   }, [isStreaming]);
+
+  /** 到达底部即将现有消息标记为已查看。 */
+  useEffect(() => {
+    if (isAtBottom) {
+      lastSeenMessageCountRef.current = messages.length;
+    }
+  }, [isAtBottom, messages.length]);
 
   /** 手动滚动到底部 */
   const scrollToBottom = () => {
@@ -200,6 +252,8 @@ export function ChatPage() {
 
   // 滚动到底按钮：流式结束后、用户翻看历史时显示
   const showScrollButton = !isAtBottom && !isStreaming && messages.length > 0;
+  const hasUnseenMessages =
+    !isAtBottom && messages.length > lastSeenMessageCountRef.current;
 
   // 按钮显隐变化时打印日志（避免每帧 render 都打）
   if (showScrollButton !== prevShowButtonRef.current) {
@@ -211,20 +265,13 @@ export function ChatPage() {
   // 把『每帧重算』的两份数据移出 render: 60Hz 期间 messages 引用会变,
   // 但 visible + childByParent 的内容只在 messages 真正变化时才变。
   // 用 useMemo 把它们 memoize 住,避免每帧都重新 filter + 建 Map。
-  const { visible, childByParent } = useMemo(() => {
-    const v: Message[] = messages.filter(
-      (m) => m.role !== 'tool' && !m.parent_message_id,
-    );
-    const cbp = new Map<string, Message[]>();
-    for (const m of messages) {
-      if (m.parent_message_id) {
-        const arr = cbp.get(m.parent_message_id) || [];
-        arr.push(m);
-        cbp.set(m.parent_message_id, arr);
-      }
-    }
-    return { visible: v, childByParent: cbp };
-  }, [messages]);
+  const visible = useMemo(
+    () =>
+      hydrateHistoryMessages(messages).filter(
+        (message) => message.role !== 'tool',
+      ),
+    [messages],
+  );
 
   // liveToolCalls 引用稳定: 仅当 activeToolCalls 真的变化时,Object.values 重新计算。
   // 之前每帧 `Object.values(activeToolCalls)` 分配新数组,让 MessageBubble memo 永远失效。
@@ -289,10 +336,8 @@ export function ChatPage() {
             </div>
           )}
 
-          {/* tool 消息是内部消息，不展示给用户;parent_message_id 非空的用户回应
-              也不在主列表渲染，而是嵌套到对应的 assistant 消息内。
-              visible / childByParent / liveToolCallsForLast 已在 useMemo 中算好,
-              此处只做纯映射,不再 filter / Object.values。 */}
+          {/* tool 消息是内部消息，不单独展示。visible / liveToolCallsForLast
+              已在 useMemo 中算好，此处只做纯映射。 */}
           {isHistoryVisible && visible.map((msg, i, arr) => {
             // 工具消息不会单独显示，工具循环后的最终 assistant 消息在可见列表中
             // 可能紧跟另一条 assistant。向上按钮需跨过这些续段，定位到本轮原始问题。
@@ -302,6 +347,8 @@ export function ChatPage() {
                 : undefined;
             const questionId = previousUser ? `msg-${previousUser.id}` : undefined;
             const isLast = isStreaming && msg.role === 'assistant' && i === arr.length - 1;
+            const isLatestAssistant =
+              msg.role === 'assistant' && i === arr.length - 1;
             // 工具循环会连续产生多个 assistant 消息；视觉上应作为同一条回答紧凑衔接。
             const isContinuation =
               msg.role === 'assistant' && i > 0 && arr[i - 1].role === 'assistant';
@@ -316,8 +363,6 @@ export function ChatPage() {
                 : msg;
             // 流式最后一条:把 chatStore 累积的 live tool_calls 注入显示
             // (liveToolCallsForLast 引用稳定,只有 activeToolCalls 真变时才更新)
-            const childResponses =
-              msg.role === 'assistant' ? childByParent.get(msg.id) : undefined;
             return (
               <MessageBubble
                 key={msg.id}
@@ -327,7 +372,12 @@ export function ChatPage() {
                 isContinuation={isContinuation}
                 continuesToNext={continuesToNext}
                 liveToolCalls={isLast ? liveToolCallsForLast : undefined}
-                childResponses={childResponses}
+                streamingRevealCount={
+                  isLatestAssistant ? streamingRevealCount : 0
+                }
+                streamingRevealRevision={
+                  isLatestAssistant ? streamingRevealRevision : 0
+                }
               />
             );
           })}
@@ -336,6 +386,7 @@ export function ChatPage() {
           <AnimatePresence>
             {showScrollButton && (
               <motion.button
+                className={`scroll-to-bottom-button ${hasUnseenMessages ? 'has-new-message' : ''}`}
                 initial={{ opacity: 0, scale: 0.8 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.8 }}
@@ -346,9 +397,9 @@ export function ChatPage() {
                   position: 'absolute',
                   bottom: 'var(--space-4)',
                   right: 'var(--space-4)',
-                  width: '32px',
-                  height: '32px',
-                  borderRadius: '50%',
+                  width: 'var(--space-8)',
+                  height: 'var(--space-8)',
+                  borderRadius: 'var(--radius-full)',
                   background: 'var(--bg-elevated)',
                   border: '1px solid var(--border-default)',
                   boxShadow: 'var(--shadow-floating-sm)',
@@ -358,15 +409,6 @@ export function ChatPage() {
                   cursor: 'pointer',
                   zIndex: 20,
                   color: 'var(--text-muted)',
-                  transition: 'color 0.15s, background 0.15s',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.color = 'var(--text-primary)';
-                  e.currentTarget.style.background = 'var(--bg-surface)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.color = 'var(--text-muted)';
-                  e.currentTarget.style.background = 'var(--bg-elevated)';
                 }}
               >
                 <ChevronDown size={16} />
@@ -375,7 +417,7 @@ export function ChatPage() {
           </AnimatePresence>
         </div>
 
-        {/* 输入区域 + 弹窗容器:弹窗在输入框正上方,作为正常流元素撑起消息 */}
+        {/* 输入区域 + 弹窗容器：弹窗悬浮在输入框上方，不压缩消息列表 */}
         <div
           style={{
             display: 'flex',
@@ -398,25 +440,18 @@ export function ChatPage() {
 
           {/* Approval 弹窗(工具调用审批) */}
           <ApprovalModal />
-          {/* ask_user 弹窗(模型问题时) */}
-          <QuestionModal />
 
-          {waitingForResponse ? (
-            <UserResponseInput />
-          ) : (
-            <InputDock
-              isStreaming={isStreaming}
-              streamingModelName={streamingModel?.display_name}
-              streamingTokens={streamingTokens}
-              selectedModel={selectedModel}
-              draftInput={draftInput}
-              onDraftChange={setDraftInput}
-              onSend={isStreaming ? () => {} : handleSend}
-              onStop={handleStop}
-              onModelPickerClick={isStreaming ? undefined : handleModelPickerClick}
-              onSettingsClick={() => setPage('settings')}
-            />
-          )}
+          <InputDock
+            isStreaming={isStreaming}
+            streamingModelName={streamingModel?.display_name}
+            selectedModel={selectedModel}
+            draftInput={draftInput}
+            onDraftChange={setDraftInput}
+            onSend={isStreaming ? () => {} : handleSend}
+            onStop={handleStop}
+            onModelPickerClick={isStreaming ? undefined : handleModelPickerClick}
+            onSettingsClick={() => setPage('settings')}
+          />
         </div>
       </GlassPanel>
 
@@ -428,7 +463,6 @@ export function ChatPage() {
             selectedId={config?.selected_model_id || ''}
             onSelect={(id) => {
               useConfigStore.getState().setDefaultModel(id);
-              setShowDropdown(false);
             }}
             onClose={() => setShowDropdown(false)}
           />
