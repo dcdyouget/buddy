@@ -230,7 +230,46 @@ export const MessageBubble = memo(function MessageBubble({
         }
       >
         {isUser ? (
-          <span style={{ whiteSpace: 'pre-wrap' }}>{message.content}</span>
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 'var(--space-2)',
+            }}
+          >
+            {message.images && message.images.length > 0 && (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns:
+                    message.images.length === 1
+                      ? 'minmax(0, 1fr)'
+                      : 'repeat(2, minmax(0, 1fr))',
+                  gap: 'var(--space-1)',
+                }}
+              >
+                {message.images.map((image) => (
+                  <img
+                    key={image.id}
+                    src={image.data_url}
+                    alt={image.name}
+                    title={image.name}
+                    style={{
+                      width: '100%',
+                      maxWidth: 260,
+                      maxHeight: 240,
+                      objectFit: 'contain',
+                      borderRadius: 'var(--radius-sm)',
+                      background: 'var(--bg-sunken)',
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+            {message.content && (
+              <span style={{ whiteSpace: 'pre-wrap' }}>{message.content}</span>
+            )}
+          </div>
         ) : (
           <>
             <AssistantContent
@@ -257,6 +296,7 @@ export const MessageBubble = memo(function MessageBubble({
   return (
     prevProps.message.id === nextProps.message.id &&
     prevProps.message.content === nextProps.message.content &&
+    prevProps.message.images === nextProps.message.images &&
     prevProps.message.blocks === nextProps.message.blocks &&
     prevProps.message.tool_calls === nextProps.message.tool_calls &&
     prevProps.isStreaming === nextProps.isStreaming &&

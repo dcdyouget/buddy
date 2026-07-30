@@ -81,3 +81,32 @@ describe('MessageBubble 工具调用位置', () => {
     ).toBe(false);
   });
 });
+
+describe('MessageBubble 图片消息', () => {
+  it('展示用户图片附件及文本', () => {
+    const message: Message = {
+      id: 'user-image',
+      role: 'user',
+      content: '请描述这张图片',
+      images: [
+        {
+          id: 'image-1',
+          name: 'sample.png',
+          media_type: 'image/png',
+          data_url: 'data:image/png;base64,aGVsbG8=',
+        },
+      ],
+      model_id: null,
+      created_at: 0,
+    };
+
+    const { getByAltText, getByText } = render(
+      <MessageBubble message={message} />,
+    );
+
+    expect(getByAltText('sample.png').getAttribute('src')).toBe(
+      'data:image/png;base64,aGVsbG8=',
+    );
+    expect(getByText('请描述这张图片')).toBeTruthy();
+  });
+});

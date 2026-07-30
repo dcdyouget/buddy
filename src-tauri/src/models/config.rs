@@ -16,17 +16,16 @@ use serde::{Deserialize, Serialize};
 
 use super::mcp::McpServerConfig;
 
-
 /// 应用全局配置（持久化到磁盘的根 JSON 对象）
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppConfig {
-    pub theme: Theme,                          // 当前主题
-    pub hotkey: String,                        // 全局快捷键字符串，如 "CmdOrCtrl+J"
-    pub providers: Vec<ProviderConfig>,        // 用户配置的所有 API 提供商
-                                                 // Vec<T> ≈ Java 的 ArrayList<T>，但栈上是指针
+    pub theme: Theme,                   // 当前主题
+    pub hotkey: String,                 // 全局快捷键字符串，如 "CmdOrCtrl+J"
+    pub providers: Vec<ProviderConfig>, // 用户配置的所有 API 提供商
+    // Vec<T> ≈ Java 的 ArrayList<T>，但栈上是指针
     pub models: Vec<super::message::ModelInfo>, // 已知模型列表（含 context_window 等）
-    pub selected_model_id: String,             // UI 当前选中的模型 ID
-    pub auto_start: bool,                      // 开机自启动
+    pub selected_model_id: String,              // UI 当前选中的模型 ID
+    pub auto_start: bool,                       // 开机自启动
 
     // ── Tool / MCP 相关字段 ──
     // 缺省时使用 vec![] —— 老 config.json 无这些字段也能正常加载
@@ -55,7 +54,6 @@ impl Default for AppConfig {
     }
 }
 
-
 /// 主题枚举
 ///
 /// `#[serde(rename_all = "lowercase")]` 让 Light/Dark 序列化为 "light"/"dark"
@@ -66,21 +64,20 @@ pub enum Theme {
     Dark,
 }
 
-
 /// API Provider 配置（一个用户填写的 API key 就是一个 ProviderConfig）
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ProviderConfig {
-    pub id: String,                      // UUID 或人工填写的 ID
-    pub name: String,                    // 用户起的显示名
-    pub base_url: String,                // API 基础 URL（如 https://api.openai.com）
-    pub api_key: String,                 // API 密钥（v0.1 明文存储，见 CLAUDE.md 约束 #9）
-    pub enabled_model_ids: Vec<String>,  // 该 Provider 下用户勾选启用的模型
+    pub id: String,                     // UUID 或人工填写的 ID
+    pub name: String,                   // 用户起的显示名
+    pub base_url: String,               // API 基础 URL（如 https://api.openai.com）
+    pub api_key: String,                // API 密钥（v0.1 明文存储，见 CLAUDE.md 约束 #9）
+    pub enabled_model_ids: Vec<String>, // 该 Provider 下用户勾选启用的模型
 
     // `#[serde(default = "default_provider_type")]`：
     //   反序列化时若 JSON 缺这个字段，调用下面的 default_provider_type() 函数取值
     //   作用：老配置没有 provider_type 字段也能正常加载（向后兼容）
     #[serde(default = "default_provider_type")]
-    pub provider_type: String,           // "openai_compatible" 或 "anthropic"
+    pub provider_type: String, // "openai_compatible" 或 "anthropic"
 
     // `Option<CompatConfig>`：可空；serde(default) 在缺字段时给 None
     //   Java 8 之前没有 Optional；Java 8+ 的 Optional 与此用法类似但语义不同
@@ -94,7 +91,6 @@ pub struct ProviderConfig {
 fn default_provider_type() -> String {
     "openai_compatible".to_string()
 }
-
 
 /// 兼容性配置
 ///
@@ -111,9 +107,9 @@ fn default_provider_type() -> String {
 pub struct CompatConfig {
     // 多个字段都标了 `#[serde(default)]`，JSON 缺字段时使用 Option 的默认值 None
     #[serde(default)]
-    pub thinking_format: Option<String>,          // 思考参数格式："openai"/"deepseek"/"qwen"/...
+    pub thinking_format: Option<String>, // 思考参数格式："openai"/"deepseek"/"qwen"/...
     #[serde(default)]
-    pub max_tokens_field: Option<String>,         // token 上限字段名："max_tokens" / "max_completion_tokens"
+    pub max_tokens_field: Option<String>, // token 上限字段名："max_tokens" / "max_completion_tokens"
     #[serde(default)]
     pub supports_stream_options_usage: Option<bool>,
     #[serde(default)]

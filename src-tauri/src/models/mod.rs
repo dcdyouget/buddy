@@ -13,11 +13,11 @@
 // - `pub mod config;` ≈ 在 package 中存在一个 `Config.java`
 // ============================================================================
 
-pub mod config;            // 声明并公开子模块 config（位于 ./config.rs）
-pub mod message;           // 声明并公开子模块 message（位于 ./message.rs）
-pub mod model_context;     // 声明并公开子模块 model_context（位于 ./model_context.rs）
-pub mod storage;           // 声明并公开子模块 storage（位于 ./storage.rs）
-pub mod mcp;               // MCP server 配置（位于 ./mcp.rs）
+pub mod config; // 声明并公开子模块 config（位于 ./config.rs）
+pub mod mcp;
+pub mod message; // 声明并公开子模块 message（位于 ./message.rs）
+pub mod model_context; // 声明并公开子模块 model_context（位于 ./model_context.rs）
+pub mod storage; // 声明并公开子模块 storage（位于 ./storage.rs） // MCP server 配置（位于 ./mcp.rs）
 
 // ============================================================================
 // re-export（重导出）
@@ -35,7 +35,7 @@ pub mod mcp;               // MCP server 配置（位于 ./mcp.rs）
 // 为什么这么做？让外部少写一层路径，同时保持文件物理组织。
 // ============================================================================
 
-pub use config::*;         // 把 config 子模块的 pub 项全部 re-export
-pub use message::*;        // 把 message 子模块的 pub 项全部 re-export
-pub use model_context::*;  // 把 model_context 子模块的 pub 项全部 re-export
-pub use storage::*;        // 把 storage 子模块的 pub 项全部 re-export
+pub use config::*; // 把 config 子模块的 pub 项全部 re-export
+pub use message::*; // 把 message 子模块的 pub 项全部 re-export
+pub use model_context::*; // 把 model_context 子模块的 pub 项全部 re-export
+pub use storage::*; // 把 storage 子模块的 pub 项全部 re-export

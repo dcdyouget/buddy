@@ -32,6 +32,12 @@ interface ModelRowProps {
   onSetDefault: () => void;
   /** 更新上下文窗口的回调 */
   onUpdateContextWindow?: (ctx: number) => void;
+  /** 更新图片输入能力的回调 */
+  onUpdateVision: (supportsVision: boolean) => void;
+  /** 更新图片生成能力的回调 */
+  onUpdateImageGeneration: (supportsImageGeneration: boolean) => void;
+  /** 所属 Provider 是否为 OpenAI 兼容协议 */
+  canGenerateImages: boolean;
 }
 
 /**
@@ -51,6 +57,9 @@ export function ModelRow({
   onToggle,
   onSetDefault,
   onUpdateContextWindow,
+  onUpdateVision,
+  onUpdateImageGeneration,
+  canGenerateImages,
 }: ModelRowProps) {
   return (
     <div
@@ -186,6 +195,65 @@ export function ModelRow({
           </span>
         </div>
       )}
+
+      <label
+        title="开启后允许在聊天中向此模型发送图片"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 'var(--space-1)',
+          color: 'var(--text-muted)',
+          fontSize: '11px',
+          cursor: 'pointer',
+          whiteSpace: 'nowrap',
+          flexShrink: 0,
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={model.supports_vision}
+          onChange={(event) => onUpdateVision(event.target.checked)}
+          style={{
+            width: 14,
+            height: 14,
+            accentColor: 'var(--buddy-primary)',
+            cursor: 'pointer',
+          }}
+        />
+        支持图片
+      </label>
+
+      <label
+        title={
+          canGenerateImages
+            ? '开启后允许此模型调用图片生成工具；已适配厂商会自动使用对应原生生图接口'
+            : 'Anthropic 协议暂不支持图片生成'
+        }
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 'var(--space-1)',
+          color: 'var(--text-muted)',
+          fontSize: '11px',
+          cursor: canGenerateImages ? 'pointer' : 'not-allowed',
+          whiteSpace: 'nowrap',
+          flexShrink: 0,
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={canGenerateImages && model.supports_image_generation}
+          disabled={!canGenerateImages}
+          onChange={(event) => onUpdateImageGeneration(event.target.checked)}
+          style={{
+            width: 14,
+            height: 14,
+            accentColor: 'var(--buddy-primary)',
+            cursor: canGenerateImages ? 'pointer' : 'not-allowed',
+          }}
+        />
+        支持生图
+      </label>
 
       {/* "设为默认"按钮：仅在非默认且已启用时显示 */}
       {!isDefault && enabled && (

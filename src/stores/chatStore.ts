@@ -19,7 +19,14 @@
  */
 
 import { create } from 'zustand';
-import type { Message, ContentBlock, PendingQuestion, ToolCall, ToolCallStatus } from '@/types';
+import type {
+  Message,
+  ContentBlock,
+  ImageAttachment,
+  PendingQuestion,
+  ToolCall,
+  ToolCallStatus,
+} from '@/types';
 import { isBrowser, MOCK_MESSAGES } from '@/utils/mock';
 import { parseThinkBlocks } from '@/utils/thinkParser';
 
@@ -31,6 +38,7 @@ interface ChatState {
   hasMoreHistory: boolean;
   isLoadingHistory: boolean;
   draftInput: string;
+  draftImages: ImageAttachment[];
   isStreaming: boolean;
   streamingTokens: number;
   streamingModelId: string | null;
@@ -67,6 +75,9 @@ interface ChatState {
 
   // ── 操作 ──
   setDraftInput: (text: string) => void;
+  addDraftImages: (images: ImageAttachment[]) => void;
+  removeDraftImage: (id: string) => void;
+  clearDraftImages: () => void;
   sendMessage: (content: string, modelId: string) => Promise<void>;
   stopGeneration: () => Promise<void>;
   appendTextToken: (token: string) => void;
@@ -84,7 +95,13 @@ interface ChatState {
   handleToolCallDelta: (id: string, argumentsDelta: string) => void;
   handleToolCallEnd: (id: string, name: string, args: string) => void;
   handleToolExecuting: (id: string, name: string) => void;
-  handleToolResult: (id: string, name: string, content: string, isError: boolean) => void;
+  handleToolResult: (
+    id: string,
+    name: string,
+    content: string,
+    images: ImageAttachment[],
+    isError: boolean,
+  ) => void;
   handleToolApprovalRequired: (id: string, name: string, args: string, reason: string) => void;
   setToolApproval: (approval: ChatState['toolApproval']) => void;
   // P11: ask_user 问题的状态控制
@@ -325,6 +342,7 @@ export function hydrateHistoryMessages(messages: Message[]): Message[] {
             status: isError ? 'error' : 'done',
             result: result.content,
             is_error_result: isError,
+            images: result.images,
           };
         }
 
@@ -347,6 +365,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   hasMoreHistory: false,
   isLoadingHistory: false,
   draftInput: '',
+  draftImages: [],
   isStreaming: false,
   streamingTokens: 0,
   streamingModelId: null,
@@ -364,6 +383,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setDraftInput: (text: string) => {
     set({ draftInput: text });
   },
+  addDraftImages: (images: ImageAttachment[]) => {
+    set((state) => ({
+      draftImages: [...(state.draftImages || []), ...images],
+    }));
+  },
+  removeDraftImage: (id: string) => {
+    set((state) => ({
+      draftImages: (state.draftImages || []).filter((image) => image.id !== id),
+    }));
+  },
+  clearDraftImages: () => {
+    set({ draftImages: [] });
+  },
 
   /**
    * 发送消息到 AI
@@ -373,13 +405,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
    * 4. Tauri 模式：调用 Rust 后端 send_message 命令
    */
   sendMessage: async (content: string, modelId: string) => {
-    const { messages } = get();
+    const { messages, draftImages = [] } = get();
 
     // 构建用户消息
     const userMessage: Message = {
       id: generateId(),
       role: 'user',
       content,
+      images: draftImages,
       model_id: null,
       created_at: Math.floor(Date.now() / 1000),
     };
@@ -399,6 +432,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({
       messages: updatedMessages,
       draftInput: '', // 发送后清空输入框
+      draftImages: [],
       isStreaming: true,
       streamingTokens: 0,
       streamingModelId: modelId,
@@ -984,21 +1018,43 @@ export const useChatStore = create<ChatState>((set, get) => ({
     get()._ensureToolCallEntry(id, name, 'executing');
   },
 
-  handleToolResult: (id: string, name: string, content: string, isError: boolean) => {
+  handleToolResult: (
+    id: string,
+    name: string,
+    content: string,
+    images: ImageAttachment[],
+    isError: boolean,
+  ) => {
     // 用一个 set + 一个本地变量,防止两次 set 的间隙被其他事件插入
     const state = get();
     const active = { ...state.activeToolCalls };
     const prev = active[id];
     if (prev) {
-      active[id] = { ...prev, name, status: isError ? 'error' : 'done', result: content, is_error_result: isError };
+      active[id] = {
+        ...prev,
+        name,
+        status: isError ? 'error' : 'done',
+        result: content,
+        is_error_result: isError,
+        images,
+      };
     } else {
-      active[id] = { id, name, arguments: '', status: isError ? 'error' : 'done', result: content, is_error_result: isError };
+      active[id] = {
+        id,
+        name,
+        arguments: '',
+        status: isError ? 'error' : 'done',
+        result: content,
+        is_error_result: isError,
+        images,
+      };
     }
 
     const toolMsg: Message = {
       id: 'tool-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 9),
       role: 'tool' as const,
       content,
+      images,
       model_id: null,
       created_at: Math.floor(Date.now() / 1000),
       tool_call_id: id,
@@ -1058,6 +1114,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({
       messages: [],
       draftInput: '',
+      draftImages: [],
       error: null,
       activeToolCalls: {},
       toolApproval: null,

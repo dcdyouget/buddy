@@ -17,7 +17,10 @@ fn show_window(window: &tauri::WebviewWindow) {
     #[cfg(target_os = "windows")]
     crate::platform::windows::bring_to_front(window);
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
+    crate::platform::macos::bring_to_front(window);
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let _ = window.show();
         let _ = window.set_focus();

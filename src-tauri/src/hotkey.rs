@@ -18,8 +18,8 @@ pub struct HotkeyState {
 /// 注册全局热键并绑定窗口 toggle 行为
 ///
 /// 三态切换（参考 Bob 等 macOS 工具型应用的标准行为）：
-/// - **隐藏状态** → 获取选中文本、保留上次位置、显示、聚焦
-/// - **显示但失焦**（用户点到了别的窗口，窗口在 z 序后面）→ 唤回到最前，不改位置
+/// - **隐藏状态** → 获取选中文本、定位到鼠标所在屏幕、显示、聚焦
+/// - **显示但失焦**（用户点到了别的窗口，窗口在 z 序后面）→ 定位并唤回到最前
 /// - **显示且已聚焦**（在最前）→ 隐藏
 ///
 /// 仅在按键按下（Pressed）时触发，避免按下/释放各触发一次。
@@ -37,28 +37,35 @@ pub fn register(app: &tauri::AppHandle, shortcut: Shortcut) {
                         let _ = window.hide();
                         log::info!("[hotkey] hidden");
                     } else {
-                        // ── 隐藏 OR 显示但失焦 → 带到最前 ──
-                        // 不改位置：用户拖拽后，下次快捷键呼出仍应出现在原处。
+                        // ── 隐藏 OR 显示但失焦 → 带到鼠标所在屏幕的前台 ──
                         if !visible {
                             crate::platform::macos::get_selected_text(app);
                         } else {
-                            log::info!("[hotkey] shown+unfocused → bring_to_front (no reposition)");
+                            log::info!("[hotkey] shown+unfocused → bring_to_front");
                         }
 
-                        log::info!("[hotkey] before bring_to_front, pos={:?}", window.outer_position().ok());
+                        crate::window::positioning::reposition_to_cursor_monitor(&window);
+                        log::info!(
+                            "[hotkey] before bring_to_front, pos={:?}",
+                            window.outer_position().ok()
+                        );
 
-                        // Windows 上需要绕过前台窗口锁定；其他平台直接 show + set_focus
+                        // Windows/macOS 都需要平台专用的前台激活逻辑。
                         #[cfg(target_os = "windows")]
                         crate::platform::windows::bring_to_front(&window);
-                        #[cfg(not(target_os = "windows"))]
+                        #[cfg(target_os = "macos")]
+                        crate::platform::macos::bring_to_front(&window);
+                        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
                         {
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
 
-                        log::info!("[hotkey] after bring_to_front, visible={}, focused={}",
+                        log::info!(
+                            "[hotkey] after bring_to_front, visible={}, focused={}",
                             window.is_visible().unwrap_or(false),
-                            window.is_focused().unwrap_or(false));
+                            window.is_focused().unwrap_or(false)
+                        );
                     }
                 }
             }
@@ -97,8 +104,5 @@ pub fn update_hotkey(app: &tauri::AppHandle, hotkey_str: &str) {
     register(app, shortcut);
 
     // 更新状态
-    app.state::<HotkeyState>()
-        .current
-        .lock()
-        .replace(shortcut);
+    app.state::<HotkeyState>().current.lock().replace(shortcut);
 }

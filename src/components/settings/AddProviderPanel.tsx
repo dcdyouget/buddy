@@ -165,6 +165,32 @@ export function AddProviderPanel({ onBack }: AddProviderPanelProps) {
     );
   };
 
+  /** 用户手动声明模型是否支持图片输入 */
+  const updateVisionSupport = (modelId: string, supportsVision: boolean) => {
+    setFetchedModels((prev) =>
+      prev.map((m) =>
+        m.id === modelId ? { ...m, supports_vision: supportsVision } : m,
+      ),
+    );
+  };
+
+  /** 用户手动声明模型是否允许调用图片生成工具 */
+  const updateImageGenerationSupport = (
+    modelId: string,
+    supportsImageGeneration: boolean,
+  ) => {
+    setFetchedModels((prev) =>
+      prev.map((m) =>
+        m.id === modelId
+          ? {
+              ...m,
+              supports_image_generation: supportsImageGeneration,
+            }
+          : m,
+      ),
+    );
+  };
+
   return (
     <GlassPanel
       className="buddy-shell provider-panel"
@@ -502,6 +528,79 @@ export function AddProviderPanel({ onBack }: AddProviderPanelProps) {
                     {model.latency_ms}ms
                   </span>
                 )}
+                <label
+                  title="开启后允许在聊天中向此模型发送图片"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-1)',
+                    color: 'var(--text-muted)',
+                    fontSize: '11px',
+                    whiteSpace: 'nowrap',
+                    cursor: 'pointer',
+                    flexShrink: 0,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={model.supports_vision}
+                    onChange={(event) =>
+                      updateVisionSupport(model.id, event.target.checked)
+                    }
+                    style={{
+                      width: 14,
+                      height: 14,
+                      accentColor: 'var(--buddy-primary)',
+                      cursor: 'pointer',
+                    }}
+                  />
+                  支持图片
+                </label>
+                <label
+                  title={
+                    effectiveProviderType === 'openai_compatible'
+                      ? '开启后允许此模型调用图片生成工具；已适配厂商会自动使用对应原生生图接口'
+                      : 'Anthropic 协议暂不支持图片生成'
+                  }
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-1)',
+                    color: 'var(--text-muted)',
+                    fontSize: '11px',
+                    whiteSpace: 'nowrap',
+                    cursor:
+                      effectiveProviderType === 'openai_compatible'
+                        ? 'pointer'
+                        : 'not-allowed',
+                    flexShrink: 0,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={
+                      effectiveProviderType === 'openai_compatible' &&
+                      model.supports_image_generation
+                    }
+                    disabled={effectiveProviderType !== 'openai_compatible'}
+                    onChange={(event) =>
+                      updateImageGenerationSupport(
+                        model.id,
+                        event.target.checked,
+                      )
+                    }
+                    style={{
+                      width: 14,
+                      height: 14,
+                      accentColor: 'var(--buddy-primary)',
+                      cursor:
+                        effectiveProviderType === 'openai_compatible'
+                          ? 'pointer'
+                          : 'not-allowed',
+                    }}
+                  />
+                  支持生图
+                </label>
                 <select
                   value={model.context_window}
                   onChange={(e) => updateContextWindow(model.id, Number(e.target.value))}

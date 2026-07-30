@@ -1,3 +1,4 @@
+use super::aggregate::SearchHit;
 use dom_query::{Document, Selection};
 use reqwest::{Client, Url};
 use serde::Deserialize;
@@ -7,12 +8,7 @@ const SEARCH_PAGE: &str = "https://duckduckgo.com/";
 const SEARCH_ENDPOINT: &str = "https://html.duckduckgo.com/html/";
 const MAX_SNIPPET_CHARS: usize = 600;
 
-#[derive(Debug, Clone)]
-pub(super) struct SearchHit {
-    pub title: String,
-    pub url: String,
-    pub snippet: String,
-}
+pub(super) const PROVIDER: &str = "duckduckgo";
 
 pub(super) async fn search_duckduckgo(
     client: &Client,
@@ -175,6 +171,7 @@ fn parse_modern_results(script: &str, limit: usize) -> Vec<SearchHit> {
                         return None;
                     }
                     Some(SearchHit {
+                        source: PROVIDER,
                         title,
                         url,
                         snippet: truncate_chars(&normalize_html_text(&result.a), MAX_SNIPPET_CHARS),
@@ -272,6 +269,7 @@ pub(super) fn parse_search_results(html: &str, limit: usize) -> Vec<SearchHit> {
             .unwrap_or_else(|| fallback_snippet(&card, &title));
 
             results.push(SearchHit {
+                source: PROVIDER,
                 title,
                 url,
                 snippet: truncate_chars(&snippet, MAX_SNIPPET_CHARS),

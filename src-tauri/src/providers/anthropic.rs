@@ -22,22 +22,20 @@ use super::{ApiError, LlmProvider};
 use crate::models::{get_context_window, CompatConfig, Message, MessageRole, ModelInfo, ToolCall};
 use crate::streaming::{StopReason, StreamEventEmitter, StreamOutcome};
 use crate::tools::ToolDefinition;
-use futures_util::StreamExt;                          // 为 Stream trait 提供 .next() 等适配器
-use log::{error, info, warn};                         // 日志门面（log crate）
-use reqwest::Client;                                 // HTTP 客户端
-use serde_json::{json, Value};                               // 通用 JSON 值类型
-use std::pin::Pin;                                    // 用于 Pin<Box<...>>
-use std::time::Duration;                             // 时间段
-use tokio::sync::watch;                              // watch channel（取消信号）
-use tokio::time::timeout;                             // 给异步操作加超时
-
+use futures_util::StreamExt; // 为 Stream trait 提供 .next() 等适配器
+use log::{error, info, warn}; // 日志门面（log crate）
+use reqwest::Client; // HTTP 客户端
+use serde_json::{json, Value}; // 通用 JSON 值类型
+use std::pin::Pin; // 用于 Pin<Box<...>>
+use std::time::Duration; // 时间段
+use tokio::sync::watch; // watch channel（取消信号）
+use tokio::time::timeout; // 给异步操作加超时
 
 /// Anthropic API 版本（固定）
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 /// 单次字节块读取超时
 const CHUNK_TIMEOUT: Duration = Duration::from_secs(30);
-
 
 // ============================================================================
 // AnthropicProvider —— Anthropic 适配器
@@ -82,7 +80,32 @@ impl AnthropicProvider {
 
                 let result = match m.role {
                     MessageRole::User => {
-                        json!({ "role": "user", "content": m.content })
+                        if m.images.is_empty() {
+                            json!({ "role": "user", "content": m.content })
+                        } else {
+                            let mut content = m
+                                .images
+                                .iter()
+                                .filter_map(|image| {
+                                    let (_, data) = image.data_url.split_once(";base64,")?;
+                                    Some(json!({
+                                        "type": "image",
+                                        "source": {
+                                            "type": "base64",
+                                            "media_type": image.media_type,
+                                            "data": data,
+                                        }
+                                    }))
+                                })
+                                .collect::<Vec<_>>();
+                            if !m.content.is_empty() {
+                                content.push(json!({
+                                    "type": "text",
+                                    "text": m.content,
+                                }));
+                            }
+                            json!({ "role": "user", "content": content })
+                        }
                     }
                     MessageRole::Assistant => {
                         let mut obj = json!({ "role": "assistant" });
@@ -133,7 +156,7 @@ impl AnthropicProvider {
     /// - `Option<T>` = "可能没有值" 的容器；Some(x) / None
     /// - 函数返回 `Option<(String, String)>`：可能没有值，或返回二元组
     fn parse_sse_line(line: &str) -> Option<(String, String)> {
-        let line = line.trim();        // 去掉首尾空白
+        let line = line.trim(); // 去掉首尾空白
         if line.is_empty() {
             return None;
         }
@@ -147,16 +170,15 @@ impl AnthropicProvider {
         if let Some(colon_pos) = line.find(':') {
             // 字符串切片 line[..colon_pos]：从开头切到冒号位置
             // 注意：字符串切片按字节边界；安全的前提是冒号是 ASCII
-            let field = line[..colon_pos].trim();         // &str
-            let value = line[colon_pos + 1..].trim();     // &str
-            // Some((s1.to_string(), s2.to_string()))：把 &str 转为堆分配的 String
+            let field = line[..colon_pos].trim(); // &str
+            let value = line[colon_pos + 1..].trim(); // &str
+                                                      // Some((s1.to_string(), s2.to_string()))：把 &str 转为堆分配的 String
             Some((field.to_string(), value.to_string()))
         } else {
             None
         }
     }
 }
-
 
 // ============================================================================
 // impl LlmProvider for AnthropicProvider
@@ -176,7 +198,8 @@ impl LlmProvider for AnthropicProvider {
         mut cancel_rx: watch::Receiver<bool>,
         compat: Option<&'a CompatConfig>,
         tools: &'a [ToolDefinition],
-    ) -> Pin<Box<dyn std::future::Future<Output = Result<StreamOutcome, ApiError>> + Send + 'a>> {
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<StreamOutcome, ApiError>> + Send + 'a>>
+    {
         // Box::pin(async move { ... })：
         //   - async move {...} 创建一个 async 块（Future 实现）
         //     - `move` 关键字把块内用到的外部变量"move 进"块，使其所有权转移到 Future 内
@@ -228,11 +251,13 @@ impl LlmProvider for AnthropicProvider {
             if !tools.is_empty() {
                 let anthropic_tools: Vec<Value> = tools
                     .iter()
-                    .map(|t| json!({
-                        "name": t.name,
-                        "description": t.description,
-                        "input_schema": t.parameters,
-                    }))
+                    .map(|t| {
+                        json!({
+                            "name": t.name,
+                            "description": t.description,
+                            "input_schema": t.parameters,
+                        })
+                    })
                     .collect();
                 body["tools"] = json!(anthropic_tools);
                 body["tool_choice"] = json!({"type": "auto"});
@@ -241,11 +266,11 @@ impl LlmProvider for AnthropicProvider {
             // ── 4. 拼接 URL ──
             // format!("{}/v1/messages", ...) ≈ Java 的 String.format("%s/v1/messages", baseUrl)
             // trim_end_matches('/') 移除结尾的 '/'，防止出现 "//v1"
-            let url = format!(
-                "{}/v1/messages",
-                base_url.trim_end_matches('/')
+            let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
+            info!(
+                "[anthropic::stream_chat] 开始请求: model={}, url={}",
+                model, url
             );
-            info!("[anthropic::stream_chat] 开始请求: model={}, url={}", model, url);
 
             // ── DEBUG: 打印完整请求体(用于排查 tool_use_id 问题) ──
             for (i, m) in anthropic_messages.iter().enumerate() {
@@ -257,7 +282,12 @@ impl LlmProvider for AnthropicProvider {
                         .unwrap_or_default();
                     format!(" content_types={:?}", types)
                 } else {
-                    let preview: String = m["content"].as_str().unwrap_or("?").chars().take(80).collect();
+                    let preview: String = m["content"]
+                        .as_str()
+                        .unwrap_or("?")
+                        .chars()
+                        .take(80)
+                        .collect();
                     format!(" content='{}'", preview)
                 };
                 info!(
@@ -305,7 +335,10 @@ impl LlmProvider for AnthropicProvider {
 
             // ── 6. 检查 HTTP 状态码 ──
             let status = response.status();
-            info!("[anthropic::stream_chat] 收到响应: status={}", status.as_u16());
+            info!(
+                "[anthropic::stream_chat] 收到响应: status={}",
+                status.as_u16()
+            );
             if !status.is_success() {
                 let body_text = response.text().await.unwrap_or_default();
                 warn!(
@@ -342,29 +375,29 @@ impl LlmProvider for AnthropicProvider {
             let mut buffer = String::new();
 
             // 流式状态追踪变量（mut 表示可变）
-            let mut full_response = String::new();       // 累积完整回复文本
+            let mut full_response = String::new(); // 累积完整回复文本
             let mut thinking_response = String::new(); // 累积思考文本
-            let mut current_event: Option<String> = None;// 当前事件类型
-            let mut content_index: usize = 0;            // 内容块索引
-            let mut _has_started = false;                // 下划线前缀：未使用变量（Rust 会警告）
+            let mut current_event: Option<String> = None; // 当前事件类型
+            let mut content_index: usize = 0; // 内容块索引
+            let mut _has_started = false; // 下划线前缀：未使用变量（Rust 会警告）
 
-            let mut chunk_count: u64 = 0;                // 接收到的字节块数
-            let mut token_count: u64 = 0;                // 已发出的文本 token 数
+            let mut chunk_count: u64 = 0; // 接收到的字节块数
+            let mut token_count: u64 = 0; // 已发出的文本 token 数
 
             // P5: tool_call 流式追踪 (key=index, Anthropic 用 index 区分 block)
             use std::collections::HashMap;
             let mut tool_calls: HashMap<usize, ToolCall> = HashMap::new();
-            let flush_tool_calls = |tc: &mut HashMap<usize, ToolCall>,
-                                   em: &StreamEventEmitter| -> Vec<ToolCall> {
-                let mut ordered: Vec<(usize, ToolCall)> = tc.drain().collect();
-                ordered.sort_by_key(|(i, _)| *i);
-                let pending = ordered.len();
-                for (_, t) in &ordered {
-                    em.tool_call_end(&t.id, &t.name, &t.arguments);
-                }
-                em.turn_end(pending);
-                ordered.into_iter().map(|(_, t)| t).collect()
-            };
+            let flush_tool_calls =
+                |tc: &mut HashMap<usize, ToolCall>, em: &StreamEventEmitter| -> Vec<ToolCall> {
+                    let mut ordered: Vec<(usize, ToolCall)> = tc.drain().collect();
+                    ordered.sort_by_key(|(i, _)| *i);
+                    let pending = ordered.len();
+                    for (_, t) in &ordered {
+                        em.tool_call_end(&t.id, &t.name, &t.arguments);
+                    }
+                    em.turn_end(pending);
+                    ordered.into_iter().map(|(_, t)| t).collect()
+                };
 
             // 通知前端：流式开始
             emitter.start();
@@ -461,8 +494,7 @@ impl LlmProvider for AnthropicProvider {
                                     }
                                     "data" => {
                                         // event_type 取 current_event，没设过就给空串
-                                        let event_type =
-                                            current_event.as_deref().unwrap_or("");
+                                        let event_type = current_event.as_deref().unwrap_or("");
                                         // 解析 data 字段为 JSON
                                         match serde_json::from_str::<Value>(&value) {
                                             Ok(json) => {
@@ -474,13 +506,17 @@ impl LlmProvider for AnthropicProvider {
                                                         // .as_object()    Option<&Map>
                                                         // .or_else(...)   若为 None，用后备分支
                                                         //   类似 Java Optional.orElse
-                                                        let usage = json["message"]["usage"].as_object()
+                                                        let usage = json["message"]["usage"]
+                                                            .as_object()
                                                             .or_else(|| json["usage"].as_object());
                                                         if let Some(u) = usage {
                                                             // u.get("input_tokens") 拿 Option<&Value>
                                                             // .and_then(|v| v.as_u64())  Option<&Value> → Option<u64>
                                                             // .unwrap_or(0)             None 时给默认值 0
-                                                            let input = u.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                                                            let input = u
+                                                                .get("input_tokens")
+                                                                .and_then(|v| v.as_u64())
+                                                                .unwrap_or(0);
                                                             info!("[anthropic] message_start: input_tokens={}", input);
                                                         }
                                                     }
@@ -489,7 +525,9 @@ impl LlmProvider for AnthropicProvider {
                                                         let block = &json["content_block"];
                                                         let block_type =
                                                             block["type"].as_str().unwrap_or("");
-                                                        let idx = json["index"].as_u64().unwrap_or(0) as usize;
+                                                        let idx =
+                                                            json["index"].as_u64().unwrap_or(0)
+                                                                as usize;
                                                         match block_type {
                                                             "text" => {
                                                                 emitter.text_start(idx);
@@ -499,13 +537,20 @@ impl LlmProvider for AnthropicProvider {
                                                             }
                                                             "tool_use" => {
                                                                 let block = &json["content_block"];
-                                                                let id = block["id"].as_str().unwrap_or("");
-                                                                let n = block["name"].as_str().unwrap_or("");
-                                                                tool_calls.insert(idx, ToolCall {
-                                                                    id: id.to_string(),
-                                                                    name: n.to_string(),
-                                                                    arguments: String::new(),
-                                                                });
+                                                                let id = block["id"]
+                                                                    .as_str()
+                                                                    .unwrap_or("");
+                                                                let n = block["name"]
+                                                                    .as_str()
+                                                                    .unwrap_or("");
+                                                                tool_calls.insert(
+                                                                    idx,
+                                                                    ToolCall {
+                                                                        id: id.to_string(),
+                                                                        name: n.to_string(),
+                                                                        arguments: String::new(),
+                                                                    },
+                                                                );
                                                                 emitter.tool_call_start(id, n, idx);
                                                             }
                                                             _ => {}
@@ -519,8 +564,9 @@ impl LlmProvider for AnthropicProvider {
                                                         match delta_type {
                                                             "text_delta" => {
                                                                 // 文本增量
-                                                                let text =
-                                                                    delta["text"].as_str().unwrap_or("");
+                                                                let text = delta["text"]
+                                                                    .as_str()
+                                                                    .unwrap_or("");
                                                                 if !text.is_empty() {
                                                                     token_count += 1;
                                                                     // push_str(&str) 追加字符串
@@ -533,31 +579,44 @@ impl LlmProvider for AnthropicProvider {
                                                             }
                                                             "thinking_delta" => {
                                                                 // 思考增量
-                                                                let thinking =
-                                                                    delta["thinking"].as_str().unwrap_or("");
+                                                                let thinking = delta["thinking"]
+                                                                    .as_str()
+                                                                    .unwrap_or("");
                                                                 if !thinking.is_empty() {
                                                                     emitter.thinking_delta(
                                                                         content_index,
                                                                         thinking,
                                                                     );
-                                                                    thinking_response.push_str(thinking);
+                                                                    thinking_response
+                                                                        .push_str(thinking);
                                                                 }
                                                             }
                                                             "signature_delta" => {
                                                                 // 思考签名增量，暂不处理（用于多轮对话连续性）
                                                             }
                                                             "input_json_delta" => {
-                                                                let partial = delta["partial_json"].as_str().unwrap_or("");
-                                                                let ij_idx = json["index"].as_u64().unwrap_or(0) as usize;
+                                                                let partial = delta["partial_json"]
+                                                                    .as_str()
+                                                                    .unwrap_or("");
+                                                                let ij_idx = json["index"]
+                                                                    .as_u64()
+                                                                    .unwrap_or(0)
+                                                                    as usize;
                                                                 if !partial.is_empty() {
-                                                                    if let Some(tc) = tool_calls.get_mut(&ij_idx) {
-                                                                        tc.arguments.push_str(partial);
+                                                                    if let Some(tc) =
+                                                                        tool_calls.get_mut(&ij_idx)
+                                                                    {
+                                                                        tc.arguments
+                                                                            .push_str(partial);
                                                                     }
-                                                                    let fid = tool_calls.get(&ij_idx)
+                                                                    let fid = tool_calls
+                                                                        .get(&ij_idx)
                                                                         .map(|tc| tc.id.clone())
                                                                         .unwrap_or_default();
                                                                     if !fid.is_empty() {
-                                                                        emitter.tool_call_delta(&fid, partial);
+                                                                        emitter.tool_call_delta(
+                                                                            &fid, partial,
+                                                                        );
                                                                     }
                                                                 }
                                                             }
@@ -567,17 +626,22 @@ impl LlmProvider for AnthropicProvider {
                                                     "content_block_stop" => {
                                                         // 块结束：递增索引
                                                         let _block = &json.get("content_block");
-                                                        let index = json["index"].as_u64().unwrap_or(content_index as u64) as usize;
+                                                        let index = json["index"]
+                                                            .as_u64()
+                                                            .unwrap_or(content_index as u64)
+                                                            as usize;
                                                         content_index = index + 1;
                                                     }
                                                     "message_delta" => {
                                                         // 消息级增量（含 stop_reason）
                                                         let delta = &json["delta"];
-                                                        let stop_reason =
-                                                            delta["stop_reason"].as_str().unwrap_or("");
+                                                        let stop_reason = delta["stop_reason"]
+                                                            .as_str()
+                                                            .unwrap_or("");
                                                         let usage = &json["usage"];
-                                                        let output_tokens =
-                                                            usage["output_tokens"].as_u64().unwrap_or(0);
+                                                        let output_tokens = usage["output_tokens"]
+                                                            .as_u64()
+                                                            .unwrap_or(0);
                                                         info!(
                                                             "[anthropic] message_delta: stop_reason={}, output_tokens={}",
                                                             stop_reason, output_tokens
@@ -588,22 +652,38 @@ impl LlmProvider for AnthropicProvider {
                                                             "[anthropic::stream_chat] message_stop: {} chunks, {} tokens, {} chars",
                                                             chunk_count, token_count, full_response.len()
                                                         );
-                                                        let calls = flush_tool_calls(&mut tool_calls, emitter);
+                                                        let calls = flush_tool_calls(
+                                                            &mut tool_calls,
+                                                            emitter,
+                                                        );
                                                         // done 事件由 commands.rs 在整轮 tool 循环结束时统一发射
-                                                        return Ok(StreamOutcome { full_text: full_response, thinking_text: thinking_response, tool_calls: calls, had_stream_error: false });
+                                                        return Ok(StreamOutcome {
+                                                            full_text: full_response,
+                                                            thinking_text: thinking_response,
+                                                            tool_calls: calls,
+                                                            had_stream_error: false,
+                                                        });
                                                     }
                                                     "error" => {
                                                         // 服务端推送的 error 事件
                                                         let error_msg = json["error"]["message"]
                                                             .as_str()
                                                             .unwrap_or("未知错误");
-                                                        error!("[anthropic] error 事件: {}", error_msg);
+                                                        error!(
+                                                            "[anthropic] error 事件: {}",
+                                                            error_msg
+                                                        );
                                                         emitter.error(
                                                             StopReason::Error,
                                                             error_msg,
                                                             &full_response,
                                                         );
-                                                        return Ok(StreamOutcome { full_text: full_response, thinking_text: thinking_response, tool_calls: vec![], had_stream_error: true });
+                                                        return Ok(StreamOutcome {
+                                                            full_text: full_response,
+                                                            thinking_text: thinking_response,
+                                                            tool_calls: vec![],
+                                                            had_stream_error: true,
+                                                        });
                                                     }
                                                     _ => {}
                                                 }
@@ -618,7 +698,7 @@ impl LlmProvider for AnthropicProvider {
                                             }
                                         }
                                     }
-                                    _ => {}  // 其他字段（id: 等）忽略
+                                    _ => {} // 其他字段（id: 等）忽略
                                 }
                             }
                             // 空行表示一个 SSE 事件的结束，重置 event 类型
@@ -634,12 +714,22 @@ impl LlmProvider for AnthropicProvider {
                             &format!("流读取错误: {}", e),
                             &full_response,
                         );
-                        return Ok(StreamOutcome { full_text: full_response, thinking_text: thinking_response, tool_calls: vec![], had_stream_error: true });
+                        return Ok(StreamOutcome {
+                            full_text: full_response,
+                            thinking_text: thinking_response,
+                            tool_calls: vec![],
+                            had_stream_error: true,
+                        });
                     }
                     None => {
                         let calls = flush_tool_calls(&mut tool_calls, emitter);
                         // done 事件由 commands.rs 在整轮 tool 循环结束时统一发射
-                        return Ok(StreamOutcome { full_text: full_response, thinking_text: thinking_response, tool_calls: calls, had_stream_error: false });
+                        return Ok(StreamOutcome {
+                            full_text: full_response,
+                            thinking_text: thinking_response,
+                            tool_calls: calls,
+                            had_stream_error: false,
+                        });
                     }
                 }
             }
@@ -650,14 +740,12 @@ impl LlmProvider for AnthropicProvider {
         &'a self,
         base_url: &'a str,
         api_key: &'a str,
-    ) -> Pin<Box<dyn std::future::Future<Output = Result<Vec<ModelInfo>, String>> + Send + 'a>> {
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<Vec<ModelInfo>, String>> + Send + 'a>>
+    {
         Box::pin(async move {
             // Anthropic 没有公开的模型列表 API，返回已知模型
             // 实际应用中可以从配置文件或硬编码列表获取
-            let url = format!(
-                "{}/v1/models",
-                base_url.trim_end_matches('/')
-            );
+            let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
 
             // 超时设置更短（10s 连接，15s 总超时）—— 列表请求不应该阻塞太久
             let client = Client::builder()
@@ -709,6 +797,8 @@ impl LlmProvider for AnthropicProvider {
                         display_name: id.to_string(),
                         context_window: get_context_window(id),
                         latency_ms: None,
+                        supports_vision: false,
+                        supports_image_generation: false,
                     })
                 })
                 .collect();
@@ -734,10 +824,7 @@ impl LlmProvider for AnthropicProvider {
                 .build()
                 .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
 
-            let url = format!(
-                "{}/v1/messages",
-                base_url.trim_end_matches('/')
-            );
+            let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
 
             // 测速请求：max_tokens=1, 非流式, 内容 "hi"
             // 跑通这条 = 端到端通；耗时即"延迟"
@@ -772,7 +859,6 @@ impl LlmProvider for AnthropicProvider {
     }
 }
 
-
 /// 内置 Anthropic 模型列表
 ///
 /// 当 /v1/models 端点不可用时使用此列表。
@@ -787,6 +873,8 @@ fn builtin_anthropic_models() -> Vec<ModelInfo> {
             display_name: "Claude Sonnet 4.6".to_string(),
             context_window: get_context_window("claude-sonnet-4-6"),
             latency_ms: None,
+            supports_vision: false,
+            supports_image_generation: false,
         },
         ModelInfo {
             id: "claude-opus-4-8".to_string(),
@@ -794,6 +882,8 @@ fn builtin_anthropic_models() -> Vec<ModelInfo> {
             display_name: "Claude Opus 4.8".to_string(),
             context_window: get_context_window("claude-opus-4-8"),
             latency_ms: None,
+            supports_vision: false,
+            supports_image_generation: false,
         },
         ModelInfo {
             id: "claude-haiku-4-5".to_string(),
@@ -801,6 +891,8 @@ fn builtin_anthropic_models() -> Vec<ModelInfo> {
             display_name: "Claude Haiku 4.5".to_string(),
             context_window: get_context_window("claude-haiku-4-5"),
             latency_ms: None,
+            supports_vision: false,
+            supports_image_generation: false,
         },
         ModelInfo {
             id: "claude-fable-5".to_string(),
@@ -808,14 +900,16 @@ fn builtin_anthropic_models() -> Vec<ModelInfo> {
             display_name: "Claude Fable 5".to_string(),
             context_window: get_context_window("claude-fable-5"),
             latency_ms: None,
+            supports_vision: false,
+            supports_image_generation: false,
         },
     ]
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::ImageAttachment;
 
     #[test]
     fn test_parse_sse_line_event() {
@@ -840,6 +934,40 @@ mod tests {
 
     #[test]
     fn test_parse_sse_line_comment() {
-        assert_eq!(AnthropicProvider::parse_sse_line(": this is a comment"), None);
+        assert_eq!(
+            AnthropicProvider::parse_sse_line(": this is a comment"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_convert_user_images_to_anthropic_content_blocks() {
+        let message = Message {
+            id: "u1".to_string(),
+            role: MessageRole::User,
+            content: "描述图片".to_string(),
+            images: vec![ImageAttachment {
+                id: "img1".to_string(),
+                name: "sample.png".to_string(),
+                media_type: "image/png".to_string(),
+                data_url: "data:image/png;base64,aGVsbG8=".to_string(),
+            }],
+            blocks: None,
+            model_id: None,
+            created_at: 0,
+            tool_calls: None,
+            tool_call_id: None,
+            tool_name: None,
+            is_error: None,
+            parent_message_id: None,
+        };
+
+        let output = AnthropicProvider::convert_messages(&[message]);
+        let content = output[0]["content"].as_array().unwrap();
+        assert_eq!(content[0]["type"], "image");
+        assert_eq!(content[0]["source"]["type"], "base64");
+        assert_eq!(content[0]["source"]["media_type"], "image/png");
+        assert_eq!(content[0]["source"]["data"], "aGVsbG8=");
+        assert_eq!(content[1]["type"], "text");
     }
 }

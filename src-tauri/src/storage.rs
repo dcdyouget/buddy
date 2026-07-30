@@ -42,8 +42,7 @@ pub fn get_config(app: &tauri::AppHandle) -> Result<AppConfig, String> {
         return Ok(AppConfig::default());
     }
 
-    let content =
-        fs::read_to_string(&path).map_err(|e| format!("读取配置文件失败: {}", e))?;
+    let content = fs::read_to_string(&path).map_err(|e| format!("读取配置文件失败: {}", e))?;
     serde_json::from_str(&content).or_else(|e| {
         log::warn!("配置文件损坏，使用默认配置: {}", e);
         Ok(AppConfig::default())
@@ -54,8 +53,8 @@ pub fn get_config(app: &tauri::AppHandle) -> Result<AppConfig, String> {
 pub fn save_config(app: &tauri::AppHandle, config: &AppConfig) -> Result<(), String> {
     let dir = ensure_data_dir(app)?;
     let path = dir.join("config.json");
-    let content = serde_json::to_string_pretty(config)
-        .map_err(|e| format!("序列化配置失败: {}", e))?;
+    let content =
+        serde_json::to_string_pretty(config).map_err(|e| format!("序列化配置失败: {}", e))?;
     fs::write(&path, content).map_err(|e| format!("写入配置文件失败: {}", e))?;
     Ok(())
 }
@@ -86,8 +85,8 @@ fn read_manifest(dir: &PathBuf) -> Manifest {
 /// 写入 manifest.json
 fn write_manifest(dir: &PathBuf, manifest: &Manifest) -> Result<(), String> {
     let path = dir.join("manifest.json");
-    let content = serde_json::to_string_pretty(manifest)
-        .map_err(|e| format!("序列化索引失败: {}", e))?;
+    let content =
+        serde_json::to_string_pretty(manifest).map_err(|e| format!("序列化索引失败: {}", e))?;
     fs::write(&path, content).map_err(|e| format!("写入索引文件失败: {}", e))?;
     Ok(())
 }
@@ -147,7 +146,10 @@ pub fn append_messages(app: &tauri::AppHandle, messages: &[Message]) -> Result<(
                 Some(last) if last.count < CHUNK_SIZE => last.file.clone(),
                 _ => {
                     let file = format!("chunk_{:03}.json", manifest.chunks.len() + 1);
-                    manifest.chunks.push(ChunkMeta { file: file.clone(), count: 0 });
+                    manifest.chunks.push(ChunkMeta {
+                        file: file.clone(),
+                        count: 0,
+                    });
                     file
                 }
             };
@@ -174,17 +176,27 @@ pub fn append_messages(app: &tauri::AppHandle, messages: &[Message]) -> Result<(
 fn read_chunk(dir: &PathBuf, file: &str) -> Result<ChatChunk, String> {
     let path = dir.join(file);
     if !path.exists() {
-        return Ok(ChatChunk { id: file.trim_end_matches(".json").to_string(), messages: vec![] });
+        return Ok(ChatChunk {
+            id: file.trim_end_matches(".json").to_string(),
+            messages: vec![],
+        });
     }
     let content = fs::read_to_string(&path).map_err(|e| format!("读取消息文件失败: {}", e))?;
     Ok(serde_json::from_str(&content).unwrap_or_else(|e| {
-        warn!("[storage::append_messages] 分块 {} JSON 解析失败，将创建空分块: {}", file, e);
-        ChatChunk { id: file.trim_end_matches(".json").to_string(), messages: vec![] }
+        warn!(
+            "[storage::append_messages] 分块 {} JSON 解析失败，将创建空分块: {}",
+            file, e
+        );
+        ChatChunk {
+            id: file.trim_end_matches(".json").to_string(),
+            messages: vec![],
+        }
     }))
 }
 
 fn write_chunk(dir: &PathBuf, file: &str, chunk: &ChatChunk) -> Result<(), String> {
-    let content = serde_json::to_string_pretty(chunk).map_err(|e| format!("序列化消息失败: {}", e))?;
+    let content =
+        serde_json::to_string_pretty(chunk).map_err(|e| format!("序列化消息失败: {}", e))?;
     fs::write(dir.join(file), content).map_err(|e| format!("写入消息文件失败: {}", e))
 }
 

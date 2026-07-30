@@ -46,6 +46,10 @@ export interface ModelInfo {
   display_name: string;
   context_window: number;
   latency_ms: number | null;
+  /** 用户确认该模型支持图片输入 */
+  supports_vision: boolean;
+  /** 用户确认该模型支持 OpenAI 图片生成接口 */
+  supports_image_generation: boolean;
 }
 
 /** 消息角色：用户 / 助手 / 工具 */
@@ -75,6 +79,8 @@ export interface ToolCall {
   result?: string;
   /** 是否为错误结果（与后端 is_error 对齐） */
   is_error_result?: boolean;
+  /** 工具产生、仅用于界面展示的图片，不会回传给聊天模型 */
+  images?: ImageAttachment[];
   /**
    * 内联位置：tool_call 应当插入到该 block 索引之后。
    * - `-1` 表示第一个 block 之前
@@ -127,6 +133,8 @@ export interface Message {
   id: string;
   role: MessageRole;
   content: string;
+  /** 用户消息用于模型输入，工具消息用于展示生成结果 */
+  images?: ImageAttachment[];
   blocks?: ContentBlock[];
   model_id: string | null;
   created_at: number;
@@ -146,6 +154,14 @@ export interface Message {
   parent_message_id?: string;
 }
 
+/** 聊天中的图片附件，使用 Data URL 便于本地持久化和协议转换 */
+export interface ImageAttachment {
+  id: string;
+  name: string;
+  media_type: string;
+  data_url: string;
+}
+
 /** 流式事件类型（对应 Rust StreamEvent） */
 export type StreamEvent =
   | { event: 'start' }
@@ -162,7 +178,7 @@ export type StreamEvent =
   | { event: 'tool_call_delta'; id: string; arguments_delta: string }
   | { event: 'tool_call_end'; id: string; name: string; arguments: string }
   | { event: 'tool_executing'; id: string; name: string }
-  | { event: 'tool_result'; id: string; name: string; content: string; is_error: boolean }
+  | { event: 'tool_result'; id: string; name: string; content: string; images: ImageAttachment[]; is_error: boolean }
   | { event: 'tool_approval_required'; id: string; name: string; arguments: string; reason: string }
   | { event: 'tool_question_required'; id: string; name: string; question: string; options: QuestionOption[]; multi_select: boolean; header: string }
   | { event: 'turn_end'; tool_calls_pending: number };
@@ -247,7 +263,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     id: 'minimax',
     name: 'MiniMax',
-    base_url: 'https://api.minimax.chat/v1',
+    base_url: 'https://api.minimaxi.com/v1',
     icon_letter: 'M',
     provider_type: 'openai_compatible',
     compat: {},
@@ -273,6 +289,22 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     name: 'Zhipu / 智谱',
     base_url: 'https://open.bigmodel.cn/api/paas/v4',
     icon_letter: 'Z',
+    provider_type: 'openai_compatible',
+    compat: {},
+  },
+  {
+    id: 'qianfan',
+    name: '百度千帆',
+    base_url: 'https://qianfan.baidubce.com/v2',
+    icon_letter: 'B',
+    provider_type: 'openai_compatible',
+    compat: {},
+  },
+  {
+    id: 'doubao',
+    name: '豆包 / 火山方舟',
+    base_url: 'https://ark.cn-beijing.volces.com/api/v3',
+    icon_letter: 'D',
     provider_type: 'openai_compatible',
     compat: {},
   },

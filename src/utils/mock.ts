@@ -47,6 +47,8 @@ export const MOCK_CONFIG: AppConfig = {
       display_name: 'DeepSeek-Chat',
       context_window: 128000,
       latency_ms: 320,
+      supports_vision: false,
+      supports_image_generation: false,
     },
     {
       id: 'deepseek-reasoner',
@@ -54,6 +56,8 @@ export const MOCK_CONFIG: AppConfig = {
       display_name: 'DeepSeek-Reasoner',
       context_window: 64000,
       latency_ms: 580,
+      supports_vision: false,
+      supports_image_generation: false,
     },
   ],
 };

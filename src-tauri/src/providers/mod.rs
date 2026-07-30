@@ -19,19 +19,18 @@
 //   test_latency() —— 测试端点延迟
 // ============================================================================
 
-pub mod anthropic;          // 声明并公开 anthropic 子模块（位于 ./anthropic.rs）
-pub mod openai_compatible;  // 声明并公开 openai_compatible 子模块（位于 ./openai_compatible.rs）
+pub mod anthropic; // 声明并公开 anthropic 子模块（位于 ./anthropic.rs）
+pub mod openai_compatible; // 声明并公开 openai_compatible 子模块（位于 ./openai_compatible.rs）
 
 // ============================================================================
 // use 语句 —— 导入外部项
 // ============================================================================
-use crate::models::{CompatConfig, Message, ModelInfo};  // 引用本 crate 的 models 模块
-use crate::streaming::{StreamEventEmitter, StreamOutcome};  // 引用本 crate 的 streaming 模块
-use crate::tools::ToolDefinition;                      // 引用本 crate 的 tools 模块
-use chrono::{DateTime, FixedOffset, Local};            // 当前本地时间与 UTC 偏移
-use std::future::Future;                               // 标准库的 Future trait
-use tokio::sync::watch;                                // tokio 异步运行时的 watch channel
-
+use crate::models::{CompatConfig, Message, ModelInfo}; // 引用本 crate 的 models 模块
+use crate::streaming::{StreamEventEmitter, StreamOutcome}; // 引用本 crate 的 streaming 模块
+use crate::tools::ToolDefinition; // 引用本 crate 的 tools 模块
+use chrono::{DateTime, FixedOffset, Local}; // 当前本地时间与 UTC 偏移
+use std::future::Future; // 标准库的 Future trait
+use tokio::sync::watch; // tokio 异步运行时的 watch channel
 
 /// 从 API 错误响应 JSON 中提取人类可读的错误消息
 ///
@@ -87,7 +86,6 @@ pub fn extract_error_message(body_text: &str) -> String {
     }
 }
 
-
 /// API 错误类型
 ///
 /// Rust enum 携带数据（variant）：
@@ -129,7 +127,6 @@ impl std::fmt::Display for ApiError {
     }
 }
 
-
 /// Provider 类型枚举（业务层用哪个变体去 dispatch 到对应实现）
 ///
 /// 没有 #[serde] 属性，因此不会序列化；纯运行时分类用
@@ -159,7 +156,6 @@ impl ProviderType {
         }
     }
 }
-
 
 // ============================================================================
 // LlmProvider trait —— 所有模型提供商的统一接口
@@ -215,7 +211,6 @@ pub trait LlmProvider: Send + Sync {
         model_id: &'a str,
     ) -> std::pin::Pin<Box<dyn Future<Output = Result<u32, String>> + Send + 'a>>;
 }
-
 
 /// 根据 ProviderType 创建对应的 Provider 实例
 ///

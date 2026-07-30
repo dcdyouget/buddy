@@ -1,6 +1,6 @@
 import { ModelRow } from '@/components/settings/ModelRow';
 import { Plus } from 'lucide-react';
-import type { ModelInfo } from '@/types';
+import type { ModelInfo, ProviderConfig } from '@/types';
 
 interface ModelListProps {
   models: ModelInfo[];
@@ -10,6 +10,7 @@ interface ModelListProps {
   enabledModelIds: string[];
   onToggle: (modelId: string) => void;
   onUpdateModel?: (modelId: string, updates: Partial<ModelInfo>) => void;
+  providers: ProviderConfig[];
 }
 
 /** 模型范围设置：展示已添加的模型列表 + 添加新模型入口 */
@@ -21,6 +22,7 @@ export function ModelList({
   enabledModelIds,
   onToggle,
   onUpdateModel,
+  providers,
 }: ModelListProps) {
   return (
     <section className="settings-section">
@@ -38,6 +40,11 @@ export function ModelList({
       ) : (
         models.map((model) => {
           const isDefault = model.id === selectedModelId;
+          const provider = providers.find(
+            (candidate) => candidate.id === model.provider_id,
+          );
+          const canGenerateImages =
+            provider?.provider_type === 'openai_compatible';
           return (
             <ModelRow
               key={model.id}
@@ -51,6 +58,17 @@ export function ModelList({
                   ? (ctx: number) => onUpdateModel(model.id, { context_window: ctx })
                   : undefined
               }
+              onUpdateVision={
+                (supportsVision: boolean) =>
+                  onUpdateModel?.(model.id, { supports_vision: supportsVision })
+              }
+              onUpdateImageGeneration={
+                (supportsImageGeneration: boolean) =>
+                  onUpdateModel?.(model.id, {
+                    supports_image_generation: supportsImageGeneration,
+                  })
+              }
+              canGenerateImages={canGenerateImages}
             />
           );
         })
