@@ -8,6 +8,22 @@ import { StreamingMarkdown } from './StreamingMarkdown';
 afterEach(cleanup);
 
 describe('StreamingMarkdown', () => {
+  it('renders a source title as a link without displaying its raw URL', () => {
+    const { container } = render(
+      <StreamingMarkdown
+        content={
+          '## 数据来源\n\n- [Tauri 官方文档](https://v2.tauri.app/)'
+        }
+        isStreaming={false}
+      />,
+    );
+
+    const link = container.querySelector<HTMLAnchorElement>('.markdown-link');
+    expect(link?.textContent).toBe('Tauri 官方文档');
+    expect(link?.href).toBe('https://v2.tauri.app/');
+    expect(container.textContent).not.toContain('https://v2.tauri.app/');
+  });
+
   it('renders adjacent Chinese strong text without showing delimiters', () => {
     const source =
       '这些都是**信息检索（IR）**和**RAG（检索增强生成）**领域的核心概念';

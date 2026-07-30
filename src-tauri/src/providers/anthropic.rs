@@ -217,11 +217,11 @@ impl LlmProvider for AnthropicProvider {
             // 与 Python 中 f-string 不同，它是静态字面量 + 占位符的混合体
             // P5: request body with tools (Anthropic format)
             // 注意: Anthropic 用顶层 `system` 字段(不是 messages 里的 system 消息)
-            // 注入 BUDDY_SYSTEM_PROMPT 引导模型在合适场景使用 ask_user tool
+            // 注入 Buddy 系统提示词，并补充本次请求的本地时间
             let mut body = serde_json::json!({
                 "model": model,
                 "max_tokens": 4096,
-                "system": super::BUDDY_SYSTEM_PROMPT,
+                "system": super::current_system_prompt(),
                 "messages": anthropic_messages,
                 "stream": true,
             });

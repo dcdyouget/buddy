@@ -70,22 +70,25 @@ function AssistantContent({
     );
   }
 
-  // 把 tool_calls 按 insertAfterBlockIndex 分桶,
-  // 渲染时在 block[i] 之后插入属于 i 的 tool_call,实现"在模型调用 tool 的位置显示"
+  // 把 tool_calls 按 insertAfterBlockIndex 分桶：
+  // - -1：第一个 block 之前
+  // - 0..n-1：对应 block 之后
+  // - n：全部 block 之后
   // - 有 insertAfterBlockIndex 的: 按索引插入
   // - 没有的(旧消息/兜底): 全部放在最后一个 block 之后
   const toolCallsByIndex = new Map<number, ToolCall[]>();
   const hasAnyInsertIndex = toolCallsToRender.some(
     (tc) => typeof tc.insertAfterBlockIndex === 'number',
   );
-  const fallbackIndex = blocks.length > 0 ? blocks.length - 1 : 0;
+  const fallbackIndex = blocks.length > 0 ? blocks.length - 1 : -1;
   for (const tc of toolCallsToRender) {
-    const idx =
+    const requestedIndex =
       typeof tc.insertAfterBlockIndex === 'number'
         ? tc.insertAfterBlockIndex
         : hasAnyInsertIndex
         ? blocks.length // 跳过 block,放到末尾
         : fallbackIndex;
+    const idx = Math.max(-1, Math.min(requestedIndex, blocks.length));
     if (!toolCallsByIndex.has(idx)) toolCallsByIndex.set(idx, []);
     toolCallsByIndex.get(idx)!.push(tc);
   }
@@ -119,6 +122,10 @@ function AssistantContent({
   // ── 主体:遍历 blocks,每个 block 之后插入属于该索引的 tool_calls ──
   return (
     <div className="assistant-content-flow">
+      {/* 工具在任何内容出现前被调用时，固定渲染在第一个 block 前。 */}
+      {(toolCallsByIndex.get(-1) || []).map((tc) => (
+        <ToolSection key={tc.id} toolCall={tc} isStreaming={isStreaming} />
+      ))}
       {blocks.map((block, i) => {
         const isLast = i === blocks.length - 1;
         const tcs = toolCallsByIndex.get(i) || [];
@@ -135,16 +142,7 @@ function AssistantContent({
           </Fragment>
         );
       })}
-      {/* 没有 block 但有 tool_call:把兜底 tool_call 放在最前 */}
-      {blocks.length === 0 &&
-        toolCallsToRender.map((tc) => (
-          <ToolSection
-            key={tc.id}
-            toolCall={tc}
-            isStreaming={isStreaming}
-          />
-        ))}
-      {/* block 之后兜底放(insertAfterBlockIndex >= blocks.length 的) */}
+      {/* 所有 block 之后的兜底工具调用。 */}
       {(toolCallsByIndex.get(blocks.length) || []).map((tc) => (
         <ToolSection key={tc.id} toolCall={tc} isStreaming={isStreaming} />
       ))}

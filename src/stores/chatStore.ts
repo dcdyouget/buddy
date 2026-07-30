@@ -936,11 +936,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   /**
    * 计算 tool_call 应当插入到哪个 block 之后。
    * 跳过尾部由 text_end 推入的空文本块(它们是轮次分隔符,不算内容 block)。
-   * 如果没有非空 block(还没有任何文本),返回 0 而不是 -1:
-   * - 返回 -1 会让 MessageBubble 把 tool 分桶到 Map[-1],渲染循环只读 0..blocks.length,
-   *   -1 桶永远不读,tool_call 不可见。
-   * - 返回 0 让 MessageBubble 把它放在第一个 block 之后;若 blocks 为空,
-   *   MessageBubble 还有「blocks.length === 0 全渲染」的兜底分支。
+   * 如果还没有任何内容，返回 -1，明确表示工具应放在第一个 block 之前。
+   * 后续即使思考块到达，工具仍保持在调用发生时的正确位置。
    */
   _computeInsertAfterBlockIndex: (): number => {
     const blocks = get().streamingBlocks;
@@ -949,7 +946,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       if (b.type === 'text' && b.content !== '') return i;
       if (b.type === 'thinking' && b.content !== '') return i;
     }
-    return 0;
+    return -1;
   },
 
   handleToolCallStart: (id: string, name: string, _contentIndex: number) => {

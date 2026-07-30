@@ -284,6 +284,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "core-graphics 0.23.2",
+ "dom_query",
  "env_logger",
  "futures-util",
  "image",

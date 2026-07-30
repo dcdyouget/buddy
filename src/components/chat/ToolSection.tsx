@@ -27,6 +27,7 @@ import type { ToolCall, ToolCallStatus } from '@/types';
 import { useChatStore } from '@/stores/chatStore';
 import { CodeBlock } from './CodeBlock';
 import { AskUserCard } from './AskUserCard';
+import { WebSearchSection } from './WebSearchSection';
 
 interface ToolSectionProps {
   toolCall: ToolCall;
@@ -223,6 +224,10 @@ export const ToolSection = memo(
     const isAskUser = toolCall.name === 'ask_user';
     const StatusIcon = statusMeta.Icon;
     const ToolIcon = toolMeta.Icon;
+
+    if (toolCall.name === 'websearch') {
+      return <WebSearchSection toolCall={toolCall} />;
+    }
 
     return (
       <div

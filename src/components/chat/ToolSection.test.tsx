@@ -66,6 +66,111 @@ describe('ToolSection', () => {
     expect(screen.getByText('# example')).toBeTruthy();
   });
 
+  it('shows websearch as a compact searching block that can be expanded', () => {
+    const toolCall: ToolCall = {
+      id: 'call-websearch',
+      name: 'websearch',
+      arguments: JSON.stringify({ query: 'Tauri 2 文档' }),
+      status: 'executing',
+    };
+
+    render(<ToolSection toolCall={toolCall} isStreaming />);
+
+    expect(screen.getByRole('status')).toBeTruthy();
+    const trigger = screen.getByRole('button', {
+      name: '网络搜索：Tauri 2 文档',
+    });
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.getByText('正在搜索网络')).toBeTruthy();
+    expect(screen.getByText('Tauri 2 文档')).toBeTruthy();
+    expect(screen.getByLabelText('搜索中')).toBeTruthy();
+    expect(screen.queryByText('调用参数')).toBeNull();
+
+    fireEvent.click(trigger);
+
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText('搜索内容')).toBeTruthy();
+    expect(screen.getByText('搜索引擎')).toBeTruthy();
+    expect(screen.getByText('DuckDuckGo')).toBeTruthy();
+    expect(screen.getByText('正在等待搜索结果…')).toBeTruthy();
+  });
+
+  it('shows structured websearch results after expansion', () => {
+    const toolCall: ToolCall = {
+      id: 'call-websearch-results',
+      name: 'websearch',
+      arguments: JSON.stringify({ query: 'Tauri 2 文档' }),
+      status: 'done',
+      result: JSON.stringify({
+        status: 'partial',
+        query: 'Tauri 2 官方文档',
+        provider: 'duckduckgo',
+        note: '已获得 2 条搜索结果。',
+        results: [
+          {
+            rank: 1,
+            title: 'Tauri 2 Documentation',
+            url: 'https://v2.tauri.app/start/',
+            snippet: 'Tauri 2 的官方入门文档。',
+            content: '正文内容',
+          },
+          {
+            rank: 2,
+            title: 'Tauri Releases',
+            url: 'https://github.com/tauri-apps/tauri/releases',
+            snippet: 'Tauri 的版本发布信息。',
+          },
+        ],
+      }),
+      is_error_result: false,
+    };
+
+    render(<ToolSection toolCall={toolCall} isStreaming={false} />);
+
+    const trigger = screen.getByRole('button', {
+      name: '网络搜索：Tauri 2 官方文档',
+    });
+    fireEvent.click(trigger);
+
+    expect(screen.getByText('搜索结果（2）')).toBeTruthy();
+    expect(screen.getByText('Tauri 2 Documentation')).toBeTruthy();
+    expect(screen.getByText('Tauri Releases')).toBeTruthy();
+    expect(screen.getByText('Tauri 2 的官方入门文档。')).toBeTruthy();
+    expect(screen.getByText('已读取网页正文')).toBeTruthy();
+    expect(screen.getByText('使用搜索摘要')).toBeTruthy();
+    const sourceLink = screen
+      .getByText('Tauri 2 Documentation')
+      .closest('a');
+    expect(sourceLink?.getAttribute('href')).toBe(
+      'https://v2.tauri.app/start/',
+    );
+    expect(sourceLink?.textContent).not.toContain(
+      'https://v2.tauri.app/start/',
+    );
+    expect(
+      screen.queryByText('v2.tauri.app/start', { exact: false }),
+    ).toBeNull();
+  });
+
+  it('shows a non-blocking message when websearch is unavailable', () => {
+    const toolCall: ToolCall = {
+      id: 'call-websearch-unavailable',
+      name: 'websearch',
+      arguments: JSON.stringify({ query: '最新资料' }),
+      status: 'done',
+      result: JSON.stringify({
+        status: 'unavailable',
+        results: [],
+      }),
+      is_error_result: false,
+    };
+
+    render(<ToolSection toolCall={toolCall} isStreaming={false} />);
+
+    expect(screen.getByText('网络搜索不可用，已继续回答')).toBeTruthy();
+    expect(screen.queryByLabelText('搜索中')).toBeNull();
+  });
+
   it('answers ask_user directly inside the tool card', async () => {
     const toolCall: ToolCall = {
       id: 'call-question',
