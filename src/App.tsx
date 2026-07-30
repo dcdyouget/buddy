@@ -16,6 +16,7 @@ import { useConfigStore } from '@/stores/configStore';
 import { useUIStore } from '@/stores/uiStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useStreaming } from '@/hooks/useStreaming';
+import { WINDOW_WILL_HIDE_EVENT } from '@/hooks/useSmoothTextRenderer';
 import { EmptyPage } from '@/pages/EmptyPage';
 import { NoApiKeyPage } from '@/pages/NoApiKeyPage';
 import { ChatPage } from '@/pages/ChatPage';
@@ -113,6 +114,9 @@ function App() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        // 隐藏后 WebView 的 requestAnimationFrame 会暂停；提前通知平滑渲染器
+        // 切到后台直写模式，保证模型输出和收尾不会等到窗口再次显示。
+        window.dispatchEvent(new Event(WINDOW_WILL_HIDE_EVENT));
         // 动态导入 Tauri API，浏览器环境下会 catch 忽略
         import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
           getCurrentWindow().hide();
