@@ -91,7 +91,7 @@ describe('ToolSection', () => {
     expect(trigger.getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByText('搜索内容')).toBeTruthy();
     expect(screen.getByText('搜索引擎')).toBeTruthy();
-    expect(screen.getByText('DuckDuckGo')).toBeTruthy();
+    expect(screen.getByText('Bing 中国 + DuckDuckGo')).toBeTruthy();
     expect(screen.getByText('正在等待搜索结果…')).toBeTruthy();
   });
 
@@ -104,11 +104,16 @@ describe('ToolSection', () => {
       result: JSON.stringify({
         status: 'partial',
         query: 'Tauri 2 官方文档',
-        provider: 'duckduckgo',
+        provider: 'cn_bing+duckduckgo',
+        providers: [
+          { name: 'cn_bing', status: 'ok', result_count: 1 },
+          { name: 'duckduckgo', status: 'ok', result_count: 1 },
+        ],
         note: '已获得 2 条搜索结果。',
         results: [
           {
             rank: 1,
+            source: 'cn_bing',
             title: 'Tauri 2 Documentation',
             url: 'https://v2.tauri.app/start/',
             snippet: 'Tauri 2 的官方入门文档。',
@@ -116,6 +121,7 @@ describe('ToolSection', () => {
           },
           {
             rank: 2,
+            source: 'duckduckgo',
             title: 'Tauri Releases',
             url: 'https://github.com/tauri-apps/tauri/releases',
             snippet: 'Tauri 的版本发布信息。',
@@ -133,6 +139,9 @@ describe('ToolSection', () => {
     fireEvent.click(trigger);
 
     expect(screen.getByText('搜索结果（2）')).toBeTruthy();
+    expect(screen.getByText('Bing 中国 + DuckDuckGo')).toBeTruthy();
+    expect(screen.getByText('Bing 中国')).toBeTruthy();
+    expect(screen.getByText('DuckDuckGo')).toBeTruthy();
     expect(screen.getByText('Tauri 2 Documentation')).toBeTruthy();
     expect(screen.getByText('Tauri Releases')).toBeTruthy();
     expect(screen.getByText('Tauri 2 的官方入门文档。')).toBeTruthy();

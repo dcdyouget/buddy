@@ -17,14 +17,14 @@
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 
+use crate::models::ImageAttachment;
+
 /// 内容块类型：文本或思考
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ContentBlock {
     /// 文本内容块
-    Text {
-        content: String,
-    },
+    Text { content: String },
     /// 思考内容块（reasoning/thinking）
     Thinking {
         content: String,
@@ -170,9 +170,7 @@ pub enum StreamEvent {
         content: String,
     },
     /// 思考块开始
-    ThinkingStart {
-        content_index: usize,
-    },
+    ThinkingStart { content_index: usize },
     /// 思考增量
     ThinkingDelta {
         content_index: usize,
@@ -199,7 +197,6 @@ pub enum StreamEvent {
     // ── Tool 调用相关事件（tool_calls 协议） ──
     // 一个 assistant 响应可以包含 0~N 个 tool_call,每个 tool_call 都有
     // start / delta / end 三个事件;同一轮(turn)内可能多 tool_call 并行拼接
-
     /// Tool 调用开始
     /// 前端收到后应创建占位 UI,显示 "正在调用 tool_name"
     ToolCallStart {
@@ -226,10 +223,7 @@ pub enum StreamEvent {
         arguments: String,
     },
     /// 后端开始执行 tool(已通过审批,或 read-only 不需审批)
-    ToolExecuting {
-        id: String,
-        name: String,
-    },
+    ToolExecuting { id: String, name: String },
     /// Tool 执行结果
     /// OpenAI 协议以 role:"tool" 消息塞回 messages;这里的事件用于前端实时显示
     ToolResult {
@@ -237,6 +231,8 @@ pub enum StreamEvent {
         name: String,
         /// 结果内容
         content: String,
+        /// 工具产生的展示图片，不会被拼入 tool result 文本。
+        images: Vec<ImageAttachment>,
         /// true=执行出错(让 model 看到错误并重试)
         is_error: bool,
     },
@@ -268,9 +264,7 @@ pub enum StreamEvent {
     },
     /// 一轮 assistant 完成,统计待处理 tool_call 数
     /// tool_calls_pending == 0 时整次 send_message 也将结束
-    TurnEnd {
-        tool_calls_pending: usize,
-    },
+    TurnEnd { tool_calls_pending: usize },
 }
 
 /// 流式事件发射器
@@ -385,11 +379,19 @@ impl StreamEventEmitter {
         });
     }
 
-    pub fn tool_result(&self, id: &str, name: &str, content: &str, is_error: bool) {
+    pub fn tool_result(
+        &self,
+        id: &str,
+        name: &str,
+        content: &str,
+        images: Vec<ImageAttachment>,
+        is_error: bool,
+    ) {
         self.emit(&StreamEvent::ToolResult {
             id: id.to_string(),
             name: name.to_string(),
             content: content.to_string(),
+            images,
             is_error,
         });
     }

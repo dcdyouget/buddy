@@ -30,10 +30,7 @@ fn save_window_position(window: &tauri::Window, reason: &str) {
 }
 
 /// 监听窗口移动与失焦，及时记住用户拖拽后的最后位置。
-pub fn setup_window_event_handler(
-    window: &tauri::Window,
-    event: &tauri::WindowEvent,
-) {
+pub fn setup_window_event_handler(window: &tauri::Window, event: &tauri::WindowEvent) {
     match event {
         tauri::WindowEvent::Moved(_) => save_window_position(window, "Moved"),
         tauri::WindowEvent::Focused(false) => save_window_position(window, "Focused(false)"),

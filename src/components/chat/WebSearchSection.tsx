@@ -15,6 +15,7 @@ interface WebSearchSectionProps {
 
 interface WebSearchResultItem {
   rank?: number;
+  source?: string;
   title?: string;
   url?: string;
   snippet?: string;
@@ -22,10 +23,18 @@ interface WebSearchResultItem {
   fetch_error?: string;
 }
 
+interface WebSearchProviderStatus {
+  name?: string;
+  status?: 'ok' | 'empty' | 'error';
+  result_count?: number;
+  error?: string;
+}
+
 interface WebSearchResultPayload {
   status?: 'ok' | 'partial' | 'unavailable';
   query?: string;
   provider?: string;
+  providers?: WebSearchProviderStatus[];
   note?: string;
   results?: WebSearchResultItem[];
 }
@@ -51,10 +60,33 @@ function parseResult(result: string | undefined): WebSearchResultPayload {
   }
 }
 
-function providerLabel(provider: string | undefined): string {
-  return provider?.toLowerCase() === 'duckduckgo'
-    ? 'DuckDuckGo'
-    : provider || 'DuckDuckGo';
+function providerName(provider: string): string {
+  switch (provider.toLowerCase()) {
+    case 'cn_bing':
+      return 'Bing 中国';
+    case 'duckduckgo':
+      return 'DuckDuckGo';
+    default:
+      return provider;
+  }
+}
+
+function providerLabel(result: WebSearchResultPayload): string {
+  if (Array.isArray(result.providers) && result.providers.length > 0) {
+    return result.providers
+      .map((provider) => provider.name?.trim())
+      .filter((name): name is string => Boolean(name))
+      .map(providerName)
+      .join(' + ');
+  }
+  if (result.provider) {
+    return result.provider
+      .split('+')
+      .filter(Boolean)
+      .map(providerName)
+      .join(' + ');
+  }
+  return 'Bing 中国 + DuckDuckGo';
 }
 
 async function openSource(url: string) {
@@ -140,7 +172,7 @@ export const WebSearchSection = memo(function WebSearchSection({
             </div>
             <div className="websearch-section-meta-row">
               <span>搜索引擎</span>
-              <strong>{providerLabel(result.provider)}</strong>
+              <strong>{providerLabel(result)}</strong>
             </div>
           </div>
 
@@ -168,6 +200,11 @@ export const WebSearchSection = memo(function WebSearchSection({
                     >
                       <div className="websearch-result-heading">
                         <span className="websearch-result-rank">{rank}</span>
+                        {item.source && (
+                          <span className="websearch-result-source">
+                            {providerName(item.source)}
+                          </span>
+                        )}
                         {item.url ? (
                           <a
                             className="websearch-result-link"

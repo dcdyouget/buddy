@@ -13,9 +13,8 @@
 // ============================================================================
 
 // `use` 语句 = Java 的 import
-use serde::{Deserialize, Serialize};   // serde 是 Rust 最主流的序列化框架
-use crate::streaming::ContentBlock;   // 引入兄弟模块（crate:: = 当前 crate 根）
-
+use crate::streaming::ContentBlock;
+use serde::{Deserialize, Serialize}; // serde 是 Rust 最主流的序列化框架 // 引入兄弟模块（crate:: = 当前 crate 根）
 
 // ============================================================================
 // ModelInfo —— 模型元信息
@@ -38,16 +37,21 @@ use crate::streaming::ContentBlock;   // 引入兄弟模块（crate:: = 当前 c
 // public class ModelInfo { ... }
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ModelInfo {
-    pub id: String,                  // 模型 ID，例如 "claude-sonnet-4-6"
-    pub provider_id: String,         // 所属 provider 的 ID
-    pub display_name: String,        // 在 UI 上展示给用户看的人类可读名
-    pub context_window: u32,         // 上下文窗口大小（token 数）；u32 = 32 位无符号整数
-    pub latency_ms: Option<u32>,     // 测得的延迟（毫秒）；Option<T> 表示"可能没有值"
-                                    //   - Some(120) = 有值 120
-                                    //   - None      = 缺测
-                                    //   这是 Rust 代替 null 的方式，类型系统强制你处理空值
+    pub id: String,              // 模型 ID，例如 "claude-sonnet-4-6"
+    pub provider_id: String,     // 所属 provider 的 ID
+    pub display_name: String,    // 在 UI 上展示给用户看的人类可读名
+    pub context_window: u32,     // 上下文窗口大小（token 数）；u32 = 32 位无符号整数
+    pub latency_ms: Option<u32>, // 测得的延迟（毫秒）；Option<T> 表示"可能没有值"
+    //   - Some(120) = 有值 120
+    //   - None      = 缺测
+    //   这是 Rust 代替 null 的方式，类型系统强制你处理空值
+    /// 用户确认该模型支持图片输入。老配置缺少此字段时按 false 处理。
+    #[serde(default)]
+    pub supports_vision: bool,
+    /// 用户确认该模型可调用图片生成工具。老配置缺少此字段时按 false 处理。
+    #[serde(default)]
+    pub supports_image_generation: bool,
 }
-
 
 /// 一次工具调用的标识
 ///
@@ -63,12 +67,26 @@ pub struct ToolCall {
     pub arguments: String,
 }
 
+/// 消息携带的图片附件：用户消息用于模型输入，tool 消息用于展示生成结果。
+///
+/// `data_url` 统一保存为 `data:<media_type>;base64,<data>`，Provider 适配层
+/// 再转换成 OpenAI 或 Anthropic 各自的图片内容块。
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ImageAttachment {
+    pub id: String,
+    pub name: String,
+    pub media_type: String,
+    pub data_url: String,
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Message {
     pub id: String,
     pub role: MessageRole,
     pub content: String,
+    /// 用户消息用于模型输入，tool 消息用于展示生成结果。老消息缺少时保持为空。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImageAttachment>,
     /// 用 serde 字段级属性控制序列化行为：
     /// - `default`                ：反序列化时若字段缺失，使用默认值（这里是 None）
     /// - `skip_serializing_if = "Option::is_none"` ：当值为 None 时，整个字段不出现在 JSON 中
@@ -77,7 +95,7 @@ pub struct Message {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocks: Option<Vec<ContentBlock>>,
     pub model_id: Option<String>,
-    pub created_at: u64,    // u64 = 64 位无符号；这里存放 Unix 时间戳（秒）
+    pub created_at: u64, // u64 = 64 位无符号；这里存放 Unix 时间戳（秒）
 
     // ── Tool 协议相关字段 ──
     // 都是 Option + skip_serializing_if, 老消息没有这些字段也能正常加载
@@ -100,7 +118,6 @@ pub struct Message {
     pub parent_message_id: Option<String>,
 }
 
-
 // ============================================================================
 // MessageRole —— 消息角色枚举
 // ============================================================================
@@ -118,7 +135,27 @@ pub struct Message {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum MessageRole {
-    User,        // 用户消息
-    Assistant,   // AI 回复消息
-    Tool,        // 工具执行结果（携带 tool_call_id 指回对应的 tool_call）
+    User,      // 用户消息
+    Assistant, // AI 回复消息
+    Tool,      // 工具执行结果（携带 tool_call_id 指回对应的 tool_call）
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_image_capabilities_default_to_false_for_old_configs() {
+        let model: ModelInfo = serde_json::from_value(serde_json::json!({
+            "id": "legacy-model",
+            "provider_id": "legacy-provider",
+            "display_name": "Legacy Model",
+            "context_window": 128000,
+            "latency_ms": null
+        }))
+        .unwrap();
+
+        assert!(!model.supports_vision);
+        assert!(!model.supports_image_generation);
+    }
 }

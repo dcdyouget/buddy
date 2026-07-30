@@ -27,6 +27,7 @@ import type { ToolCall, ToolCallStatus } from '@/types';
 import { useChatStore } from '@/stores/chatStore';
 import { CodeBlock } from './CodeBlock';
 import { AskUserCard } from './AskUserCard';
+import { GenerateImageSection } from './GenerateImageSection';
 import { WebSearchSection } from './WebSearchSection';
 
 interface ToolSectionProps {
@@ -227,6 +228,9 @@ export const ToolSection = memo(
 
     if (toolCall.name === 'websearch') {
       return <WebSearchSection toolCall={toolCall} />;
+    }
+    if (toolCall.name === 'generate_image') {
+      return <GenerateImageSection toolCall={toolCall} />;
     }
 
     return (

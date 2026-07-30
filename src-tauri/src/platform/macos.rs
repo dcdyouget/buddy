@@ -2,6 +2,45 @@
 
 use tauri::Emitter;
 
+/// 将无 Dock 图标的辅助应用窗口激活到 macOS 前台。
+///
+/// `show() + set_focus()` 对 `skipTaskbar` 窗口并不稳定：窗口可能已经可见，
+/// 但应用本身仍未激活，导致全局快捷键触发后窗口留在其他应用后面。
+#[cfg(target_os = "macos")]
+pub fn bring_to_front(window: &tauri::WebviewWindow) {
+    use log::{info, warn};
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSApplication, NSNormalWindowLevel, NSWindow};
+
+    let _ = window.show();
+    let task_window = window.clone();
+    if let Err(error) = window.run_on_main_thread(move || {
+        if let Ok(ns_window_ptr) = task_window.ns_window() {
+            unsafe {
+                let ns_window = &*(ns_window_ptr as *const NSWindow);
+                let marker = MainThreadMarker::new()
+                    .expect("macOS window activation must run on the main thread");
+                let application = NSApplication::sharedApplication(marker);
+                #[allow(deprecated)]
+                application.activateIgnoringOtherApps(true);
+                // 只在本次呼出时置前；普通层级保证切换到其他应用后
+                // Buddy 会自然退到后面，而不是持续置顶。
+                ns_window.setLevel(NSNormalWindowLevel);
+                ns_window.orderFrontRegardless();
+                ns_window.makeKeyAndOrderFront(None);
+            }
+        }
+        let _ = task_window.set_focus();
+        info!(
+            "[macos] bring_to_front completed, visible={}, focused={}",
+            task_window.is_visible().unwrap_or(false),
+            task_window.is_focused().unwrap_or(false)
+        );
+    }) {
+        warn!("[macos] failed to schedule window activation: {error}");
+    }
+}
+
 /// macOS 平台：模拟 Cmd+C 复制当前选中文本（Bob 风格取词）
 #[cfg(target_os = "macos")]
 pub fn get_selected_text(app: &tauri::AppHandle) {
@@ -18,7 +57,12 @@ pub fn get_selected_text(app: &tauri::AppHandle) {
     let old_text = clipboard.get_text().unwrap_or_default();
 
     let source = CGEventSource::new(core_graphics::event_source::CGEventSourceStateID::Private)
-        .unwrap_or_else(|_| CGEventSource::new(core_graphics::event_source::CGEventSourceStateID::CombinedSessionState).unwrap());
+        .unwrap_or_else(|_| {
+            CGEventSource::new(
+                core_graphics::event_source::CGEventSourceStateID::CombinedSessionState,
+            )
+            .unwrap()
+        });
     let flags = core_graphics::event::CGEventFlags::CGEventFlagCommand;
 
     let key_down = CGEvent::new_keyboard_event(source.clone(), 8, true).unwrap();

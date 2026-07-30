@@ -17,22 +17,20 @@ use super::{ApiError, LlmProvider};
 use crate::models::{get_context_window, CompatConfig, Message, MessageRole, ModelInfo, ToolCall};
 use crate::streaming::{StopReason, StreamEventEmitter, StreamOutcome};
 use crate::tools::ToolDefinition;
-use futures_util::StreamExt;                    // Stream trait 扩展（提供 .next() 等）
-use log::{error, info, warn};                   // 日志门面
-use reqwest::Client;                           // 异步 HTTP 客户端
-use serde_json::{json, Value};                         // 通用 JSON 值
-use std::pin::Pin;                             // 自引用指针固定
-use std::time::Duration;                       // 时间段
-use tokio::sync::watch;                        // watch channel（取消信号）
-use tokio::time::timeout;                       // 异步超时
-
+use futures_util::StreamExt; // Stream trait 扩展（提供 .next() 等）
+use log::{error, info, warn}; // 日志门面
+use reqwest::Client; // 异步 HTTP 客户端
+use serde_json::{json, Value}; // 通用 JSON 值
+use std::pin::Pin; // 自引用指针固定
+use std::time::Duration; // 时间段
+use tokio::sync::watch; // watch channel（取消信号）
+use tokio::time::timeout; // 异步超时
 
 /// 单次字节块读取超时
 const CHUNK_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 模型列表获取超时
 const FETCH_MODELS_TIMEOUT: Duration = Duration::from_secs(15);
-
 
 // ============================================================================
 // OpenAICompatibleProvider —— OpenAI 协议族适配器
@@ -73,9 +71,7 @@ impl OpenAICompatibleProvider {
             .filter(|m| m.role == MessageRole::Assistant)
             .filter_map(|m| m.tool_calls.as_ref())
             .flat_map(|calls| calls.iter())
-            .filter(|tc| {
-                has_valid_tool_arguments(tc) && tool_result_ids.contains(tc.id.as_str())
-            })
+            .filter(|tc| has_valid_tool_arguments(tc) && tool_result_ids.contains(tc.id.as_str()))
             .map(|tc| tc.id.as_str())
             .collect();
 
@@ -135,6 +131,23 @@ impl OpenAICompatibleProvider {
                 let has_tool_calls = !valid_calls.is_empty();
                 let content_val = if has_tool_calls {
                     json!(null)
+                } else if m.role == MessageRole::User && !m.images.is_empty() {
+                    let mut content = Vec::with_capacity(m.images.len() + 1);
+                    if !m.content.is_empty() {
+                        content.push(json!({
+                            "type": "text",
+                            "text": m.content,
+                        }));
+                    }
+                    content.extend(m.images.iter().map(|image| {
+                        json!({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": image.data_url,
+                            },
+                        })
+                    }));
+                    json!(content)
                 } else {
                     json!(m.content)
                 };
@@ -196,7 +209,7 @@ impl OpenAICompatibleProvider {
         // trim() 去掉首尾空白，trim_end_matches('/') 去掉结尾的 '/'
         let trimmed = base_url.trim().trim_end_matches('/');
         if trimmed.is_empty() {
-            return vec![];     // 提前返回空 Vec
+            return vec![]; // 提前返回空 Vec
         }
 
         let mut candidates: Vec<String> = Vec::new();
@@ -233,7 +246,6 @@ impl OpenAICompatibleProvider {
     }
 }
 
-
 // ============================================================================
 // impl LlmProvider for OpenAICompatibleProvider
 // ============================================================================
@@ -248,7 +260,8 @@ impl LlmProvider for OpenAICompatibleProvider {
         mut cancel_rx: watch::Receiver<bool>,
         compat: Option<&'a CompatConfig>,
         tools: &'a [ToolDefinition],
-    ) -> Pin<Box<dyn std::future::Future<Output = Result<StreamOutcome, ApiError>> + Send + 'a>> {
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<StreamOutcome, ApiError>> + Send + 'a>>
+    {
         Box::pin(async move {
             // ── 1. 创建 HTTP 客户端 ──
             let client = Client::builder()
@@ -269,15 +282,14 @@ impl LlmProvider for OpenAICompatibleProvider {
             );
 
             // ── 4. 拼接 URL（OpenAI 兼容都是 /chat/completions） ──
-            let url = format!(
-                "{}/chat/completions",
-                base_url.trim_end_matches('/')
-            );
+            let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
             // P8: 日志打印 tool 列表(帮助验证 tool 是否到了 LLM)
             let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
             info!(
                 "[openai::stream_chat] 开始请求: model={}, url={}, tools=[{}]",
-                model, url, tool_names.join(", ")
+                model,
+                url,
+                tool_names.join(", ")
             );
 
             // ── DEBUG: 打印完整请求体(用于排查 tool_call_id 问题) ──
@@ -292,7 +304,11 @@ impl LlmProvider for OpenAICompatibleProvider {
                 };
                 let content_preview: String = m["content"]
                     .as_str()
-                    .unwrap_or(if m["content"].is_null() { "<null>" } else { "<non-string>" })
+                    .unwrap_or(if m["content"].is_null() {
+                        "<null>"
+                    } else {
+                        "<non-string>"
+                    })
                     .chars()
                     .take(80)
                     .collect();
@@ -331,10 +347,7 @@ impl LlmProvider for OpenAICompatibleProvider {
 
             // ── 6. 检查 HTTP 状态 ──
             let status = response.status();
-            info!(
-                "[openai::stream_chat] 收到响应: status={}",
-                status.as_u16()
-            );
+            info!("[openai::stream_chat] 收到响应: status={}", status.as_u16());
             if !status.is_success() {
                 let body_text = response.text().await.unwrap_or_default();
                 warn!(
@@ -378,17 +391,24 @@ impl LlmProvider for OpenAICompatibleProvider {
             let mut tool_call_indexes: HashMap<String, usize> = HashMap::new();
 
             let flush_tool_calls = |tc: &mut HashMap<String, ToolCall>,
-                                   tci: &HashMap<String, usize>,
-                                   em: &StreamEventEmitter| -> Vec<ToolCall> {
-                let mut ordered: Vec<(usize, ToolCall)> = tc.drain()
+                                    tci: &HashMap<String, usize>,
+                                    em: &StreamEventEmitter|
+             -> Vec<ToolCall> {
+                let mut ordered: Vec<(usize, ToolCall)> = tc
+                    .drain()
                     .map(|(id, mut t)| {
                         let idx = tci.get(&id).copied().unwrap_or(0);
-                        if t.arguments.is_empty() { t.arguments = "{}".to_string(); }
+                        if t.arguments.is_empty() {
+                            t.arguments = "{}".to_string();
+                        }
                         (idx, t)
-                    }).collect();
+                    })
+                    .collect();
                 ordered.sort_by_key(|(i, _)| *i);
                 let p = ordered.len();
-                for (_, t) in &ordered { em.tool_call_end(&t.id, &t.name, &t.arguments); }
+                for (_, t) in &ordered {
+                    em.tool_call_end(&t.id, &t.name, &t.arguments);
+                }
                 em.turn_end(p);
                 ordered.into_iter().map(|(_, t)| t).collect()
             };
@@ -453,7 +473,7 @@ impl LlmProvider for OpenAICompatibleProvider {
 
                             let line = line.trim().to_string();
                             if line.is_empty() {
-                                continue;   // 跳过空行
+                                continue; // 跳过空行
                             }
 
                             // OpenAI SSE 格式：每行就是 `data: {...}`
@@ -474,9 +494,18 @@ impl LlmProvider for OpenAICompatibleProvider {
                                     if text_started {
                                         emitter.text_end(content_index, &full_response);
                                     }
-                                    let calls = flush_tool_calls(&mut tool_calls, &tool_call_indexes, emitter);
+                                    let calls = flush_tool_calls(
+                                        &mut tool_calls,
+                                        &tool_call_indexes,
+                                        emitter,
+                                    );
                                     // done 事件由 commands.rs 在整轮 tool 循环结束时统一发射
-                                    return Ok(StreamOutcome { full_text: full_response, thinking_text: thinking_response, tool_calls: calls, had_stream_error: false });
+                                    return Ok(StreamOutcome {
+                                        full_text: full_response,
+                                        thinking_text: thinking_response,
+                                        tool_calls: calls,
+                                        had_stream_error: false,
+                                    });
                                 }
                                 if data.is_empty() {
                                     continue;
@@ -500,7 +529,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                                             // reasoning_content 作为思考块发射
                                             emitter.thinking_delta(content_index, reasoning);
                                             thinking_response.push_str(reasoning);
-                                            continue;   // 跳过本行的 content 处理
+                                            continue; // 跳过本行的 content 处理
                                         }
 
                                         // 正常的文本增量
@@ -524,39 +553,67 @@ impl LlmProvider for OpenAICompatibleProvider {
                                             .and_then(|c| c["delta"]["tool_calls"].as_array())
                                         {
                                             for tc in calls {
-                                                let idx = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                                                let id = tc.get("id").and_then(|v| v.as_str()).map(String::from);
-                                                let name = tc.get("function")
-                                                    .and_then(|f| f.get("name")).and_then(|v| v.as_str()).map(String::from);
-                                                let args_delta = tc.get("function")
-                                                    .and_then(|f| f.get("arguments")).and_then(|v| v.as_str()).unwrap_or("");
+                                                let idx = tc
+                                                    .get("index")
+                                                    .and_then(|v| v.as_u64())
+                                                    .unwrap_or(0)
+                                                    as usize;
+                                                let id = tc
+                                                    .get("id")
+                                                    .and_then(|v| v.as_str())
+                                                    .map(String::from);
+                                                let name = tc
+                                                    .get("function")
+                                                    .and_then(|f| f.get("name"))
+                                                    .and_then(|v| v.as_str())
+                                                    .map(String::from);
+                                                let args_delta = tc
+                                                    .get("function")
+                                                    .and_then(|f| f.get("arguments"))
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("");
                                                 if let Some(ref new_id) = id {
                                                     if !tool_calls.contains_key(new_id) {
-                                                        tool_calls.insert(new_id.clone(), ToolCall {
-                                                            id: new_id.clone(),
-                                                            name: name.clone().unwrap_or_default(),
-                                                            arguments: String::new(),
-                                                        });
-                                                        tool_call_indexes.insert(new_id.clone(), idx);
-                                                        emitter.tool_call_start(new_id, name.as_deref().unwrap_or(""), idx);
+                                                        tool_calls.insert(
+                                                            new_id.clone(),
+                                                            ToolCall {
+                                                                id: new_id.clone(),
+                                                                name: name
+                                                                    .clone()
+                                                                    .unwrap_or_default(),
+                                                                arguments: String::new(),
+                                                            },
+                                                        );
+                                                        tool_call_indexes
+                                                            .insert(new_id.clone(), idx);
+                                                        emitter.tool_call_start(
+                                                            new_id,
+                                                            name.as_deref().unwrap_or(""),
+                                                            idx,
+                                                        );
                                                     }
                                                 }
                                                 // Name update: when id is provided, update the name of the existing entry
                                                 if let Some(ref new_name) = name {
                                                     if let Some(ref key) = id {
-                                                        if let Some(e) = tool_calls.get_mut(key) { e.name = new_name.clone(); }
+                                                        if let Some(e) = tool_calls.get_mut(key) {
+                                                            e.name = new_name.clone();
+                                                        }
                                                     }
                                                 }
                                                 // Arguments delta: id may be missing in subsequent chunks,
                                                 // fall back to reverse-lookup by index in tool_call_indexes
                                                 if !args_delta.is_empty() {
                                                     let key = id.clone().or_else(|| {
-                                                        tool_call_indexes.iter()
+                                                        tool_call_indexes
+                                                            .iter()
                                                             .find(|(_, &v)| v == idx)
                                                             .map(|(k, _)| k.clone())
                                                     });
                                                     if let Some(ref key) = key {
-                                                        if let Some(e) = tool_calls.get_mut(key) { e.arguments.push_str(args_delta); }
+                                                        if let Some(e) = tool_calls.get_mut(key) {
+                                                            e.arguments.push_str(args_delta);
+                                                        }
                                                         emitter.tool_call_delta(key, args_delta);
                                                     }
                                                 }
@@ -574,7 +631,12 @@ impl LlmProvider for OpenAICompatibleProvider {
                             &format!("流读取错误: {}", e),
                             &full_response,
                         );
-                        return Ok(StreamOutcome { full_text: full_response, thinking_text: thinking_response, tool_calls: vec![], had_stream_error: true });
+                        return Ok(StreamOutcome {
+                            full_text: full_response,
+                            thinking_text: thinking_response,
+                            tool_calls: vec![],
+                            had_stream_error: true,
+                        });
                     }
                     None => {
                         // 流正常结束
@@ -583,7 +645,12 @@ impl LlmProvider for OpenAICompatibleProvider {
                         }
                         let calls = flush_tool_calls(&mut tool_calls, &tool_call_indexes, emitter);
                         // done 事件由 commands.rs 在整轮 tool 循环结束时统一发射
-                        return Ok(StreamOutcome { full_text: full_response, thinking_text: thinking_response, tool_calls: calls, had_stream_error: false });
+                        return Ok(StreamOutcome {
+                            full_text: full_response,
+                            thinking_text: thinking_response,
+                            tool_calls: calls,
+                            had_stream_error: false,
+                        });
                     }
                 }
             }
@@ -594,7 +661,8 @@ impl LlmProvider for OpenAICompatibleProvider {
         &'a self,
         base_url: &'a str,
         api_key: &'a str,
-    ) -> Pin<Box<dyn std::future::Future<Output = Result<Vec<ModelInfo>, String>> + Send + 'a>> {
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<Vec<ModelInfo>, String>> + Send + 'a>>
+    {
         Box::pin(async move {
             // 生成多个候选 URL
             let candidates = Self::build_model_url_candidates(base_url);
@@ -605,7 +673,7 @@ impl LlmProvider for OpenAICompatibleProvider {
             let client = Client::builder()
                 .connect_timeout(Duration::from_secs(10))
                 .timeout(FETCH_MODELS_TIMEOUT)
-                .tcp_keepalive(Duration::from_secs(60))   // 启用 TCP keepalive
+                .tcp_keepalive(Duration::from_secs(60)) // 启用 TCP keepalive
                 .build()
                 .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
 
@@ -627,7 +695,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                     Err(e) => {
                         error!("[openai::fetch_models] 网络错误: url={}, err={:?}", url, e);
                         last_err = Some(format!("请求失败: {}", e));
-                        continue;   // continue 跳过本轮循环剩余部分，进入下一个候选
+                        continue; // continue 跳过本轮循环剩余部分，进入下一个候选
                     }
                 };
 
@@ -676,6 +744,8 @@ impl LlmProvider for OpenAICompatibleProvider {
                                 display_name: id.to_string(),
                                 context_window: get_context_window(id),
                                 latency_ms: None,
+                                supports_vision: false,
+                                supports_image_generation: false,
                             })
                         })
                         .collect();
@@ -699,6 +769,8 @@ impl LlmProvider for OpenAICompatibleProvider {
                                 display_name: id.to_string(),
                                 context_window: get_context_window(id),
                                 latency_ms: None,
+                                supports_vision: false,
+                                supports_image_generation: false,
                             })
                         })
                         .collect();
@@ -732,10 +804,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                 .build()
                 .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
 
-            let url = format!(
-                "{}/chat/completions",
-                base_url.trim_end_matches('/')
-            );
+            let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
 
             // 测速请求：max_tokens=1, 非流式, 一条 "hi"
             let body = serde_json::json!({
@@ -766,7 +835,6 @@ impl LlmProvider for OpenAICompatibleProvider {
     }
 }
 
-
 // ============================================================================
 // build_openai_request_body —— 根据 compat 配置构建 OpenAI 兼容 API 请求体
 // ============================================================================
@@ -795,14 +863,19 @@ fn build_openai_request_body(
     if send_tools {
         if let Some(tools) = tools {
             if !tools.is_empty() {
-                let openai_tools: Vec<Value> = tools.iter().map(|t| json!({
-                    "type": "function",
-                    "function": {
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": ensure_object_schema(&t.parameters),
-                    }
-                })).collect();
+                let openai_tools: Vec<Value> = tools
+                    .iter()
+                    .map(|t| {
+                        json!({
+                            "type": "function",
+                            "function": {
+                                "name": t.name,
+                                "description": t.description,
+                                "parameters": ensure_object_schema(&t.parameters),
+                            }
+                        })
+                    })
+                    .collect();
                 body["tools"] = json!(openai_tools);
                 body["tool_choice"] = json!("auto");
             }
@@ -810,7 +883,9 @@ fn build_openai_request_body(
     }
     let thinking_format = compat.map(|c| c.thinking_format()).unwrap_or("openai");
     let max_tokens_field = compat.map(|c| c.max_tokens_field()).unwrap_or("max_tokens");
-    let supports_stream_usage = compat.map(|c| c.supports_stream_options_usage()).unwrap_or(true);
+    let supports_stream_usage = compat
+        .map(|c| c.supports_stream_options_usage())
+        .unwrap_or(true);
     // ── 根据字段名配置决定用哪个 key ──
     // OpenAI 新模型用 max_completion_tokens，老模型用 max_tokens
     match max_tokens_field {
@@ -863,7 +938,7 @@ fn build_openai_request_body(
         }
     }
 
-    body   // 函数末尾的表达式作为返回值（无分号）
+    body // 函数末尾的表达式作为返回值（无分号）
 }
 
 fn ensure_object_schema(schema: &Value) -> Value {
@@ -886,7 +961,7 @@ fn ensure_object_schema(schema: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::MessageRole;
+    use crate::models::{ImageAttachment, MessageRole};
     use crate::tools::ToolSafety;
 
     fn dummy_tool(name: &str) -> ToolDefinition {
@@ -914,16 +989,55 @@ mod tests {
 
     fn make_tool_msg(id: &str, tc_id: &str, content: &str) -> Message {
         Message {
-            id: id.to_string(), role: MessageRole::Tool, content: content.to_string(),
-            blocks: None, model_id: None, created_at: 0,
-            tool_calls: None, tool_call_id: Some(tc_id.to_string()),
-            tool_name: Some("read_file".to_string()), is_error: Some(false),
+            id: id.to_string(),
+            role: MessageRole::Tool,
+            content: content.to_string(),
+            images: Vec::new(),
+            blocks: None,
+            model_id: None,
+            created_at: 0,
+            tool_calls: None,
+            tool_call_id: Some(tc_id.to_string()),
+            tool_name: Some("read_file".to_string()),
+            is_error: Some(false),
             parent_message_id: None,
         }
     }
 
     fn make_assistant_with_tool_call(id: &str, tc_id: &str, tc_name: &str) -> Message {
         make_assistant_with_tool_arguments(id, tc_id, tc_name, "{}")
+    }
+
+    #[test]
+    fn test_convert_user_images_to_openai_content_parts() {
+        let message = Message {
+            id: "u1".to_string(),
+            role: MessageRole::User,
+            content: "描述图片".to_string(),
+            images: vec![ImageAttachment {
+                id: "img1".to_string(),
+                name: "sample.png".to_string(),
+                media_type: "image/png".to_string(),
+                data_url: "data:image/png;base64,aGVsbG8=".to_string(),
+            }],
+            blocks: None,
+            model_id: None,
+            created_at: 0,
+            tool_calls: None,
+            tool_call_id: None,
+            tool_name: None,
+            is_error: None,
+            parent_message_id: None,
+        };
+
+        let output = OpenAICompatibleProvider::convert_messages(&[message]);
+        let content = output[1]["content"].as_array().unwrap();
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[1]["type"], "image_url");
+        assert_eq!(
+            content[1]["image_url"]["url"],
+            "data:image/png;base64,aGVsbG8="
+        );
     }
 
     fn make_assistant_with_tool_arguments(
@@ -933,14 +1047,21 @@ mod tests {
         arguments: &str,
     ) -> Message {
         Message {
-            id: id.to_string(), role: MessageRole::Assistant, content: String::new(),
-            blocks: None, model_id: None, created_at: 0,
+            id: id.to_string(),
+            role: MessageRole::Assistant,
+            content: String::new(),
+            images: Vec::new(),
+            blocks: None,
+            model_id: None,
+            created_at: 0,
             tool_calls: Some(vec![ToolCall {
                 id: tc_id.to_string(),
                 name: tc_name.to_string(),
                 arguments: arguments.to_string(),
             }]),
-            tool_call_id: None, tool_name: None, is_error: None,
+            tool_call_id: None,
+            tool_name: None,
+            is_error: None,
             parent_message_id: None,
         }
     }
@@ -964,7 +1085,8 @@ mod tests {
     fn test_convert_tool_msg_orphan_id_stripped() {
         // 孤儿的 tool 消息（没有匹配的 assistant tool_call）应被整条过滤掉
         // 转换后只剩 system prompt 注入(无其他对话消息)
-        let out = OpenAICompatibleProvider::convert_messages(&[make_tool_msg("t1", "orphan_id", "hi")]);
+        let out =
+            OpenAICompatibleProvider::convert_messages(&[make_tool_msg("t1", "orphan_id", "hi")]);
         assert_eq!(out.len(), 1, "只剩 system 注入,孤儿 tool 应被过滤");
         assert_eq!(out[0]["role"], "system");
     }
@@ -989,9 +1111,11 @@ mod tests {
 
     #[test]
     fn test_convert_discards_tool_call_without_result() {
-        let out = OpenAICompatibleProvider::convert_messages(&[
-            make_assistant_with_tool_call("a1", "call_unfinished", "read_file"),
-        ]);
+        let out = OpenAICompatibleProvider::convert_messages(&[make_assistant_with_tool_call(
+            "a1",
+            "call_unfinished",
+            "read_file",
+        )]);
 
         assert_eq!(out.len(), 1, "未完成配对的纯工具 assistant 消息应被过滤");
         assert_eq!(out[0]["role"], "system");

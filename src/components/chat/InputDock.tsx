@@ -1,8 +1,23 @@
-import { useRef, useEffect, type KeyboardEvent, type PointerEvent } from 'react';
-import { Bot, Send, Settings, Square } from 'lucide-react';
+import {
+  useRef,
+  useEffect,
+  type ChangeEvent,
+  type KeyboardEvent,
+  type PointerEvent,
+} from 'react';
+import { Bot, ImagePlus, Send, Settings, Square, X } from 'lucide-react';
 import { IconButton } from '@/components/shared/IconButton';
 import { ClearButton } from './ClearButton';
-import type { ModelInfo } from '@/types';
+import type { ImageAttachment, ModelInfo } from '@/types';
+
+const MAX_IMAGE_COUNT = 4;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const SUPPORTED_IMAGE_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+]);
 
 /**
  * InputDock 组件的 Props
@@ -20,7 +35,11 @@ interface InputDockProps {
   streamingModelName?: string;
   selectedModel: ModelInfo | null;
   draftInput: string;
+  draftImages: ImageAttachment[];
   onDraftChange: (text: string) => void;
+  onAddImages: (images: ImageAttachment[]) => void;
+  onRemoveImage: (id: string) => void;
+  onAttachmentError?: (message: string) => void;
   onSend: () => void;
   onStop: () => void;
   onModelPickerClick?: () => void;
@@ -46,7 +65,11 @@ export function InputDock({
   streamingModelName,
   selectedModel,
   draftInput,
+  draftImages = [],
   onDraftChange,
+  onAddImages,
+  onRemoveImage,
+  onAttachmentError,
   onSend,
   onStop,
   onModelPickerClick,
@@ -55,6 +78,7 @@ export function InputDock({
   hideBorder = false,
 }: InputDockProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   // 保持最新的 isStreaming 值供事件回调使用（避免闭包过期）
   const isStreamingRef = useRef(isStreaming);
   isStreamingRef.current = isStreaming;
@@ -93,6 +117,79 @@ export function InputDock({
     };
   }, [isStreaming]);
 
+  const hasText = draftInput.trim().length > 0;
+  const supportsVision = selectedModel?.supports_vision === true;
+  const hasUnsupportedImages = draftImages.length > 0 && !supportsVision;
+  const canSend =
+    !hasUnsupportedImages && (hasText || (supportsVision && draftImages.length > 0));
+
+  const handleImageSelection = async (
+    event: ChangeEvent<HTMLInputElement>,
+  ) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    if (files.length === 0) return;
+
+    const availableSlots = Math.max(0, MAX_IMAGE_COUNT - draftImages.length);
+    if (availableSlots === 0) {
+      onAttachmentError?.(`每条消息最多添加 ${MAX_IMAGE_COUNT} 张图片`);
+      return;
+    }
+
+    const accepted: File[] = [];
+    let rejectedType = false;
+    let rejectedSize = false;
+    for (const file of files.slice(0, availableSlots)) {
+      if (!SUPPORTED_IMAGE_TYPES.has(file.type)) {
+        rejectedType = true;
+        continue;
+      }
+      if (file.size > MAX_IMAGE_BYTES) {
+        rejectedSize = true;
+        continue;
+      }
+      accepted.push(file);
+    }
+
+    if (files.length > availableSlots) {
+      onAttachmentError?.(`每条消息最多添加 ${MAX_IMAGE_COUNT} 张图片`);
+    } else if (rejectedType) {
+      onAttachmentError?.('仅支持 JPEG、PNG、GIF 和 WebP 图片');
+    } else if (rejectedSize) {
+      onAttachmentError?.('单张图片不能超过 5 MB');
+    }
+
+    const images = await Promise.all(
+      accepted.map(
+        (file) =>
+          new Promise<ImageAttachment>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+              if (typeof reader.result !== 'string') {
+                reject(new Error('图片读取失败'));
+                return;
+              }
+              resolve({
+                id:
+                  typeof crypto.randomUUID === 'function'
+                    ? crypto.randomUUID()
+                    : `${Date.now()}-${Math.random()}`,
+                name: file.name,
+                media_type: file.type,
+                data_url: reader.result,
+              });
+            };
+            reader.onerror = () => reject(new Error(`无法读取图片：${file.name}`));
+            reader.readAsDataURL(file);
+          }),
+      ),
+    ).catch((error) => {
+      onAttachmentError?.(String(error));
+      return [];
+    });
+    if (images.length > 0) onAddImages(images);
+  };
+
   /**
    * 键盘事件处理
    * - 输入法组合中（中文输入法确认英文等）：不拦截 Enter
@@ -114,7 +211,7 @@ export function InputDock({
       }
       // Plain Enter → 发送消息
       e.preventDefault();
-      if (!isStreaming && draftInput.trim()) {
+      if (!isStreaming && canSend) {
         onSend();
       }
     }
@@ -137,9 +234,6 @@ export function InputDock({
     e.currentTarget.style.setProperty('--composer-pointer-y', '0px');
   };
 
-  // 是否有有效输入内容（去除空白后）
-  const hasContent = draftInput.trim().length > 0;
-
   return (
     <div
       className={`input-dock ${hideBorder ? 'is-standalone' : ''}`}
@@ -152,8 +246,72 @@ export function InputDock({
         padding: 'var(--space-3)',
         borderTop: 'none',
         width: '100%',
+        flexWrap: 'wrap',
       }}
     >
+      {!isStreaming && draftImages.length > 0 && (
+        <div
+          style={{
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 'var(--space-2)',
+            overflowX: 'auto',
+            paddingBottom: 'var(--space-1)',
+          }}
+        >
+          {draftImages.map((image) => (
+            <div
+              key={image.id}
+              title={image.name}
+              style={{
+                position: 'relative',
+                width: 44,
+                height: 44,
+                borderRadius: 'var(--radius-sm)',
+                border: '1px solid var(--border-default)',
+                overflow: 'hidden',
+                flexShrink: 0,
+                background: 'var(--bg-sunken)',
+              }}
+            >
+              <img
+                src={image.data_url}
+                alt={image.name}
+                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+              />
+              <button
+                type="button"
+                aria-label={`移除图片 ${image.name}`}
+                onClick={() => onRemoveImage(image.id)}
+                style={{
+                  position: 'absolute',
+                  top: 2,
+                  right: 2,
+                  width: 18,
+                  height: 18,
+                  padding: 0,
+                  border: '1px solid var(--border-default)',
+                  borderRadius: 'var(--radius-full)',
+                  background: 'var(--bg-elevated)',
+                  color: 'var(--text-primary)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                }}
+              >
+                <X size={11} />
+              </button>
+            </div>
+          ))}
+          {hasUnsupportedImages && (
+            <span style={{ color: 'var(--state-warning)', fontSize: '11px' }}>
+              当前模型不支持图片，请移除图片或切换模型
+            </span>
+          )}
+        </div>
+      )}
       {isStreaming ? (
         /* 流式生成状态：显示模型名称和生成进度 + 停止按钮 */
         <>
@@ -191,7 +349,7 @@ export function InputDock({
               style={{
                 flex: 1,
                 padding: 'var(--space-2) var(--space-3)',
-                paddingRight: hasContent ? '28px' : 'var(--space-3)',
+                paddingRight: hasText ? '28px' : 'var(--space-3)',
                 borderRadius: 'var(--radius-md)',
                 border: '1px solid var(--border-subtle)',
                 background: 'var(--bg-sunken)',
@@ -216,12 +374,33 @@ export function InputDock({
                 top: '50%',
                 transform: 'translateY(-50%)',
                 display: 'flex',
-                pointerEvents: hasContent ? 'auto' : 'none',
+                pointerEvents: hasText ? 'auto' : 'none',
               }}
             >
-              <ClearButton visible={hasContent} onClear={() => onDraftChange('')} />
+              <ClearButton visible={hasText} onClear={() => onDraftChange('')} />
             </div>
           </div>
+
+          {supportsVision && (
+            <>
+              <input
+                ref={imageInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/gif,image/webp"
+                multiple
+                hidden
+                onChange={handleImageSelection}
+              />
+              <IconButton
+                icon={ImagePlus}
+                onClick={() => imageInputRef.current?.click()}
+                size={24}
+                iconSize={14}
+                title="添加图片"
+                disabled={draftImages.length >= MAX_IMAGE_COUNT}
+              />
+            </>
+          )}
 
           {onSettingsClick && (
             <IconButton
@@ -256,10 +435,10 @@ export function InputDock({
           <IconButton
             icon={Send}
             onClick={onSend}
-            className={`send-motion-button ${hasContent ? 'is-ready' : ''}`}
+            className={`send-motion-button ${canSend ? 'is-ready' : ''}`}
             // 有内容时显示主色，无内容时显示默认色
-            variant={hasContent ? 'primary' : 'default'}
-            disabled={!hasContent}
+            variant={canSend ? 'primary' : 'default'}
+            disabled={!canSend}
             size={28}
             iconSize={14}
             title="发送"

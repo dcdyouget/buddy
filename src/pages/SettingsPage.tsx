@@ -123,6 +123,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
             enabledModelIds={config.providers.flatMap((provider) => provider.enabled_model_ids)}
             onToggle={toggleModel}
             onUpdateModel={updateModel}
+            providers={config.providers}
           />
         </div>
 

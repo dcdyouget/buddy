@@ -18,8 +18,11 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::models::ImageAttachment;
+
 pub mod builtin;
 pub mod file_tools;
+pub mod image_generation;
 pub mod websearch;
 #[allow(unused_imports)]
 pub use builtin::*;
@@ -48,6 +51,9 @@ pub struct ToolContext {
 pub struct ToolOutput {
     /// 文本内容(直接发给 model 作为 tool_result)
     pub content: String,
+    /// 仅用于界面展示和本地历史持久化，不会作为 tool result 文本回传给模型。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImageAttachment>,
     /// true = 执行出错,model 会看到 is_error=true 并据此调整
     /// (Q6 决策:不中断整轮,让 model 自适应)
     pub is_error: bool,
@@ -57,6 +63,7 @@ impl ToolOutput {
     pub fn ok(content: impl Into<String>) -> Self {
         Self {
             content: content.into(),
+            images: Vec::new(),
             is_error: false,
         }
     }
@@ -65,8 +72,14 @@ impl ToolOutput {
     pub fn err(content: impl Into<String>) -> Self {
         Self {
             content: content.into(),
+            images: Vec::new(),
             is_error: true,
         }
+    }
+
+    pub fn with_images(mut self, images: Vec<ImageAttachment>) -> Self {
+        self.images = images;
+        self
     }
 }
 
@@ -104,7 +117,8 @@ pub struct ToolDefinition {
     pub parameters: Value,
     /// 安全分类(本地用,不发给 LLM)
     #[serde(skip)]
-    #[allow(dead_code)] // 供 Tool trait definition() 方法设置，commands 中通过 trait safety() 读取
+    #[allow(dead_code)]
+    // 供 Tool trait definition() 方法设置，commands 中通过 trait safety() 读取
     pub safety: ToolSafety,
 }
 
@@ -172,7 +186,10 @@ impl ToolRegistry {
 
     /// 按名查找(mcp 优先,因为它可能覆盖内置 tool 名)
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
-        self.mcp.get(name).or_else(|| self.builtin.get(name)).cloned()
+        self.mcp
+            .get(name)
+            .or_else(|| self.builtin.get(name))
+            .cloned()
     }
 
     /// 收集所有 tool 的 definition(发给 LLM)
@@ -208,10 +225,18 @@ mod tests {
     struct DummyTool;
     #[async_trait]
     impl Tool for DummyTool {
-        fn name(&self) -> &str { "dummy" }
-        fn description(&self) -> &str { "test" }
-        fn parameters_schema(&self) -> Value { json!({"type": "object"}) }
-        fn safety(&self) -> ToolSafety { ToolSafety::ReadOnly }
+        fn name(&self) -> &str {
+            "dummy"
+        }
+        fn description(&self) -> &str {
+            "test"
+        }
+        fn parameters_schema(&self) -> Value {
+            json!({"type": "object"})
+        }
+        fn safety(&self) -> ToolSafety {
+            ToolSafety::ReadOnly
+        }
         async fn execute(&self, _args: Value, _ctx: ToolContext) -> Result<ToolOutput, ToolError> {
             Ok(ToolOutput::ok("dummy"))
         }
@@ -229,10 +254,18 @@ mod tests {
         struct OverrideTool;
         #[async_trait]
         impl Tool for OverrideTool {
-            fn name(&self) -> &str { "dummy" }
-            fn description(&self) -> &str { "override" }
-            fn parameters_schema(&self) -> Value { json!({}) }
-            fn safety(&self) -> ToolSafety { ToolSafety::ReadOnly }
+            fn name(&self) -> &str {
+                "dummy"
+            }
+            fn description(&self) -> &str {
+                "override"
+            }
+            fn parameters_schema(&self) -> Value {
+                json!({})
+            }
+            fn safety(&self) -> ToolSafety {
+                ToolSafety::ReadOnly
+            }
             async fn execute(&self, _: Value, _: ToolContext) -> Result<ToolOutput, ToolError> {
                 Ok(ToolOutput::ok("mcp"))
             }
@@ -240,7 +273,11 @@ mod tests {
         let mut reg = ToolRegistry::new(vec![Arc::new(DummyTool)]);
         reg.set_mcp_tools(vec![Arc::new(OverrideTool)]);
         let t = reg.get("dummy").unwrap();
-        assert_eq!(t.description(), "override", "MCP tool should override builtin with same name");
+        assert_eq!(
+            t.description(),
+            "override",
+            "MCP tool should override builtin with same name"
+        );
     }
 
     #[test]

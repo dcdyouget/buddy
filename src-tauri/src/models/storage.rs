@@ -1,7 +1,7 @@
 // 存储相关数据模型：Manifest、ChunkMeta、ChatChunk
 
-use serde::{Deserialize, Serialize};
 use super::message::Message;
+use serde::{Deserialize, Serialize};
 
 /// 存储清单
 #[derive(Debug, Serialize, Deserialize)]

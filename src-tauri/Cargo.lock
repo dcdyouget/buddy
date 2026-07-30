@@ -282,6 +282,7 @@ version = "1.0.0"
 dependencies = [
  "arboard",
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "core-graphics 0.23.2",
  "dom_query",

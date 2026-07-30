@@ -70,7 +70,10 @@ pub fn reposition_to_cursor_monitor(window: &tauri::WebviewWindow) {
             if sxf >= m_x && sxf + w_w <= m_x + m_w && syf >= m_y && syf + w_h <= m_y + m_h {
                 x = sxf;
                 y = syf;
-                info!("[reposition] using saved position: ({:.0},{:.0}) logical", x, y);
+                info!(
+                    "[reposition] using saved position: ({:.0},{:.0}) logical",
+                    x, y
+                );
             }
         }
     }
@@ -88,7 +91,10 @@ pub fn reposition_to_cursor_monitor(window: &tauri::WebviewWindow) {
     #[cfg(not(target_os = "macos"))]
     let macos_y = 0.0_f64;
 
-    info!("[reposition] final logical pos=({:.0},{:.0}) macosY={:.0}, win_logical=({:.0}x{:.0})", x, y, macos_y, w_w, w_h);
+    info!(
+        "[reposition] final logical pos=({:.0},{:.0}) macosY={:.0}, win_logical=({:.0}x{:.0})",
+        x, y, macos_y, w_w, w_h
+    );
 
     // macOS：使用 NSWindow.setFrameOrigin 同步设置位置
     #[cfg(target_os = "macos")]

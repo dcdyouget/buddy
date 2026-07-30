@@ -118,7 +118,13 @@ export function useStreaming() {
               break;
 
             case 'tool_result':
-              handleToolResult(e.id, e.name, e.content, e.is_error);
+              handleToolResult(
+                e.id,
+                e.name,
+                e.content,
+                e.images ?? [],
+                e.is_error,
+              );
               break;
 
             case 'tool_approval_required': {

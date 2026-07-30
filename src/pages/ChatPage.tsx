@@ -40,7 +40,10 @@ export function ChatPage() {
   const {
     messages,
     draftInput,
+    draftImages: storedDraftImages,
     setDraftInput,
+    addDraftImages,
+    removeDraftImage,
     sendMessage,
     stopGeneration,
     isStreaming,
@@ -59,7 +62,10 @@ export function ChatPage() {
     useShallow((s) => ({
       messages: s.messages,
       draftInput: s.draftInput,
+      draftImages: s.draftImages,
       setDraftInput: s.setDraftInput,
+      addDraftImages: s.addDraftImages,
+      removeDraftImage: s.removeDraftImage,
       sendMessage: s.sendMessage,
       stopGeneration: s.stopGeneration,
       isStreaming: s.isStreaming,
@@ -76,6 +82,7 @@ export function ChatPage() {
       loadOlderMessages: s.loadOlderMessages,
     })),
   );
+  const draftImages = storedDraftImages ?? [];
   const { config } = useConfigStore();
   const [showDropdown, setShowDropdown] = useState(false);
 
@@ -104,7 +111,13 @@ export function ChatPage() {
 
   /** 发送消息：校验后发起对话 */
   const handleSend = () => {
-    if (!draftInput.trim() || !config?.selected_model_id) return;
+    if ((!draftInput.trim() && draftImages.length === 0) || !config?.selected_model_id) {
+      return;
+    }
+    if (draftImages.length > 0 && !selectedModel?.supports_vision) {
+      setError('当前模型不支持图片，请移除图片或切换模型');
+      return;
+    }
     sendMessage(draftInput, config.selected_model_id);
   };
 
@@ -446,7 +459,11 @@ export function ChatPage() {
             streamingModelName={streamingModel?.display_name}
             selectedModel={selectedModel}
             draftInput={draftInput}
+            draftImages={draftImages}
             onDraftChange={setDraftInput}
+            onAddImages={addDraftImages}
+            onRemoveImage={removeDraftImage}
+            onAttachmentError={setError}
             onSend={isStreaming ? () => {} : handleSend}
             onStop={handleStop}
             onModelPickerClick={isStreaming ? undefined : handleModelPickerClick}

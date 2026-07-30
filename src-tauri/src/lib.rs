@@ -45,12 +45,12 @@ pub fn run() {
         })
         .setup(|app| {
             // 加载配置
-            let config = storage::get_config(app.handle())
-                .unwrap_or_else(|_| models::AppConfig::default());
-            let shortcut: Shortcut = config
-                .hotkey
-                .parse()
-                .unwrap_or(Shortcut::new(None, tauri_plugin_global_shortcut::Code::KeyJ));
+            let config =
+                storage::get_config(app.handle()).unwrap_or_else(|_| models::AppConfig::default());
+            let shortcut: Shortcut = config.hotkey.parse().unwrap_or(Shortcut::new(
+                None,
+                tauri_plugin_global_shortcut::Code::KeyJ,
+            ));
 
             app.state::<hotkey::HotkeyState>()
                 .current
@@ -81,6 +81,7 @@ pub fn run() {
             commands::load_messages,
             commands::get_message_count,
             commands::save_message,
+            commands::download_generated_image,
         ])
         .on_window_event(|window, event| {
             window::events::setup_window_event_handler(&window, &event);

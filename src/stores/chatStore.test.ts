@@ -242,7 +242,7 @@ describe('chatStore 流式中断收尾', () => {
 });
 
 describe('chatStore 历史工具状态恢复', () => {
-  it('根据 tool result 将历史调用恢复为已完成', () => {
+  it('根据 tool result 将历史调用与展示图片恢复为已完成', () => {
     useChatStore.getState().setMessages([
       {
         ...assistantMessage(),
@@ -258,6 +258,14 @@ describe('chatStore 历史工具状态恢复', () => {
         id: 'tool-success',
         role: 'tool',
         content: '用户选择：继续',
+        images: [
+          {
+            id: 'generated-1',
+            name: 'generated.png',
+            media_type: 'image/png',
+            data_url: 'data:image/png;base64,aGVsbG8=',
+          },
+        ],
         model_id: null,
         created_at: 1,
         tool_call_id: 'call-success',
@@ -271,6 +279,12 @@ describe('chatStore 历史工具状态恢复', () => {
         status: 'done',
         result: '用户选择：继续',
         is_error_result: false,
+        images: [
+          expect.objectContaining({
+            id: 'generated-1',
+            data_url: 'data:image/png;base64,aGVsbG8=',
+          }),
+        ],
       }),
     );
   });

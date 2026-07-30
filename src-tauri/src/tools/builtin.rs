@@ -35,10 +35,7 @@ use tokio::io::AsyncWriteExt;
 ///
 /// allowed_paths 为空 → 返回 Ok(不限制)
 /// 否则要求 path 至少有一条前缀匹配(prefix match,不要求完全相等)
-pub(super) fn check_write_allowed(
-    path: &Path,
-    allowed_paths: &[String],
-) -> Result<(), ToolError> {
+pub(super) fn check_write_allowed(path: &Path, allowed_paths: &[String]) -> Result<(), ToolError> {
     if allowed_paths.is_empty() {
         return Ok(());
     }
@@ -50,8 +47,7 @@ pub(super) fn check_write_allowed(
             continue;
         }
         let normalized_allowed = normalize_path(Path::new(allowed));
-        if normalized_path == normalized_allowed
-            || normalized_path.starts_with(&normalized_allowed)
+        if normalized_path == normalized_allowed || normalized_path.starts_with(&normalized_allowed)
         {
             return Ok(());
         }
@@ -128,7 +124,9 @@ pub struct ReadFileTool;
 
 #[async_trait]
 impl Tool for ReadFileTool {
-    fn name(&self) -> &str { "read_file" }
+    fn name(&self) -> &str {
+        "read_file"
+    }
     fn description(&self) -> &str {
         "读取本地文本文件的内容。返回 UTF-8 解码后的文本;二进制文件返回 is_error。"
     }
@@ -141,7 +139,9 @@ impl Tool for ReadFileTool {
             "required": ["path"]
         })
     }
-    fn safety(&self) -> ToolSafety { ToolSafety::ReadOnly }
+    fn safety(&self) -> ToolSafety {
+        ToolSafety::ReadOnly
+    }
 
     async fn execute(&self, args: Value, _ctx: ToolContext) -> Result<ToolOutput, ToolError> {
         let path = extract_path(&args)?;
@@ -168,7 +168,9 @@ pub struct CreateFileTool {
 
 #[async_trait]
 impl Tool for CreateFileTool {
-    fn name(&self) -> &str { "create_file" }
+    fn name(&self) -> &str {
+        "create_file"
+    }
     fn description(&self) -> &str {
         "创建新文件。目标文件必须不存在,存在则报错。仅在 allowed_paths 白名单内允许。"
     }
@@ -182,7 +184,9 @@ impl Tool for CreateFileTool {
             "required": ["path", "content"]
         })
     }
-    fn safety(&self) -> ToolSafety { ToolSafety::Write }
+    fn safety(&self) -> ToolSafety {
+        ToolSafety::Write
+    }
 
     async fn execute(&self, args: Value, _ctx: ToolContext) -> Result<ToolOutput, ToolError> {
         let path = extract_path(&args)?;
@@ -225,7 +229,9 @@ pub struct OverwriteFileTool {
 
 #[async_trait]
 impl Tool for OverwriteFileTool {
-    fn name(&self) -> &str { "overwrite_file" }
+    fn name(&self) -> &str {
+        "overwrite_file"
+    }
     fn description(&self) -> &str {
         "覆盖现有文件。目标文件必须存在,不存在则报错。仅在 allowed_paths 白名单内允许。"
     }
@@ -239,7 +245,9 @@ impl Tool for OverwriteFileTool {
             "required": ["path", "content"]
         })
     }
-    fn safety(&self) -> ToolSafety { ToolSafety::Write }
+    fn safety(&self) -> ToolSafety {
+        ToolSafety::Write
+    }
 
     async fn execute(&self, args: Value, _ctx: ToolContext) -> Result<ToolOutput, ToolError> {
         let path = extract_path(&args)?;
@@ -283,7 +291,9 @@ pub struct AppendFileTool {
 
 #[async_trait]
 impl Tool for AppendFileTool {
-    fn name(&self) -> &str { "append_file" }
+    fn name(&self) -> &str {
+        "append_file"
+    }
     fn description(&self) -> &str {
         "追加内容到现有文件,或创建新文件。仅在 allowed_paths 白名单内允许。"
     }
@@ -297,7 +307,9 @@ impl Tool for AppendFileTool {
             "required": ["path", "content"]
         })
     }
-    fn safety(&self) -> ToolSafety { ToolSafety::Write }
+    fn safety(&self) -> ToolSafety {
+        ToolSafety::Write
+    }
 
     async fn execute(&self, args: Value, _ctx: ToolContext) -> Result<ToolOutput, ToolError> {
         let path = extract_path(&args)?;
@@ -321,7 +333,7 @@ impl Tool for AppendFileTool {
         f.sync_all().await?;
 
         Ok(ToolOutput::ok(format!(
-        "{}文件: {} (追加 {} 字节)",
+            "{}文件: {} (追加 {} 字节)",
             if existed { "已追加到" } else { "已创建" },
             path.display(),
             content.len()
@@ -393,7 +405,9 @@ pub struct AskUserTool;
 
 #[async_trait]
 impl Tool for AskUserTool {
-    fn name(&self) -> &str { "ask_user" }
+    fn name(&self) -> &str {
+        "ask_user"
+    }
 
     fn description(&self) -> &str {
         "Ask the user a clarifying question with 2-4 mutually exclusive multiple-choice options. \
@@ -460,7 +474,9 @@ impl Tool for AskUserTool {
         })
     }
 
-    fn safety(&self) -> ToolSafety { ToolSafety::ReadOnly }
+    fn safety(&self) -> ToolSafety {
+        ToolSafety::ReadOnly
+    }
 
     async fn execute(&self, _args: Value, _ctx: ToolContext) -> Result<ToolOutput, ToolError> {
         // ask_user 不走 execute — 由 commands.rs 的专门分支处理
@@ -482,9 +498,15 @@ pub fn builtin_tools(allowed_paths: Vec<String>) -> Vec<std::sync::Arc<dyn Tool>
         Arc::new(ReadFileTool),
         Arc::new(super::file_tools::ListDirectoryTool),
         Arc::new(super::file_tools::SearchFilesTool),
-        Arc::new(CreateFileTool { allowed_paths: allowed_paths.clone() }),
-        Arc::new(OverwriteFileTool { allowed_paths: allowed_paths.clone() }),
-        Arc::new(AppendFileTool { allowed_paths: allowed_paths.clone() }),
+        Arc::new(CreateFileTool {
+            allowed_paths: allowed_paths.clone(),
+        }),
+        Arc::new(OverwriteFileTool {
+            allowed_paths: allowed_paths.clone(),
+        }),
+        Arc::new(AppendFileTool {
+            allowed_paths: allowed_paths.clone(),
+        }),
         Arc::new(super::file_tools::EditFileTool { allowed_paths }),
         Arc::new(AskUserTool),
         Arc::new(super::websearch::WebSearchTool),
@@ -555,7 +577,10 @@ mod tests {
         tokio::fs::write(&p, "hello world").await.unwrap();
         let tool = ReadFileTool;
         let out = tool
-            .execute(json!({ "path": p.to_string_lossy() }), ToolContext::default())
+            .execute(
+                json!({ "path": p.to_string_lossy() }),
+                ToolContext::default(),
+            )
             .await
             .unwrap();
         assert_eq!(out.content, "hello world");
@@ -566,7 +591,10 @@ mod tests {
     async fn test_read_file_missing() {
         let tool = ReadFileTool;
         let out = tool
-            .execute(json!({ "path": "/nonexistent_xyz_9999.txt" }), ToolContext::default())
+            .execute(
+                json!({ "path": "/nonexistent_xyz_9999.txt" }),
+                ToolContext::default(),
+            )
             .await;
         assert!(matches!(out, Err(ToolError::Io(_))));
     }
@@ -584,7 +612,9 @@ mod tests {
     async fn test_create_file_success() {
         let tmp = TempDir::new().unwrap();
         let p = tmp.path().join("new.txt");
-        let tool = CreateFileTool { allowed_paths: tmp_paths(&tmp) };
+        let tool = CreateFileTool {
+            allowed_paths: tmp_paths(&tmp),
+        };
         let out = tool
             .execute(
                 json!({ "path": p.to_string_lossy(), "content": "abc" }),
@@ -601,7 +631,9 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let p = tmp.path().join("exists.txt");
         tokio::fs::write(&p, "old").await.unwrap();
-        let tool = CreateFileTool { allowed_paths: tmp_paths(&tmp) };
+        let tool = CreateFileTool {
+            allowed_paths: tmp_paths(&tmp),
+        };
         let out = tool
             .execute(
                 json!({ "path": p.to_string_lossy(), "content": "new" }),
@@ -616,7 +648,9 @@ mod tests {
     #[tokio::test]
     async fn test_create_file_rejects_outside_allowed() {
         let tmp = TempDir::new().unwrap();
-        let tool = CreateFileTool { allowed_paths: tmp_paths(&tmp) };
+        let tool = CreateFileTool {
+            allowed_paths: tmp_paths(&tmp),
+        };
         let out = tool
             .execute(
                 json!({ "path": "/etc/evil.txt", "content": "x" }),
@@ -631,7 +665,9 @@ mod tests {
         // allowed_paths 为空 → 不限制
         let tmp = TempDir::new().unwrap();
         let p = tmp.path().join("free.txt");
-        let tool = CreateFileTool { allowed_paths: vec![] };
+        let tool = CreateFileTool {
+            allowed_paths: vec![],
+        };
         let out = tool
             .execute(
                 json!({ "path": p.to_string_lossy(), "content": "ok" }),
@@ -646,7 +682,9 @@ mod tests {
     async fn test_create_file_creates_parent_dirs() {
         let tmp = TempDir::new().unwrap();
         let p = tmp.path().join("a/b/c.txt");
-        let tool = CreateFileTool { allowed_paths: tmp_paths(&tmp) };
+        let tool = CreateFileTool {
+            allowed_paths: tmp_paths(&tmp),
+        };
         tool.execute(
             json!({ "path": p.to_string_lossy(), "content": "x" }),
             ToolContext::default(),
@@ -663,7 +701,9 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let p = tmp.path().join("file.txt");
         tokio::fs::write(&p, "old").await.unwrap();
-        let tool = OverwriteFileTool { allowed_paths: tmp_paths(&tmp) };
+        let tool = OverwriteFileTool {
+            allowed_paths: tmp_paths(&tmp),
+        };
         let out = tool
             .execute(
                 json!({ "path": p.to_string_lossy(), "content": "new" }),
@@ -679,7 +719,9 @@ mod tests {
     async fn test_overwrite_file_rejects_missing() {
         let tmp = TempDir::new().unwrap();
         let p = tmp.path().join("nope.txt");
-        let tool = OverwriteFileTool { allowed_paths: tmp_paths(&tmp) };
+        let tool = OverwriteFileTool {
+            allowed_paths: tmp_paths(&tmp),
+        };
         let out = tool
             .execute(
                 json!({ "path": p.to_string_lossy(), "content": "x" }),
@@ -692,7 +734,9 @@ mod tests {
     #[tokio::test]
     async fn test_overwrite_file_rejects_outside_allowed() {
         let tmp = TempDir::new().unwrap();
-        let tool = OverwriteFileTool { allowed_paths: tmp_paths(&tmp) };
+        let tool = OverwriteFileTool {
+            allowed_paths: tmp_paths(&tmp),
+        };
         let out = tool
             .execute(
                 json!({ "path": "/etc/passwd", "content": "x" }),
@@ -708,7 +752,9 @@ mod tests {
     async fn test_append_file_creates_when_missing() {
         let tmp = TempDir::new().unwrap();
         let p = tmp.path().join("new.txt");
-        let tool = AppendFileTool { allowed_paths: tmp_paths(&tmp) };
+        let tool = AppendFileTool {
+            allowed_paths: tmp_paths(&tmp),
+        };
         let out = tool
             .execute(
                 json!({ "path": p.to_string_lossy(), "content": "abc" }),
@@ -725,7 +771,9 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let p = tmp.path().join("ex.txt");
         tokio::fs::write(&p, "line1\n").await.unwrap();
-        let tool = AppendFileTool { allowed_paths: tmp_paths(&tmp) };
+        let tool = AppendFileTool {
+            allowed_paths: tmp_paths(&tmp),
+        };
         tool.execute(
             json!({ "path": p.to_string_lossy(), "content": "line2\n" }),
             ToolContext::default(),
@@ -741,7 +789,9 @@ mod tests {
     #[tokio::test]
     async fn test_append_file_rejects_outside_allowed() {
         let tmp = TempDir::new().unwrap();
-        let tool = AppendFileTool { allowed_paths: tmp_paths(&tmp) };
+        let tool = AppendFileTool {
+            allowed_paths: tmp_paths(&tmp),
+        };
         let out = tool
             .execute(
                 json!({ "path": "/etc/passwd", "content": "x" }),

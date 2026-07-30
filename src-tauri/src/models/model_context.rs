@@ -142,7 +142,7 @@ pub fn get_context_window(model_id: &str) -> u32 {
     //   *EXACT_MAP.get(...) 返回 Option<&u32>（值的引用，避免拷贝）
     //   `&ctx` 进一步"重新借用"成 &u32，从而能匹配 Some(&u32)
     if let Some(&ctx) = EXACT_MAP.get(lower.as_str()) {
-        return ctx;  // `return` 从当前函数返回；Rust 也常用尾部表达式隐式 return
+        return ctx; // `return` 从当前函数返回；Rust 也常用尾部表达式隐式 return
     }
 
     // ── 2. 前缀匹配 ──

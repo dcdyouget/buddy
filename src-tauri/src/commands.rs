@@ -5,12 +5,14 @@
 
 use crate::models::*;
 use crate::providers::{self, ProviderType};
-use crate::streaming::{ContentBlock, QuestionOption, StopReason, StreamEventEmitter};
 use crate::storage;
+use crate::streaming::{ContentBlock, QuestionOption, StopReason, StreamEventEmitter};
 use crate::tools::{AskUserAnswer, AskUserArgs, AskUserOption, ToolRegistry};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use log::{info, warn};
-use std::sync::atomic::{AtomicBool, Ordering};
 use parking_lot::Mutex;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Manager, State};
 use tokio::sync::{oneshot, watch};
 /// 取消状态：跨命令共享的取消通道
@@ -37,7 +39,6 @@ pub struct CancelState {
 //   - send_message 在审批循环开头读,如果是 true 就跳过 ToolApprovalRequired
 //   - 前端点"本次都允许"时设为 true(P4 通过单独 command 触发;实现见 P4 后端)
 // ─────────────────────────────────────────────────────────────────────────────
-
 
 /// 一次 tool 调用审批的等待槽位
 #[allow(dead_code)] // 字段在 send_message 中构造并通过 oneshot 传递
@@ -110,9 +111,138 @@ fn estimate_tokens(text: &str) -> u32 {
     (count / 3).max(1)
 }
 
+fn estimate_message_tokens(message: &Message) -> u32 {
+    // 图片实际 token 数取决于厂商、尺寸和 detail；这里使用保守固定值，
+    // 仅用于本地滑动窗口，避免带图对话被当作零成本。
+    estimate_tokens(&message.content)
+        .saturating_add((message.images.len() as u32).saturating_mul(1_024))
+}
+
+fn validate_image_attachments(images: &[crate::models::ImageAttachment]) -> Result<(), String> {
+    const MAX_IMAGES: usize = 4;
+    const MAX_DATA_URL_BYTES: usize = 7 * 1024 * 1024;
+    const SUPPORTED_MEDIA_TYPES: [&str; 4] = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+
+    if images.len() > MAX_IMAGES {
+        return Err(format!("每条消息最多添加 {MAX_IMAGES} 张图片"));
+    }
+    for image in images {
+        if !SUPPORTED_MEDIA_TYPES.contains(&image.media_type.as_str()) {
+            return Err(format!("不支持的图片格式：{}", image.media_type));
+        }
+        let expected_prefix = format!("data:{};base64,", image.media_type);
+        if !image.data_url.starts_with(&expected_prefix) {
+            return Err(format!("图片数据格式无效：{}", image.name));
+        }
+        if image.data_url.len() > MAX_DATA_URL_BYTES {
+            return Err(format!("图片超过 5 MB 限制：{}", image.name));
+        }
+    }
+    Ok(())
+}
+
+const MAX_GENERATED_IMAGE_BYTES: usize = 25 * 1024 * 1024;
+
+fn image_extension(media_type: &str) -> Option<&'static str> {
+    match media_type {
+        "image/jpeg" => Some("jpg"),
+        "image/png" => Some("png"),
+        "image/gif" => Some("gif"),
+        "image/webp" => Some("webp"),
+        _ => None,
+    }
+}
+
+fn unique_download_path(download_dir: &Path, extension: &str) -> PathBuf {
+    let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let base_name = format!("Buddy-生成图片-{timestamp}");
+    let mut path = download_dir.join(format!("{base_name}.{extension}"));
+    let mut suffix = 2_u16;
+    while path.exists() {
+        path = download_dir.join(format!("{base_name}-{suffix}.{extension}"));
+        suffix += 1;
+    }
+    path
+}
+
+async fn generated_image_bytes(data_url: &str, media_type: &str) -> Result<Vec<u8>, String> {
+    let expected_prefix = format!("data:{media_type};base64,");
+    if let Some(encoded) = data_url.strip_prefix(&expected_prefix) {
+        let bytes = BASE64_STANDARD
+            .decode(encoded)
+            .map_err(|_| "生成图片的 base64 数据无效".to_string())?;
+        if bytes.len() > MAX_GENERATED_IMAGE_BYTES {
+            return Err("生成图片超过 25 MB，无法下载".to_string());
+        }
+        return Ok(bytes);
+    }
+
+    let url = reqwest::Url::parse(data_url).map_err(|_| "生成图片地址无效".to_string())?;
+    if url.scheme() != "https" {
+        return Err("只允许下载 HTTPS 图片地址".to_string());
+    }
+    let response = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(90))
+        .build()
+        .map_err(|error| format!("创建图片下载客户端失败：{error}"))?
+        .get(url)
+        .send()
+        .await
+        .map_err(|error| format!("下载生成图片失败：{error}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "下载生成图片失败：HTTP {}",
+            response.status().as_u16()
+        ));
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_GENERATED_IMAGE_BYTES as u64)
+    {
+        return Err("生成图片超过 25 MB，无法下载".to_string());
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| format!("读取生成图片失败：{error}"))?;
+    if bytes.len() > MAX_GENERATED_IMAGE_BYTES {
+        return Err("生成图片超过 25 MB，无法下载".to_string());
+    }
+    Ok(bytes.to_vec())
+}
+
+/// 将生图工具的结果保存到系统下载目录。
+#[tauri::command]
+pub async fn download_generated_image(
+    app: tauri::AppHandle,
+    data_url: String,
+    media_type: String,
+) -> Result<String, String> {
+    let extension =
+        image_extension(&media_type).ok_or_else(|| format!("不支持的图片格式：{media_type}"))?;
+    let bytes = generated_image_bytes(&data_url, &media_type).await?;
+    if bytes.is_empty() {
+        return Err("生成图片内容为空".to_string());
+    }
+
+    let download_dir = app
+        .path()
+        .download_dir()
+        .map_err(|error| format!("无法获取系统下载目录：{error}"))?;
+    tokio::fs::create_dir_all(&download_dir)
+        .await
+        .map_err(|error| format!("无法创建下载目录：{error}"))?;
+    let target = unique_download_path(&download_dir, extension);
+    tokio::fs::write(&target, bytes)
+        .await
+        .map_err(|error| format!("保存图片失败：{error}"))?;
+
+    Ok(target.to_string_lossy().into_owned())
+}
+
 /// 估算消息列表的总 token 数
 fn estimate_total_tokens(messages: &[Message]) -> u32 {
-    messages.iter().map(|m| estimate_tokens(&m.content)).sum()
+    messages.iter().map(estimate_message_tokens).sum()
 }
 
 /// 计算滑动窗口的起始索引
@@ -131,7 +261,7 @@ fn compute_window_start(messages: &[Message], token_budget: u32) -> usize {
 
     // 从最新到最老遍历
     for i in (0..messages.len()).rev() {
-        let cost = estimate_tokens(&messages[i].content);
+        let cost = estimate_message_tokens(&messages[i]);
         if remaining >= cost {
             remaining -= cost;
             start = i;
@@ -149,11 +279,18 @@ fn compute_window_start(messages: &[Message], token_budget: u32) -> usize {
 }
 
 /// 构造 tool 结果消息
-fn build_tool_msg(turn: usize, call: &crate::models::ToolCall, content: String, is_error: bool) -> Message {
+fn build_tool_msg(
+    turn: usize,
+    call: &crate::models::ToolCall,
+    content: String,
+    images: Vec<crate::models::ImageAttachment>,
+    is_error: bool,
+) -> Message {
     Message {
         id: format!("t-{}-{}", turn, chrono::Utc::now().timestamp_millis()),
         role: MessageRole::Tool,
         content,
+        images,
         blocks: None,
         model_id: None,
         created_at: chrono::Utc::now().timestamp() as u64,
@@ -204,6 +341,17 @@ pub async fn send_message(
         .iter()
         .find(|m| m.id == model_id)
         .ok_or_else(|| "未找到指定的模型".to_string())?;
+
+    let current_user_images = messages
+        .iter()
+        .rev()
+        .find(|message| message.role == MessageRole::User)
+        .map(|message| message.images.as_slice())
+        .unwrap_or_default();
+    validate_image_attachments(current_user_images)?;
+    if !current_user_images.is_empty() && !model.supports_vision {
+        return Err("当前模型未开启图片输入，请在模型设置中启用“支持图片”".to_string());
+    }
 
     let provider = config
         .providers
@@ -267,16 +415,34 @@ pub async fn send_message(
     let compat = provider.compat.as_ref();
 
     // ── P4: 构造 ToolRegistry(只包含内置 tool,MCP tool 由 P7 注入) ──
-    let registry = ToolRegistry::new(crate::tools::builtin::builtin_tools(
-        config.allowed_paths.clone(),
-    ));
+    let mut builtin_tools = crate::tools::builtin::builtin_tools(config.allowed_paths.clone());
+    if provider_type == ProviderType::OpenAICompatible && model.supports_image_generation {
+        if let Some(tool) = crate::tools::image_generation::GenerateImageTool::for_provider(
+            provider.base_url.clone(),
+            provider.api_key.clone(),
+            model_id.clone(),
+            &provider.id,
+            &provider.name,
+        ) {
+            builtin_tools.push(std::sync::Arc::new(tool));
+        }
+    }
+    let registry = ToolRegistry::new(builtin_tools);
     // P7 会在此追加 mcp tool
 
     // 把 messages 拷成可变的 Vec,tool 循环会往里 push assistant(tool_calls) + tool(result)
     let mut conv_messages: Vec<Message> = messages.clone();
+    if !model.supports_vision {
+        // 切换到纯文本模型后不再把历史图片发送给 Provider。
+        for message in &mut conv_messages {
+            message.images.clear();
+        }
+    }
 
     // 每次 send_message 开始时重置"本次都允许"标志，防止上次被中断时残留
-    approval.approve_all_for_turn.store(false, Ordering::Relaxed);
+    approval
+        .approve_all_for_turn
+        .store(false, Ordering::Relaxed);
 
     // 工具循环上限(防止 model 死循环):
     // - 硬上限 20 轮(安全网,正常情况下不会触发)
@@ -290,9 +456,10 @@ pub async fn send_message(
         turn += 1;
         if turn > MAX_TOOL_TURNS {
             warn!("[send_message] 达到 tool 轮数硬上限 {}", MAX_TOOL_TURNS);
-            break Err(crate::providers::ApiError::NetworkError(
-                format!("已达到最大工具调用轮数 {}", MAX_TOOL_TURNS),
-            ));
+            break Err(crate::providers::ApiError::NetworkError(format!(
+                "已达到最大工具调用轮数 {}",
+                MAX_TOOL_TURNS
+            )));
         }
 
         // 滑动窗口(每轮都算)
@@ -320,7 +487,8 @@ pub async fn send_message(
         };
 
         // 持久化本轮 assistant 消息
-        if !out.full_text.is_empty() || !out.tool_calls.is_empty() || !out.thinking_text.is_empty() {
+        if !out.full_text.is_empty() || !out.tool_calls.is_empty() || !out.thinking_text.is_empty()
+        {
             // 合并思考 + 文本为 blocks
             // - thinking_text 非空时:显式构造 thinking + text 块
             // - thinking_text 为空时:尝试从 full_text 解析 <think> 标签(部分模型把思考包在 text 里)
@@ -330,7 +498,9 @@ pub async fn send_message(
                     is_open: false,
                 }];
                 if !out.full_text.is_empty() {
-                    b.push(ContentBlock::Text { content: out.full_text.clone() });
+                    b.push(ContentBlock::Text {
+                        content: out.full_text.clone(),
+                    });
                 }
                 b
             } else {
@@ -340,10 +510,15 @@ pub async fn send_message(
                 id: format!("a-{}-{}", turn, chrono::Utc::now().timestamp_millis()),
                 role: MessageRole::Assistant,
                 content: out.full_text.clone(),
+                images: Vec::new(),
                 blocks: Some(blocks),
                 model_id: Some(model_id.clone()),
                 created_at: chrono::Utc::now().timestamp() as u64,
-                tool_calls: if out.tool_calls.is_empty() { None } else { Some(out.tool_calls.clone()) },
+                tool_calls: if out.tool_calls.is_empty() {
+                    None
+                } else {
+                    Some(out.tool_calls.clone())
+                },
                 tool_call_id: None,
                 tool_name: None,
                 is_error: None,
@@ -359,8 +534,11 @@ pub async fn send_message(
         }
 
         // 有 tool_calls → 顺序执行(并发=1;P4 决定),再调 stream_chat
-        info!("[send_message] turn {} 收到 {} 个 tool_call,开始执行",
-            turn, out.tool_calls.len());
+        info!(
+            "[send_message] turn {} 收到 {} 个 tool_call,开始执行",
+            turn,
+            out.tool_calls.len()
+        );
         // 本轮追踪:是否有至少一个 tool 执行成功(非 is_error)?
         let mut turn_has_success = false;
         for call in &out.tool_calls {
@@ -370,8 +548,8 @@ pub async fn send_message(
                     Ok(v) => v,
                     Err(e) => {
                         let content = format!("ask_user 参数解析失败: {}", e);
-                        emitter.tool_result(&call.id, "ask_user", &content, true);
-                        let tool_msg = build_tool_msg(turn, call, content, true);
+                        emitter.tool_result(&call.id, "ask_user", &content, Vec::new(), true);
+                        let tool_msg = build_tool_msg(turn, call, content, Vec::new(), true);
                         pending_persistence.push(tool_msg.clone());
                         conv_messages.push(tool_msg.clone());
                         continue;
@@ -381,8 +559,8 @@ pub async fn send_message(
                     Ok(a) => a,
                     Err(e) => {
                         let content = format!("ask_user 参数校验失败: {}", e);
-                        emitter.tool_result(&call.id, "ask_user", &content, true);
-                        let tool_msg = build_tool_msg(turn, call, content, true);
+                        emitter.tool_result(&call.id, "ask_user", &content, Vec::new(), true);
+                        let tool_msg = build_tool_msg(turn, call, content, Vec::new(), true);
                         pending_persistence.push(tool_msg.clone());
                         conv_messages.push(tool_msg.clone());
                         continue;
@@ -391,12 +569,16 @@ pub async fn send_message(
 
                 // 先登记等待槽位，再通知前端显示内联问答卡。
                 // 避免用户快速作答时 answer_tool_question 尚找不到对应 slot。
-                let q_options: Vec<QuestionOption> = parsed.options.iter().map(|o| QuestionOption {
-                    label: o.label.clone(),
-                    description: o.description.clone(),
-                    requires_input: o.requires_input,
-                    input_placeholder: o.input_placeholder.clone(),
-                }).collect();
+                let q_options: Vec<QuestionOption> = parsed
+                    .options
+                    .iter()
+                    .map(|o| QuestionOption {
+                        label: o.label.clone(),
+                        description: o.description.clone(),
+                        requires_input: o.requires_input,
+                        input_placeholder: o.input_placeholder.clone(),
+                    })
+                    .collect();
                 let (tx, rx) = oneshot::channel::<AskUserAnswer>();
                 let q_state = app.state::<QuestionState>();
                 q_state.pending.lock().push(QuestionSlot {
@@ -452,8 +634,8 @@ pub async fn send_message(
                 // 把答案转成 tool result 文本
                 let content = format_ask_user_answer(&parsed.options, &answer);
                 turn_has_success = true; // 用户回答了就是成功
-                emitter.tool_result(&call.id, "ask_user", &content, false);
-                let tool_msg = build_tool_msg(turn, call, content, false);
+                emitter.tool_result(&call.id, "ask_user", &content, Vec::new(), false);
+                let tool_msg = build_tool_msg(turn, call, content, Vec::new(), false);
                 pending_persistence.push(tool_msg.clone());
                 conv_messages.push(tool_msg.clone());
                 continue;
@@ -463,8 +645,8 @@ pub async fn send_message(
                 Some(t) => t,
                 None => {
                     let content = format!("tool '{}' 未在 ToolRegistry 中注册", call.name);
-                    emitter.tool_result(&call.id, &call.name, &content, true);
-                    let tool_msg = build_tool_msg(turn, call, content, true);
+                    emitter.tool_result(&call.id, &call.name, &content, Vec::new(), true);
+                    let tool_msg = build_tool_msg(turn, call, content, Vec::new(), true);
                     pending_persistence.push(tool_msg.clone());
                     conv_messages.push(tool_msg.clone());
                     continue;
@@ -506,8 +688,8 @@ pub async fn send_message(
                 };
                 if !approved {
                     let content = "用户拒绝执行".to_string();
-                    emitter.tool_result(&call.id, &call.name, &content, true);
-                    let tool_msg = build_tool_msg(turn, call, content, true);
+                    emitter.tool_result(&call.id, &call.name, &content, Vec::new(), true);
+                    let tool_msg = build_tool_msg(turn, call, content, Vec::new(), true);
                     pending_persistence.push(tool_msg.clone());
                     conv_messages.push(tool_msg.clone());
                     continue;
@@ -520,8 +702,8 @@ pub async fn send_message(
                 Ok(v) => v,
                 Err(e) => {
                     let content = format!("参数解析失败: {}", e);
-                    emitter.tool_result(&call.id, &call.name, &content, true);
-                    let tool_msg = build_tool_msg(turn, call, content, true);
+                    emitter.tool_result(&call.id, &call.name, &content, Vec::new(), true);
+                    let tool_msg = build_tool_msg(turn, call, content, Vec::new(), true);
                     pending_persistence.push(tool_msg.clone());
                     conv_messages.push(tool_msg.clone());
                     continue;
@@ -531,19 +713,35 @@ pub async fn send_message(
                 approve_all_for_turn: approval.approve_all_for_turn.load(Ordering::Relaxed),
             };
             let result = tool.execute(args_value, ctx).await;
-            let (content, is_error) = match &result {
-                Ok(o) => (o.content.clone(), o.is_error),
-                Err(e) => (format!("执行失败: {}", e), true),
+            let (content, images, is_error) = match &result {
+                Ok(o) => (o.content.clone(), o.images.clone(), o.is_error),
+                Err(e) if call.name == "generate_image" => (
+                    format!(
+                        "执行失败: {}。生图工具已经完成内部重试，请不要在本轮再次调用 generate_image，直接向用户说明失败原因。",
+                        e
+                    ),
+                    Vec::new(),
+                    true,
+                ),
+                Err(e) => (format!("执行失败: {}", e), Vec::new(), true),
             };
-            info!("[send_message] turn {} tool '{}' 执行结果: is_error={}, content_len={}, id={}",
-                turn, call.name, is_error, content.len(), call.id);
+            info!(
+                "[send_message] turn {} tool '{}' 执行结果: is_error={}, content_len={}, id={}",
+                turn,
+                call.name,
+                is_error,
+                content.len(),
+                call.id
+            );
             if !is_error {
                 turn_has_success = true;
             }
-            emitter.tool_result(&call.id, &call.name, &content, is_error);
-            info!("[send_message] turn {} tool '{}' tool_result 事件已发射 (id={})",
-                turn, call.name, call.id);
-            let tool_msg = build_tool_msg(turn, call, content, is_error);
+            emitter.tool_result(&call.id, &call.name, &content, images.clone(), is_error);
+            info!(
+                "[send_message] turn {} tool '{}' tool_result 事件已发射 (id={})",
+                turn, call.name, call.id
+            );
+            let tool_msg = build_tool_msg(turn, call, content, images, is_error);
             pending_persistence.push(tool_msg.clone());
             conv_messages.push(tool_msg.clone());
         }
@@ -559,12 +757,10 @@ pub async fn send_message(
                 turn, consecutive_failed_turns, MAX_CONSECUTIVE_FAILED_TURNS
             );
             if consecutive_failed_turns >= MAX_CONSECUTIVE_FAILED_TURNS {
-                break Err(crate::providers::ApiError::NetworkError(
-                    format!(
-                        "连续 {} 轮工具调用全部失败,已中断对话",
-                        consecutive_failed_turns
-                    ),
-                ));
+                break Err(crate::providers::ApiError::NetworkError(format!(
+                    "连续 {} 轮工具调用全部失败,已中断对话",
+                    consecutive_failed_turns
+                )));
             }
         }
         // 继续下一轮:重新调 stream_chat(把 tool result 给 model)
@@ -601,7 +797,9 @@ pub async fn send_message(
 
     // 清理:取消通道 + 重置 "本次都允许" 标志(P5 一次性,下次 send_message 重新开始)
     state.sender.lock().take();
-    approval.approve_all_for_turn.store(false, Ordering::Relaxed);
+    approval
+        .approve_all_for_turn
+        .store(false, Ordering::Relaxed);
     Ok(())
 }
 
@@ -731,13 +929,20 @@ pub async fn answer_tool_question(
     let idx = match pending.iter().position(|s| s.id == id) {
         Some(i) => i,
         None => {
-            warn!("[answer_tool_question] 找不到 id={} 的 slot(可能已超时)", id);
+            warn!(
+                "[answer_tool_question] 找不到 id={} 的 slot(可能已超时)",
+                id
+            );
             return Err(format!("question slot {} not found", id));
         }
     };
     let mut slot = pending.remove(idx);
     if let Some(tx) = slot.tx.take() {
-        let _ = tx.send(AskUserAnswer { selected, inputs: inputs.unwrap_or_default(), custom });
+        let _ = tx.send(AskUserAnswer {
+            selected,
+            inputs: inputs.unwrap_or_default(),
+            custom,
+        });
     }
     Ok(())
 }
@@ -802,7 +1007,9 @@ pub async fn test_latency(
 ) -> Result<u32, String> {
     let pt = ProviderType::from_str(&provider_type.unwrap_or_default());
     let llm_provider = providers::create_provider(&pt);
-    llm_provider.test_latency(&base_url, &api_key, &model_id).await
+    llm_provider
+        .test_latency(&base_url, &api_key, &model_id)
+        .await
 }
 
 /// 加载历史消息命令
@@ -843,6 +1050,7 @@ mod tests {
             id: uuid::Uuid::new_v4().to_string(),
             role: MessageRole::User,
             content: content.to_string(),
+            images: Vec::new(),
             blocks: None,
             model_id: None,
             created_at: 0,
@@ -934,5 +1142,33 @@ mod tests {
         let msgs = vec![make_msg("solo")];
         assert_eq!(compute_window_start(&msgs, 1), 0);
         assert_eq!(compute_window_start(&msgs, 0), 0); // kept anyway
+    }
+
+    #[tokio::test]
+    async fn generated_image_data_url_decodes_and_rejects_invalid_data() {
+        let bytes = generated_image_bytes("data:image/png;base64,aGVsbG8=", "image/png")
+            .await
+            .unwrap();
+        assert_eq!(bytes, b"hello");
+
+        assert!(
+            generated_image_bytes("data:image/png;base64,***", "image/png")
+                .await
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn generated_image_download_path_avoids_overwriting_existing_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = unique_download_path(directory.path(), "png");
+        std::fs::write(&first, b"existing").unwrap();
+        let second = unique_download_path(directory.path(), "png");
+
+        assert_ne!(first, second);
+        assert_eq!(
+            second.extension().and_then(|value| value.to_str()),
+            Some("png")
+        );
     }
 }
