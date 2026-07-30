@@ -53,10 +53,10 @@ impl OpenAICompatibleProvider {
     ///
     /// 与 Anthropic 转换器几乎一致（都是 role + content 数组）
     fn convert_messages(messages: &[Message]) -> Vec<Value> {
-        // 在最前面注入 Buddy 系统提示词,引导模型使用 ask_user tool
+        // 在最前面注入 Buddy 系统提示词，并补充本次请求的本地时间
         let mut result: Vec<Value> = vec![json!({
             "role": "system",
-            "content": super::BUDDY_SYSTEM_PROMPT,
+            "content": super::current_system_prompt(),
         })];
         // 只有参数完整、且存在对应 tool_result 的调用才允许进入下一次请求。
         // 主动停止流式输出时，assistant 中可能留下半截 arguments；MiniMax 会直接以

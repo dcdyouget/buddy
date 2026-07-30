@@ -487,6 +487,7 @@ pub fn builtin_tools(allowed_paths: Vec<String>) -> Vec<std::sync::Arc<dyn Tool>
         Arc::new(AppendFileTool { allowed_paths: allowed_paths.clone() }),
         Arc::new(super::file_tools::EditFileTool { allowed_paths }),
         Arc::new(AskUserTool),
+        Arc::new(super::websearch::WebSearchTool),
     ]
 }
 
@@ -765,7 +766,7 @@ mod tests {
         let tools = builtin_tools(vec![]);
         for t in &tools {
             match t.name() {
-                "read_file" | "list_directory" | "search_files" | "ask_user" => {
+                "read_file" | "list_directory" | "search_files" | "ask_user" | "websearch" => {
                     assert_eq!(t.safety(), ToolSafety::ReadOnly)
                 }
                 "create_file" | "overwrite_file" | "append_file" | "edit_file" => {

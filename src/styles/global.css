@@ -933,6 +933,14 @@ html[data-platform="windows"] #root {
   padding: var(--space-2) var(--space-4) !important;
 }
 
+.message-row.is-assistant.has-continuation {
+  padding-bottom: 0 !important;
+}
+
+.message-row.is-assistant.is-continuation {
+  padding-top: var(--space-1) !important;
+}
+
 .message-bubble {
   cursor: default;
 }
@@ -953,6 +961,14 @@ html[data-platform="windows"] #root {
 
 .message-row.is-assistant .message-bubble {
   padding: var(--space-1) 0 !important;
+}
+
+.message-row.is-assistant.has-continuation .message-bubble {
+  padding-bottom: 0 !important;
+}
+
+.message-row.is-assistant.is-continuation .message-bubble {
+  padding-top: 0 !important;
 }
 
 .assistant-content-flow {
@@ -1409,6 +1425,248 @@ html[data-platform="windows"] #root {
     opacity: 1;
     transform: translateY(calc(var(--space-1) / -2));
   }
+}
+
+/* ── Web Search Block ── */
+.websearch-section {
+  position: relative;
+  isolation: isolate;
+  width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid var(--border-default);
+  border-left: 2px solid var(--tool-ui-accent);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  background: var(--panel-surface);
+}
+
+.websearch-section-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 28px;
+  padding: var(--space-1) var(--space-2);
+  border: none;
+  box-sizing: border-box;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-sans);
+  transition: background var(--duration-fast) var(--ease-standard);
+}
+
+.websearch-section-header:hover {
+  background: var(--bg-sunken);
+}
+
+.websearch-section-header:focus-visible {
+  outline: none;
+  box-shadow: inset var(--shadow-focus);
+}
+
+.websearch-section-icon {
+  flex-shrink: 0;
+  color: var(--tool-ui-accent);
+}
+
+.websearch-section-label {
+  flex-shrink: 0;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.websearch-section-query {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.websearch-section-query::before {
+  content: '·';
+  margin-right: var(--space-2);
+}
+
+.websearch-section-chevron {
+  width: var(--space-4);
+  height: var(--space-4);
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+.websearch-section-body {
+  max-height: calc(var(--space-12) * 7);
+  padding: var(--space-3);
+  overflow-y: auto;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  background: color-mix(in srgb, var(--bg-sunken) 62%, transparent);
+}
+
+.websearch-section-meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.websearch-section-meta-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: calc(var(--space-12) + var(--space-2)) minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: baseline;
+  font-size: var(--font-size-xs);
+}
+
+.websearch-section-meta-row > span {
+  color: var(--text-tertiary);
+  font-weight: 600;
+}
+
+.websearch-section-meta-row > strong {
+  overflow-wrap: break-word;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.websearch-section-note {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-base);
+}
+
+.websearch-results {
+  min-width: 0;
+}
+
+.websearch-results-title {
+  margin-bottom: var(--space-2);
+  color: var(--text-tertiary);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+}
+
+.websearch-results-list {
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  list-style: none;
+}
+
+.websearch-result-item {
+  min-width: 0;
+  padding: var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--panel-surface);
+}
+
+.websearch-result-heading {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.websearch-result-rank {
+  width: var(--space-5);
+  height: var(--space-5);
+  border-radius: var(--radius-full);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--tool-ui-accent-strong);
+  background: var(--tool-ui-accent-soft);
+  font: 600 var(--font-size-xs)/1 var(--font-mono);
+}
+
+.websearch-result-link,
+.websearch-result-title {
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  line-height: var(--line-height-base);
+}
+
+.websearch-result-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--tool-ui-accent-strong);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.websearch-result-link:hover {
+  color: var(--tool-ui-accent);
+  text-decoration: underline;
+}
+
+.websearch-result-link svg {
+  flex-shrink: 0;
+}
+
+.websearch-result-snippet {
+  margin: var(--space-1) 0 0 calc(var(--space-5) + var(--space-2));
+  overflow: hidden;
+  color: var(--text-muted);
+  display: -webkit-box;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-base);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.websearch-result-fetch {
+  min-height: var(--space-5);
+  margin: var(--space-2) 0 0 calc(var(--space-5) + var(--space-2));
+  padding: 1px var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-tertiary);
+  background: var(--bg-elevated);
+  font-size: var(--font-size-xs);
+  line-height: 1;
+}
+
+.websearch-result-fetch.is-fetched {
+  border-color: color-mix(in srgb, var(--state-success) 24%, transparent);
+  color: var(--state-success);
+}
+
+.websearch-result-fetch.is-failed {
+  border-color: color-mix(in srgb, var(--state-warning) 24%, transparent);
+  color: var(--state-warning);
+}
+
+.websearch-section-empty {
+  padding: var(--space-3);
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--text-tertiary);
+  font-size: var(--font-size-xs);
+  text-align: center;
+}
+
+.websearch-section.is-unavailable .websearch-section-icon {
+  color: var(--text-muted);
 }
 
 /* ── Spinner (用于 ToolSection "执行中" 图标) ── */

@@ -33,6 +33,31 @@ beforeEach(() => {
 });
 
 describe('chatStore think 流式解析', () => {
+  it('将内容出现前的工具调用记录在第一个 block 之前', () => {
+    useChatStore
+      .getState()
+      .handleToolCallStart('call-before-content', 'websearch', 0);
+
+    expect(
+      useChatStore.getState().activeToolCalls['call-before-content']
+        .insertAfterBlockIndex,
+    ).toBe(-1);
+
+    useChatStore.setState({
+      streamingBlocks: [
+        { type: 'thinking', content: '后续思考', is_open: true },
+      ],
+    });
+    useChatStore
+      .getState()
+      .handleToolCallStart('call-after-thinking', 'websearch', 0);
+
+    expect(
+      useChatStore.getState().activeToolCalls['call-after-thinking']
+        .insertAfterBlockIndex,
+    ).toBe(0);
+  });
+
   it('完整收到开始标签后立即进入思考块，无需等待闭合标签', () => {
     const store = useChatStore.getState();
 

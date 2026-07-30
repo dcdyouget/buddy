@@ -77,6 +77,7 @@ export interface ToolCall {
   is_error_result?: boolean;
   /**
    * 内联位置：tool_call 应当插入到该 block 索引之后。
+   * - `-1` 表示第一个 block 之前
    * - 由 handleToolCallStart 在事件到来时记录"最后一个非空 block 的索引"
    * - 渲染时 AssistantContent 据此把 ToolSection 插在对应位置而非堆在末尾
    * - 旧消息(从磁盘加载)无此字段,渲染时回退到最后一个 block 之后

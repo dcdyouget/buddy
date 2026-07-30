@@ -28,6 +28,7 @@ pub mod openai_compatible;  // 声明并公开 openai_compatible 子模块（位
 use crate::models::{CompatConfig, Message, ModelInfo};  // 引用本 crate 的 models 模块
 use crate::streaming::{StreamEventEmitter, StreamOutcome};  // 引用本 crate 的 streaming 模块
 use crate::tools::ToolDefinition;                      // 引用本 crate 的 tools 模块
+use chrono::{DateTime, FixedOffset, Local};            // 当前本地时间与 UTC 偏移
 use std::future::Future;                               // 标准库的 Future trait
 use tokio::sync::watch;                                // tokio 异步运行时的 watch channel
 
@@ -236,8 +237,8 @@ pub fn create_provider(provider_type: &ProviderType) -> Box<dyn LlmProvider> {
         ProviderType::Anthropic => Box::new(anthropic::AnthropicProvider),
     }
 }
-/// Buddy 系统提示词 —— 注入到所有对话的最前面。
-/// 规则保持短小且与 ask_user 工具定义一致，避免每轮工具循环重复消耗过多上下文。
+/// Buddy 系统提示词基础规则 —— 注入到所有对话的最前面。
+/// 当前时间由 `current_system_prompt` 在请求模型时动态补充。
 pub const BUDDY_SYSTEM_PROMPT: &str = r#"You are Buddy, an AI assistant with access to local tools. Reply in the user's language, be direct and accurate.
 
 Use only the tools provided in this request. Never invent tool capabilities, file contents, command output, or execution results.
@@ -246,4 +247,43 @@ Use `ask_user` only when the user must choose between 2-4 materially different, 
 
 When calling `ask_user`, write its question, header, options, and input placeholder in the user's language. Keep the header short, options concise and mutually exclusive. Set `requires_input` when an option needs a path, URL, name, or other value.
 
+When you use `websearch`, ground the answer in the returned materials, add source links near the claims they support when practical, and end the final answer with a concise source list (use `数据来源` for Chinese replies). Format every source as a Markdown link such as `- [Source title](https://example.com/page)`. Never expose a bare URL, repeat the URL beside the link, or list a result you did not use.
+
 For writes, use the appropriate file tool; the app handles approval. Do not claim that an operation succeeded until its tool result confirms it."#;
+
+/// 使用指定时间生成完整系统提示词，便于测试并保证相对时间有明确基准。
+pub fn build_system_prompt(now: DateTime<FixedOffset>) -> String {
+    format!(
+        "{BUDDY_SYSTEM_PROMPT}\n\nCurrent local date and time: {}.\nTreat this timestamp as the authoritative reference for relative dates such as \"today\", \"now\", and \"latest\". For time-sensitive web searches, include the explicit date when it improves accuracy.",
+        now.format("%Y-%m-%d %H:%M:%S %:z")
+    )
+}
+
+/// 在每次请求模型时读取本机当前时间，避免应用长时间运行后时间信息过期。
+pub fn current_system_prompt() -> String {
+    build_system_prompt(Local::now().fixed_offset())
+}
+
+#[cfg(test)]
+mod system_prompt_tests {
+    use super::build_system_prompt;
+    use chrono::{FixedOffset, TimeZone};
+
+    #[test]
+    fn system_prompt_includes_explicit_local_time() {
+        let offset = FixedOffset::east_opt(8 * 60 * 60).unwrap();
+        let now = offset
+            .with_ymd_and_hms(2026, 7, 30, 14, 5, 9)
+            .single()
+            .unwrap();
+
+        let prompt = build_system_prompt(now);
+
+        assert!(prompt.contains("2026-07-30 14:05:09 +08:00"));
+        assert!(prompt.contains("\"today\", \"now\", and \"latest\""));
+        assert!(prompt.contains("time-sensitive web searches"));
+        assert!(prompt.contains("use `数据来源` for Chinese replies"));
+        assert!(prompt.contains("[Source title](https://example.com/page)"));
+        assert!(prompt.contains("Never expose a bare URL"));
+    }
+}
