@@ -154,12 +154,13 @@ export interface Message {
   parent_message_id?: string;
 }
 
-/** 聊天中的图片附件，使用 Data URL 便于本地持久化和协议转换 */
+/** 聊天中的图片附件；历史记录只保存本地路径，Data URL 仅用于导入阶段。 */
 export interface ImageAttachment {
   id: string;
   name: string;
   media_type: string;
-  data_url: string;
+  path?: string;
+  data_url?: string;
 }
 
 /** 流式事件类型（对应 Rust StreamEvent） */

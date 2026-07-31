@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, fireEvent, render } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { Message, ToolCall } from '@/types';
@@ -108,5 +108,33 @@ describe('MessageBubble 图片消息', () => {
       'data:image/png;base64,aGVsbG8=',
     );
     expect(getByText('请描述这张图片')).toBeTruthy();
+  });
+
+  it('本地图片路径失效时显示已删除状态和原路径', () => {
+    const message: Message = {
+      id: 'user-missing-image',
+      role: 'user',
+      content: '',
+      images: [
+        {
+          id: 'image-missing',
+          name: 'missing.png',
+          media_type: 'image/png',
+          path: '/Users/test/Buddy/attachments/missing.png',
+        },
+      ],
+      model_id: null,
+      created_at: 0,
+    };
+
+    const { getByAltText, getByText } = render(
+      <MessageBubble message={message} />,
+    );
+    fireEvent.error(getByAltText('missing.png'));
+
+    expect(getByText('图片已删除')).toBeTruthy();
+    expect(
+      getByText('/Users/test/Buddy/attachments/missing.png'),
+    ).toBeTruthy();
   });
 });

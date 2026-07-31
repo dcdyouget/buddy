@@ -320,6 +320,7 @@ fn image_attachment(
         ),
         name: format!("generated-{}.{}", index + 1, extension),
         media_type: media_type.to_string(),
+        path: String::new(),
         data_url,
     }
 }

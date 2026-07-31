@@ -69,13 +69,16 @@ pub struct ToolCall {
 
 /// 消息携带的图片附件：用户消息用于模型输入，tool 消息用于展示生成结果。
 ///
-/// `data_url` 统一保存为 `data:<media_type>;base64,<data>`，Provider 适配层
-/// 再转换成 OpenAI 或 Anthropic 各自的图片内容块。
+/// 新消息只持久化 `path`。`data_url` 仅用于 IPC 导入、Provider 请求及兼容迁移
+/// 旧聊天记录，写盘前必须清空，避免 Base64 膨胀消息分块。
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ImageAttachment {
     pub id: String,
     pub name: String,
     pub media_type: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub path: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub data_url: String,
 }
 
@@ -157,5 +160,34 @@ mod tests {
 
         assert!(!model.supports_vision);
         assert!(!model.supports_image_generation);
+    }
+
+    #[test]
+    fn path_image_attachment_does_not_serialize_empty_base64() {
+        let image = ImageAttachment {
+            id: "image-1".to_string(),
+            name: "sample.png".to_string(),
+            media_type: "image/png".to_string(),
+            path: "/tmp/attachments/sample.png".to_string(),
+            data_url: String::new(),
+        };
+
+        let value = serde_json::to_value(image).unwrap();
+        assert_eq!(value["path"], "/tmp/attachments/sample.png");
+        assert!(value.get("data_url").is_none());
+    }
+
+    #[test]
+    fn legacy_base64_image_attachment_still_deserializes() {
+        let image: ImageAttachment = serde_json::from_value(serde_json::json!({
+            "id": "legacy",
+            "name": "legacy.png",
+            "media_type": "image/png",
+            "data_url": "data:image/png;base64,aGVsbG8="
+        }))
+        .unwrap();
+
+        assert!(image.path.is_empty());
+        assert!(image.data_url.starts_with("data:image/png;base64,"));
     }
 }

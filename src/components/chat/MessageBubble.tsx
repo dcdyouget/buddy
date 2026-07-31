@@ -5,6 +5,7 @@ import { MessageActions } from './MessageActions';
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { ThinkSection } from './ThinkSection';
 import { ToolSection } from './ToolSection';
+import { AttachmentImage } from './AttachmentImage';
 
 /**
  * MessageBubble 组件的 Props
@@ -249,11 +250,10 @@ export const MessageBubble = memo(function MessageBubble({
                 }}
               >
                 {message.images.map((image) => (
-                  <img
+                  <AttachmentImage
                     key={image.id}
-                    src={image.data_url}
+                    image={image}
                     alt={image.name}
-                    title={image.name}
                     style={{
                       width: '100%',
                       maxWidth: 260,
