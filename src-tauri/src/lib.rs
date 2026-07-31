@@ -44,6 +44,13 @@ pub fn run() {
             current: Mutex::new(None),
         })
         .setup(|app| {
+            match storage::migrate_legacy_image_attachments(app.handle()) {
+                Ok(count) if count > 0 => {
+                    log::info!("已将 {} 张旧版 Base64 图片迁移为本地附件", count);
+                }
+                Ok(_) => {}
+                Err(error) => log::warn!("迁移旧版图片附件失败：{}", error),
+            }
             // 加载配置
             let config =
                 storage::get_config(app.handle()).unwrap_or_else(|_| models::AppConfig::default());
@@ -81,6 +88,7 @@ pub fn run() {
             commands::load_messages,
             commands::get_message_count,
             commands::save_message,
+            commands::save_chat_image,
             commands::download_generated_image,
         ])
         .on_window_event(|window, event| {

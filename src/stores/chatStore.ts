@@ -75,7 +75,7 @@ interface ChatState {
 
   // ── 操作 ──
   setDraftInput: (text: string) => void;
-  addDraftImages: (images: ImageAttachment[]) => void;
+  addDraftImages: (images: ImageAttachment[]) => Promise<void>;
   removeDraftImage: (id: string) => void;
   clearDraftImages: () => void;
   sendMessage: (content: string, modelId: string) => Promise<void>;
@@ -383,10 +383,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setDraftInput: (text: string) => {
     set({ draftInput: text });
   },
-  addDraftImages: (images: ImageAttachment[]) => {
-    set((state) => ({
-      draftImages: [...(state.draftImages || []), ...images],
-    }));
+  addDraftImages: async (images: ImageAttachment[]) => {
+    try {
+      const storedImages = isBrowser
+        ? images
+        : await Promise.all(
+            images.map(async (image) => {
+              const { saveChatImage } = await import('@/api/chat');
+              return saveChatImage(image);
+            }),
+          );
+      set((state) => ({
+        draftImages: [...(state.draftImages || []), ...storedImages],
+      }));
+    } catch (error) {
+      set({
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   },
   removeDraftImage: (id: string) => {
     set((state) => ({

@@ -1018,6 +1018,7 @@ mod tests {
                 id: "img1".to_string(),
                 name: "sample.png".to_string(),
                 media_type: "image/png".to_string(),
+                path: String::new(),
                 data_url: "data:image/png;base64,aGVsbG8=".to_string(),
             }],
             blocks: None,

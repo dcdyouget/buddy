@@ -130,12 +130,17 @@ fn validate_image_attachments(images: &[crate::models::ImageAttachment]) -> Resu
         if !SUPPORTED_MEDIA_TYPES.contains(&image.media_type.as_str()) {
             return Err(format!("不支持的图片格式：{}", image.media_type));
         }
-        let expected_prefix = format!("data:{};base64,", image.media_type);
-        if !image.data_url.starts_with(&expected_prefix) {
-            return Err(format!("图片数据格式无效：{}", image.name));
+        if image.path.is_empty() && image.data_url.is_empty() {
+            return Err(format!("图片缺少本地路径：{}", image.name));
         }
-        if image.data_url.len() > MAX_DATA_URL_BYTES {
-            return Err(format!("图片超过 5 MB 限制：{}", image.name));
+        if !image.data_url.is_empty() {
+            let expected_prefix = format!("data:{};base64,", image.media_type);
+            if !image.data_url.starts_with(&expected_prefix) {
+                return Err(format!("图片数据格式无效：{}", image.name));
+            }
+            if image.data_url.len() > MAX_DATA_URL_BYTES {
+                return Err(format!("图片超过 5 MB 限制：{}", image.name));
+            }
         }
     }
     Ok(())
@@ -211,16 +216,139 @@ async fn generated_image_bytes(data_url: &str, media_type: &str) -> Result<Vec<u
     Ok(bytes.to_vec())
 }
 
+fn stored_image_bytes(
+    app: &tauri::AppHandle,
+    image: &crate::models::ImageAttachment,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    let attachments_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("无法获取图片目录：{error}"))?
+        .join("attachments");
+    let canonical_root = attachments_dir
+        .canonicalize()
+        .map_err(|_| "图片附件目录不存在".to_string())?;
+    let path = PathBuf::from(&image.path);
+    let canonical_path = path
+        .canonicalize()
+        .map_err(|_| format!("图片已删除：{}", image.path))?;
+    if !canonical_path.starts_with(&canonical_root) {
+        return Err("图片路径不在 Buddy 附件目录中".to_string());
+    }
+    let metadata =
+        std::fs::metadata(&canonical_path).map_err(|_| format!("图片已删除：{}", image.path))?;
+    if metadata.len() > max_bytes as u64 {
+        return Err(format!("图片文件过大：{}", image.name));
+    }
+    std::fs::read(&canonical_path).map_err(|error| format!("读取图片失败：{error}"))
+}
+
+fn hydrate_image_for_provider(
+    app: &tauri::AppHandle,
+    image: &mut crate::models::ImageAttachment,
+) -> Result<(), String> {
+    if !image.data_url.is_empty() {
+        return Ok(());
+    }
+    let bytes = stored_image_bytes(app, image, 5 * 1024 * 1024)?;
+    image.data_url = format!(
+        "data:{};base64,{}",
+        image.media_type,
+        BASE64_STANDARD.encode(bytes)
+    );
+    Ok(())
+}
+
+/// Provider API 是无状态的，但无需在每次新提问时重复上传所有历史图片。
+/// 当前消息的图片会临时读取为 Base64；历史图片只保留其之前产生的文本上下文。
+fn prepare_images_for_provider(
+    app: &tauri::AppHandle,
+    messages: &mut [Message],
+) -> Result<(), String> {
+    let current_user_index = messages
+        .iter()
+        .rposition(|message| message.role == MessageRole::User);
+    for (index, message) in messages.iter_mut().enumerate() {
+        if message.role != MessageRole::User || message.images.is_empty() {
+            continue;
+        }
+        if Some(index) == current_user_index {
+            for image in &mut message.images {
+                hydrate_image_for_provider(app, image)?;
+            }
+        } else {
+            message.images.clear();
+        }
+    }
+    Ok(())
+}
+
+async fn persist_tool_images(
+    app: &tauri::AppHandle,
+    images: Vec<crate::models::ImageAttachment>,
+) -> Vec<crate::models::ImageAttachment> {
+    let mut stored = Vec::with_capacity(images.len());
+    for image in images {
+        if !image.path.is_empty() {
+            stored.push(image);
+            continue;
+        }
+        match generated_image_bytes(&image.data_url, &image.media_type).await {
+            Ok(bytes) if !bytes.is_empty() => match storage::store_image_bytes(
+                app,
+                &image.name,
+                &image.media_type,
+                &bytes,
+                "generated",
+            ) {
+                Ok(attachment) => stored.push(attachment),
+                Err(error) => warn!("保存生成图片失败：{}", error),
+            },
+            Ok(_) => warn!("生成图片内容为空：{}", image.name),
+            Err(error) => {
+                warn!("缓存生成图片失败：{}", error);
+                // HTTPS 地址本身很小，可作为兼容兜底；Base64 绝不再写入聊天记录。
+                if image.data_url.starts_with("https://") {
+                    stored.push(image);
+                }
+            }
+        }
+    }
+    stored
+}
+
+/// 将用户选择的图片复制到 Buddy 应用数据目录。
+#[tauri::command]
+pub async fn save_chat_image(
+    app: tauri::AppHandle,
+    name: String,
+    media_type: String,
+    data_url: String,
+) -> Result<crate::models::ImageAttachment, String> {
+    storage::store_image_data_url(
+        &app,
+        &name,
+        &media_type,
+        &data_url,
+        5 * 1024 * 1024,
+        "upload",
+    )
+}
+
 /// 将生图工具的结果保存到系统下载目录。
 #[tauri::command]
 pub async fn download_generated_image(
     app: tauri::AppHandle,
-    data_url: String,
-    media_type: String,
+    image: crate::models::ImageAttachment,
 ) -> Result<String, String> {
-    let extension =
-        image_extension(&media_type).ok_or_else(|| format!("不支持的图片格式：{media_type}"))?;
-    let bytes = generated_image_bytes(&data_url, &media_type).await?;
+    let extension = image_extension(&image.media_type)
+        .ok_or_else(|| format!("不支持的图片格式：{}", image.media_type))?;
+    let bytes = if image.path.is_empty() {
+        generated_image_bytes(&image.data_url, &image.media_type).await?
+    } else {
+        stored_image_bytes(&app, &image, MAX_GENERATED_IMAGE_BYTES)?
+    };
     if bytes.is_empty() {
         return Err("生成图片内容为空".to_string());
     }
@@ -437,6 +565,8 @@ pub async fn send_message(
         for message in &mut conv_messages {
             message.images.clear();
         }
+    } else {
+        prepare_images_for_provider(&app, &mut conv_messages)?;
     }
 
     // 每次 send_message 开始时重置"本次都允许"标志，防止上次被中断时残留
@@ -713,7 +843,7 @@ pub async fn send_message(
                 approve_all_for_turn: approval.approve_all_for_turn.load(Ordering::Relaxed),
             };
             let result = tool.execute(args_value, ctx).await;
-            let (content, images, is_error) = match &result {
+            let (content, raw_images, is_error) = match &result {
                 Ok(o) => (o.content.clone(), o.images.clone(), o.is_error),
                 Err(e) if call.name == "generate_image" => (
                     format!(
@@ -725,6 +855,7 @@ pub async fn send_message(
                 ),
                 Err(e) => (format!("执行失败: {}", e), Vec::new(), true),
             };
+            let images = persist_tool_images(&app, raw_images).await;
             info!(
                 "[send_message] turn {} tool '{}' 执行结果: is_error={}, content_len={}, id={}",
                 turn,

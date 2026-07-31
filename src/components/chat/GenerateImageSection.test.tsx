@@ -80,8 +80,12 @@ describe('GenerateImageSection', () => {
 
     await waitFor(() => expect(getByText('已下载')).toBeTruthy());
     expect(invoke).toHaveBeenCalledWith('download_generated_image', {
-      dataUrl: 'data:image/png;base64,aGVsbG8=',
-      mediaType: 'image/png',
+      image: {
+        id: 'generated-1',
+        name: 'generated-1.png',
+        media_type: 'image/png',
+        data_url: 'data:image/png;base64,aGVsbG8=',
+      },
     });
   });
 

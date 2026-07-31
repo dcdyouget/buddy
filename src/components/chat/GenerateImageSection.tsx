@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 
 import type { ImageAttachment, ToolCall } from '@/types';
+import { AttachmentImage } from './AttachmentImage';
 
 interface GenerateImageSectionProps {
   toolCall: ToolCall;
@@ -74,8 +75,7 @@ export const GenerateImageSection = memo(function GenerateImageSection({
     }));
     try {
       const savedPath = await invoke<string>('download_generated_image', {
-        dataUrl: image.data_url,
-        mediaType: image.media_type,
+        image,
       });
       setDownloadStates((previous) => ({
         ...previous,
@@ -157,8 +157,8 @@ export const GenerateImageSection = memo(function GenerateImageSection({
             const downloadState = downloadStates[image.id];
             return (
               <figure className="generate-image-card" key={image.id}>
-                <img
-                  src={image.data_url}
+                <AttachmentImage
+                  image={image}
                   alt={prompt || image.name || '模型生成的图片'}
                   loading="lazy"
                 />

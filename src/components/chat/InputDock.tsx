@@ -1,6 +1,7 @@
 import {
   useRef,
   useEffect,
+  useState,
   type ChangeEvent,
   type KeyboardEvent,
   type PointerEvent,
@@ -8,6 +9,7 @@ import {
 import { Bot, ImagePlus, Send, Settings, Square, X } from 'lucide-react';
 import { IconButton } from '@/components/shared/IconButton';
 import { ClearButton } from './ClearButton';
+import { AttachmentImage } from './AttachmentImage';
 import type { ImageAttachment, ModelInfo } from '@/types';
 
 const MAX_IMAGE_COUNT = 4;
@@ -37,7 +39,7 @@ interface InputDockProps {
   draftInput: string;
   draftImages: ImageAttachment[];
   onDraftChange: (text: string) => void;
-  onAddImages: (images: ImageAttachment[]) => void;
+  onAddImages: (images: ImageAttachment[]) => void | Promise<void>;
   onRemoveImage: (id: string) => void;
   onAttachmentError?: (message: string) => void;
   onSend: () => void;
@@ -79,6 +81,7 @@ export function InputDock({
 }: InputDockProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const [isSavingImages, setIsSavingImages] = useState(false);
   // 保持最新的 isStreaming 值供事件回调使用（避免闭包过期）
   const isStreamingRef = useRef(isStreaming);
   isStreamingRef.current = isStreaming;
@@ -121,7 +124,9 @@ export function InputDock({
   const supportsVision = selectedModel?.supports_vision === true;
   const hasUnsupportedImages = draftImages.length > 0 && !supportsVision;
   const canSend =
-    !hasUnsupportedImages && (hasText || (supportsVision && draftImages.length > 0));
+    !isSavingImages &&
+    !hasUnsupportedImages &&
+    (hasText || (supportsVision && draftImages.length > 0));
 
   const handleImageSelection = async (
     event: ChangeEvent<HTMLInputElement>,
@@ -187,7 +192,14 @@ export function InputDock({
       onAttachmentError?.(String(error));
       return [];
     });
-    if (images.length > 0) onAddImages(images);
+    if (images.length > 0) {
+      setIsSavingImages(true);
+      try {
+        await onAddImages(images);
+      } finally {
+        setIsSavingImages(false);
+      }
+    }
   };
 
   /**
@@ -275,8 +287,8 @@ export function InputDock({
                 background: 'var(--bg-sunken)',
               }}
             >
-              <img
-                src={image.data_url}
+              <AttachmentImage
+                image={image}
                 alt={image.name}
                 style={{ width: '100%', height: '100%', objectFit: 'cover' }}
               />
@@ -311,6 +323,17 @@ export function InputDock({
             </span>
           )}
         </div>
+      )}
+      {!isStreaming && isSavingImages && (
+        <span
+          style={{
+            width: '100%',
+            color: 'var(--text-secondary)',
+            fontSize: '11px',
+          }}
+        >
+          正在保存图片…
+        </span>
       )}
       {isStreaming ? (
         /* 流式生成状态：显示模型名称和生成进度 + 停止按钮 */
@@ -397,7 +420,7 @@ export function InputDock({
                 size={24}
                 iconSize={14}
                 title="添加图片"
-                disabled={draftImages.length >= MAX_IMAGE_COUNT}
+                disabled={isSavingImages || draftImages.length >= MAX_IMAGE_COUNT}
               />
             </>
           )}

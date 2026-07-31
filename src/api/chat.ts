@@ -6,7 +6,7 @@
  */
 
 import { isBrowser } from '@/utils/mock';
-import type { Message } from '@/types';
+import type { ImageAttachment, Message } from '@/types';
 
 async function invokeBackend<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (isBrowser) return undefined as T;
@@ -22,6 +22,17 @@ export async function sendMessage(messages: Message[], modelId: string): Promise
 /** 停止当前正在进行的流式生成 */
 export async function stopGeneration(): Promise<void> {
   await invokeBackend('stop_generation');
+}
+
+/** 将图片复制到应用数据目录，返回只包含本地路径的附件。 */
+export async function saveChatImage(
+  image: ImageAttachment,
+): Promise<ImageAttachment> {
+  return invokeBackend('save_chat_image', {
+    name: image.name,
+    mediaType: image.media_type,
+    dataUrl: image.data_url,
+  });
 }
 
 /**

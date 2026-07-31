@@ -6,9 +6,11 @@
 // 3. Message 分块存储 —— 每条消息追加到 chunk 文件，每 100 条自动切新块
 
 use crate::models::*;
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use log::warn;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::Manager;
 
 /// 每个分块文件的最大消息数量
@@ -97,6 +99,116 @@ fn write_manifest(dir: &PathBuf, manifest: &Manifest) -> Result<(), String> {
 /// 时产生读写竞态（两个任务同时读 chunk → 各追加一条 → 后写覆盖先写 → 丢消息）。
 /// `std::sync::Mutex` 在 `spawn_blocking` 线程中阻塞是预期行为。
 static APPEND_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static ATTACHMENT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+fn image_extension(media_type: &str) -> Option<&'static str> {
+    match media_type {
+        "image/jpeg" => Some("jpg"),
+        "image/png" => Some("png"),
+        "image/gif" => Some("gif"),
+        "image/webp" => Some("webp"),
+        _ => None,
+    }
+}
+
+/// 将图片保存到应用数据目录，聊天消息仅引用返回的绝对路径。
+pub fn store_image_bytes(
+    app: &tauri::AppHandle,
+    name: &str,
+    media_type: &str,
+    bytes: &[u8],
+    id_prefix: &str,
+) -> Result<ImageAttachment, String> {
+    let extension =
+        image_extension(media_type).ok_or_else(|| format!("不支持的图片格式：{media_type}"))?;
+    let dir = ensure_data_dir(app)?.join("attachments");
+    fs::create_dir_all(&dir).map_err(|e| format!("无法创建图片附件目录: {e}"))?;
+
+    let sequence = ATTACHMENT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let id = format!(
+        "{}-{}-{}",
+        id_prefix,
+        chrono::Utc::now().timestamp_millis(),
+        sequence
+    );
+    let path = dir.join(format!("{id}.{extension}"));
+    fs::write(&path, bytes).map_err(|e| format!("保存图片附件失败: {e}"))?;
+
+    Ok(ImageAttachment {
+        id,
+        name: name.to_string(),
+        media_type: media_type.to_string(),
+        path: path.to_string_lossy().into_owned(),
+        data_url: String::new(),
+    })
+}
+
+/// 解码导入阶段的 Data URL，并立即转换为路径附件。
+pub fn store_image_data_url(
+    app: &tauri::AppHandle,
+    name: &str,
+    media_type: &str,
+    data_url: &str,
+    max_bytes: usize,
+    id_prefix: &str,
+) -> Result<ImageAttachment, String> {
+    let prefix = format!("data:{media_type};base64,");
+    let encoded = data_url
+        .strip_prefix(&prefix)
+        .ok_or_else(|| format!("图片数据格式无效：{name}"))?;
+    let bytes = BASE64_STANDARD
+        .decode(encoded)
+        .map_err(|_| format!("图片 Base64 数据无效：{name}"))?;
+    if bytes.len() > max_bytes {
+        return Err(format!("图片文件过大：{name}"));
+    }
+    store_image_bytes(app, name, media_type, &bytes, id_prefix)
+}
+
+/// 将旧版聊天记录中的 Base64 图片迁移为本地附件文件并重写分块。
+pub fn migrate_legacy_image_attachments(app: &tauri::AppHandle) -> Result<usize, String> {
+    let _guard = APPEND_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let dir = ensure_data_dir(app)?;
+    let manifest = read_manifest(&dir);
+    let mut migrated = 0;
+
+    for meta in &manifest.chunks {
+        let mut chunk = read_chunk(&dir, &meta.file)?;
+        let mut changed = false;
+        for message in &mut chunk.messages {
+            for image in &mut message.images {
+                if !image.path.is_empty() || !image.data_url.starts_with("data:") {
+                    continue;
+                }
+                match store_image_data_url(
+                    app,
+                    &image.name,
+                    &image.media_type,
+                    &image.data_url,
+                    25 * 1024 * 1024,
+                    "migrated",
+                ) {
+                    Ok(stored) => {
+                        image.id = stored.id;
+                        image.path = stored.path;
+                        image.data_url.clear();
+                        migrated += 1;
+                        changed = true;
+                    }
+                    Err(error) => warn!(
+                        "[storage::migrate_legacy_image_attachments] 跳过 {}: {}",
+                        image.name, error
+                    ),
+                }
+            }
+        }
+        if changed {
+            write_chunk(&dir, &meta.file, &chunk)?;
+        }
+    }
+
+    Ok(migrated)
+}
 
 /// 追加一条新消息到分块存储
 ///
