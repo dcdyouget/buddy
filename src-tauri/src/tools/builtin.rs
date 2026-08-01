@@ -59,8 +59,7 @@ pub(super) fn check_write_allowed_with_symlinks(
         }
         let allowed_path = Path::new(allowed);
         let normalized = normalize_path(allowed_path);
-        let canonical = std::fs::canonicalize(allowed_path)
-            .unwrap_or_else(|_| normalized.clone());
+        let canonical = std::fs::canonicalize(allowed_path).unwrap_or_else(|_| normalized.clone());
         if resolved == normalized
             || resolved.starts_with(&normalized)
             || resolved == canonical

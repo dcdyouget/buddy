@@ -710,8 +710,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                                                     (id.as_ref(), existing_key_for_idx.as_ref())
                                                 {
                                                     if new_id != prev_key {
-                                                        if let Some(t) =
-                                                            tool_calls.remove(prev_key)
+                                                        if let Some(t) = tool_calls.remove(prev_key)
                                                         {
                                                             tool_call_indexes.remove(prev_key);
                                                             tool_call_indexes
@@ -741,9 +740,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                                                         key.clone(),
                                                         ToolCall {
                                                             id: effective_id,
-                                                            name: name
-                                                                .clone()
-                                                                .unwrap_or_default(),
+                                                            name: name.clone().unwrap_or_default(),
                                                             arguments: String::new(),
                                                         },
                                                     );

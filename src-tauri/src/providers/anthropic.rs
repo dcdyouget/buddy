@@ -458,13 +458,14 @@ impl LlmProvider for AnthropicProvider {
             // P5: tool_call 流式追踪 (key=index, Anthropic 用 index 区分 block)
             use std::collections::HashMap;
             let mut tool_calls: HashMap<usize, ToolCall> = HashMap::new();
-            let flush_tool_calls =
-                |tc: &mut HashMap<usize, ToolCall>, em: &StreamEventEmitter| -> Vec<ToolCall> {
-                    let mut ordered: Vec<(usize, ToolCall)> = tc.drain().collect();
-                    ordered.sort_by_key(|(i, _)| *i);
-                    // 丢弃从未收到 input_json_delta 的不完整 tool_use（如流被中断/提前结束），
-                    // 避免把半截调用当作可执行工具。空参数说明该块从未真正开始执行。
-                    ordered.retain(|(_, t)| {
+            let flush_tool_calls = |tc: &mut HashMap<usize, ToolCall>,
+                                    em: &StreamEventEmitter|
+             -> Vec<ToolCall> {
+                let mut ordered: Vec<(usize, ToolCall)> = tc.drain().collect();
+                ordered.sort_by_key(|(i, _)| *i);
+                // 丢弃从未收到 input_json_delta 的不完整 tool_use（如流被中断/提前结束），
+                // 避免把半截调用当作可执行工具。空参数说明该块从未真正开始执行。
+                ordered.retain(|(_, t)| {
                         if t.arguments.trim().is_empty() {
                             warn!(
                                 "[anthropic::stream_chat] 丢弃参数为空的不完整 tool_use, id='{}', name='{}'",
@@ -475,13 +476,13 @@ impl LlmProvider for AnthropicProvider {
                             true
                         }
                     });
-                    let pending = ordered.len();
-                    for (_, t) in &ordered {
-                        em.tool_call_end(&t.id, &t.name, &t.arguments);
-                    }
-                    em.turn_end(pending);
-                    ordered.into_iter().map(|(_, t)| t).collect()
-                };
+                let pending = ordered.len();
+                for (_, t) in &ordered {
+                    em.tool_call_end(&t.id, &t.name, &t.arguments);
+                }
+                em.turn_end(pending);
+                ordered.into_iter().map(|(_, t)| t).collect()
+            };
 
             // 通知前端：流式开始
             emitter.start();
@@ -635,10 +636,14 @@ impl LlmProvider for AnthropicProvider {
                                                                 emitter.thinking_start(idx);
                                                             }
                                                             "tool_use" => {
-                                                                first_output_ms.get_or_insert_with(|| {
-                                                                    request_started.elapsed().as_millis()
-                                                                        as u64
-                                                                });
+                                                                first_output_ms.get_or_insert_with(
+                                                                    || {
+                                                                        request_started
+                                                                            .elapsed()
+                                                                            .as_millis()
+                                                                            as u64
+                                                                    },
+                                                                );
                                                                 let block = &json["content_block"];
                                                                 let id = block["id"]
                                                                     .as_str()
@@ -671,12 +676,13 @@ impl LlmProvider for AnthropicProvider {
                                                                     .as_str()
                                                                     .unwrap_or("");
                                                                 if !text.is_empty() {
-                                                                    first_output_ms.get_or_insert_with(|| {
-                                                                        request_started
-                                                                            .elapsed()
-                                                                            .as_millis()
-                                                                            as u64
-                                                                    });
+                                                                    first_output_ms
+                                                                        .get_or_insert_with(|| {
+                                                                            request_started
+                                                                                .elapsed()
+                                                                                .as_millis()
+                                                                                as u64
+                                                                        });
                                                                     token_count += 1;
                                                                     // push_str(&str) 追加字符串
                                                                     full_response.push_str(text);
@@ -692,12 +698,13 @@ impl LlmProvider for AnthropicProvider {
                                                                     .as_str()
                                                                     .unwrap_or("");
                                                                 if !thinking.is_empty() {
-                                                                    first_output_ms.get_or_insert_with(|| {
-                                                                        request_started
-                                                                            .elapsed()
-                                                                            .as_millis()
-                                                                            as u64
-                                                                    });
+                                                                    first_output_ms
+                                                                        .get_or_insert_with(|| {
+                                                                            request_started
+                                                                                .elapsed()
+                                                                                .as_millis()
+                                                                                as u64
+                                                                        });
                                                                     emitter.thinking_delta(
                                                                         content_index,
                                                                         thinking,
@@ -758,7 +765,10 @@ impl LlmProvider for AnthropicProvider {
                                                             .as_u64()
                                                             .unwrap_or(0);
                                                         has_usage = has_usage || output_tokens > 0;
-                                                        info!("[llm][{}] stop_reason={}", request_id, stop_reason);
+                                                        info!(
+                                                            "[llm][{}] stop_reason={}",
+                                                            request_id, stop_reason
+                                                        );
                                                     }
                                                     "message_stop" => {
                                                         let calls = flush_tool_calls(
@@ -876,14 +886,8 @@ impl LlmProvider for AnthropicProvider {
                         // 流结束但没收到 message_stop：连接被提前切断（异常结束）。
                         // Anthropic 协议保证正常完成的响应必然以 message_stop 收尾，
                         // 走到这里说明消息不完整——按网络错误处理，不执行未完成工具调用。
-                        warn!(
-                            "[anthropic::stream_chat] 流提前结束(未收到 message_stop)，视为异常"
-                        );
-                        emitter.error(
-                            StopReason::Error,
-                            "流提前结束(连接中断)",
-                            &full_response,
-                        );
+                        warn!("[anthropic::stream_chat] 流提前结束(未收到 message_stop)，视为异常");
+                        emitter.error(StopReason::Error, "流提前结束(连接中断)", &full_response);
                         return Ok(StreamOutcome {
                             full_text: full_response,
                             thinking_text: thinking_response,

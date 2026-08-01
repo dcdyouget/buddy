@@ -91,7 +91,7 @@ describe('ToolSection', () => {
     expect(trigger.getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByText('搜索内容')).toBeTruthy();
     expect(screen.getByText('搜索引擎')).toBeTruthy();
-    expect(screen.getByText('Bing 中国 + DuckDuckGo')).toBeTruthy();
+    expect(screen.getByText('360 搜索 + DuckDuckGo')).toBeTruthy();
     expect(screen.getByText('正在等待搜索结果…')).toBeTruthy();
   });
 

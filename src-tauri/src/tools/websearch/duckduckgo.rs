@@ -1,6 +1,7 @@
 use super::aggregate::SearchHit;
 use super::web_fetch::read_search_body;
 use dom_query::{Document, Selection};
+use log::info;
 use reqwest::{Client, Url};
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -17,22 +18,33 @@ pub(super) async fn search_duckduckgo(
     limit: usize,
 ) -> Result<Vec<SearchHit>, String> {
     let modern_result = search_modern_page(client, query, limit).await;
-    if let Ok(results) = &modern_result {
+    let result = if let Ok(results) = &modern_result {
         if !results.is_empty() {
-            return Ok(results.clone());
+            Ok(results.clone())
+        } else {
+            search_legacy_page(client, query, limit).await
         }
-    }
+    } else {
+        match search_legacy_page(client, query, limit).await {
+            Ok(results) if !results.is_empty() => Ok(results),
+            Ok(_) => modern_result,
+            Err(legacy_error) => match modern_result {
+                Ok(_) => Err(legacy_error),
+                Err(modern_error) => Err(format!(
+                    "DuckDuckGo 搜索失败：主页面链路：{modern_error}；HTML 链路：{legacy_error}"
+                )),
+            },
+        }
+    };
 
-    match search_legacy_page(client, query, limit).await {
-        Ok(results) if !results.is_empty() => Ok(results),
-        Ok(_) => modern_result,
-        Err(legacy_error) => match modern_result {
-            Ok(_) => Err(legacy_error),
-            Err(modern_error) => Err(format!(
-                "DuckDuckGo 搜索失败：主页面链路：{modern_error}；HTML 链路：{legacy_error}"
-            )),
-        },
+    match &result {
+        Ok(results) => log_search_results(query, results),
+        Err(error) => info!(
+            "[websearch][duckduckgo] 搜索失败: query={:?}, error={}",
+            query, error
+        ),
     }
+    result
 }
 
 async fn search_modern_page(
@@ -40,22 +52,44 @@ async fn search_modern_page(
     query: &str,
     limit: usize,
 ) -> Result<Vec<SearchHit>, String> {
+    let mut search_url =
+        Url::parse(SEARCH_PAGE).map_err(|error| format!("主搜索页地址无效：{error}"))?;
+    search_url
+        .query_pairs_mut()
+        .extend_pairs([("q", query), ("ia", "web")]);
+    info!(
+        "[websearch][duckduckgo] 主搜索页请求: query={:?}, url={}, accept_language=zh-CN,zh;q=0.9,en;q=0.8",
+        query, search_url
+    );
     let response = client
-        .get(SEARCH_PAGE)
+        .get(search_url)
         .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-        .query(&[("q", query), ("ia", "web")])
         .send()
         .await
         .map_err(|error| format!("主搜索页请求失败：{error}"))?;
+    info!(
+        "[websearch][duckduckgo] 主搜索页响应: status={}, url={}",
+        response.status(),
+        response.url()
+    );
     ensure_success_status(response.status())?;
 
     let html = read_search_body(response, "主搜索页").await?;
+    info!(
+        "[websearch][duckduckgo] 主搜索页正文: query={:?}, chars={}",
+        query,
+        html.chars().count()
+    );
     if looks_like_challenge(&html) {
         return Err("主搜索页返回了人机验证".to_string());
     }
 
     let script_url = extract_results_script_url(&html)
         .ok_or_else(|| "主搜索页没有返回结果数据地址".to_string())?;
+    info!(
+        "[websearch][duckduckgo] 结果数据请求: query={:?}, url={}",
+        query, script_url
+    );
     let response = client
         .get(script_url)
         .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
@@ -63,9 +97,19 @@ async fn search_modern_page(
         .send()
         .await
         .map_err(|error| format!("结果数据请求失败：{error}"))?;
+    info!(
+        "[websearch][duckduckgo] 结果数据响应: status={}, url={}",
+        response.status(),
+        response.url()
+    );
     ensure_success_status(response.status())?;
 
     let script = read_search_body(response, "结果数据").await?;
+    info!(
+        "[websearch][duckduckgo] 结果数据正文: query={:?}, chars={}",
+        query,
+        script.chars().count()
+    );
     if looks_like_challenge(&script) {
         return Err("结果数据返回了人机验证".to_string());
     }
@@ -83,6 +127,10 @@ async fn search_legacy_page(
     query: &str,
     limit: usize,
 ) -> Result<Vec<SearchHit>, String> {
+    info!(
+        "[websearch][duckduckgo] HTML 请求: query={:?}, url={}, region=wt-wt, accept_language=zh-CN,zh;q=0.9,en;q=0.8",
+        query, SEARCH_ENDPOINT
+    );
     let response = client
         .post(SEARCH_ENDPOINT)
         .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
@@ -91,15 +139,48 @@ async fn search_legacy_page(
         .send()
         .await
         .map_err(|error| format!("DuckDuckGo 请求失败：{error}"))?;
+    info!(
+        "[websearch][duckduckgo] HTML 响应: status={}, url={}",
+        response.status(),
+        response.url()
+    );
 
     ensure_success_status(response.status())?;
 
     let html = read_search_body(response, "DuckDuckGo").await?;
+    info!(
+        "[websearch][duckduckgo] HTML 正文: query={:?}, chars={}",
+        query,
+        html.chars().count()
+    );
     if looks_like_challenge(&html) {
         return Err("DuckDuckGo 返回了人机验证页面".to_string());
     }
 
     Ok(parse_search_results(&html, limit))
+}
+
+fn log_search_results(query: &str, results: &[SearchHit]) {
+    let summary = results
+        .iter()
+        .enumerate()
+        .map(|(index, result)| {
+            format!(
+                "#{} title={:?} url={} snippet={:?}",
+                index + 1,
+                result.title,
+                result.url,
+                result.snippet
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" | ");
+    info!(
+        "[websearch][duckduckgo] 解析结果: query={:?}, count={}, results=[{}]",
+        query,
+        results.len(),
+        summary
+    );
 }
 
 fn ensure_success_status(status: reqwest::StatusCode) -> Result<(), String> {
