@@ -62,6 +62,8 @@ function parseResult(result: string | undefined): WebSearchResultPayload {
 
 function providerName(provider: string): string {
   switch (provider.toLowerCase()) {
+    case 'so_360':
+      return '360 搜索';
     case 'cn_bing':
       return 'Bing 中国';
     case 'duckduckgo':
@@ -86,7 +88,7 @@ function providerLabel(result: WebSearchResultPayload): string {
       .map(providerName)
       .join(' + ');
   }
-  return 'Bing 中国 + DuckDuckGo';
+  return '360 搜索 + DuckDuckGo';
 }
 
 async function openSource(url: string) {

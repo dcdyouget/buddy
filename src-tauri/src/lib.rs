@@ -24,18 +24,36 @@ pub use window::positioning::SavedWindowPositions;
 /// 应用主入口：配置并启动整个 Tauri 应用
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let log_targets = if cfg!(debug_assertions) {
+        vec![
+            Target::new(TargetKind::Stdout),
+            Target::new(TargetKind::LogDir {
+                file_name: Some("buddy".to_string()),
+            }),
+        ]
+    } else {
+        vec![Target::new(TargetKind::LogDir {
+            file_name: Some("buddy".to_string()),
+        })]
+    };
+    let log_level = if cfg!(debug_assertions) {
+        log::LevelFilter::Info
+    } else {
+        log::LevelFilter::Warn
+    };
+    let (max_log_file_size, log_rotation) = if cfg!(debug_assertions) {
+        (5 * 1024 * 1024, RotationStrategy::KeepSome(3))
+    } else {
+        (2 * 1024 * 1024, RotationStrategy::KeepSome(2))
+    };
+
     tauri::Builder::default()
         .plugin(
             tauri_plugin_log::Builder::new()
-                .targets([
-                    Target::new(TargetKind::Stdout),
-                    Target::new(TargetKind::LogDir {
-                        file_name: Some("buddy".to_string()),
-                    }),
-                ])
-                .level(log::LevelFilter::Info)
-                .max_file_size(5 * 1024 * 1024)
-                .rotation_strategy(RotationStrategy::KeepSome(3))
+                .targets(log_targets)
+                .level(log_level)
+                .max_file_size(max_log_file_size)
+                .rotation_strategy(log_rotation)
                 .timezone_strategy(TimezoneStrategy::UseLocal)
                 .build(),
         )

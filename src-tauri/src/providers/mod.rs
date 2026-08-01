@@ -271,7 +271,11 @@ pub(crate) fn summarize_messages_for_log(messages: &[Message]) -> String {
         .rev()
         .find(|message| message.role == MessageRole::User)
         .map(|message| {
-            let compact = message.content.split_whitespace().collect::<Vec<_>>().join(" ");
+            let compact = message
+                .content
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
             let mut preview: String = compact.chars().take(60).collect();
             if compact.chars().count() > 60 {
                 preview.push('…');

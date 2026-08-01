@@ -20,6 +20,7 @@ use tokio::sync::{oneshot, watch};
 /// 消息 ID 序列号：同一毫秒内会生成多条消息（工具循环的多条 tool 消息/assistant 分段），
 /// 只靠毫秒时间戳会撞 ID，导致前端 React key 冲突。
 static MESSAGE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+const MAX_TOOL_LOG_ARGUMENT_CHARS: usize = 2_000;
 
 /// 生成带全局序列号的消息 ID，保证同毫秒内也不重复。
 fn unique_message_id(prefix: &str, turn: usize) -> String {
@@ -30,6 +31,61 @@ fn unique_message_id(prefix: &str, turn: usize) -> String {
         chrono::Utc::now().timestamp_millis(),
         MESSAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     )
+}
+
+/// 记录工具请求时保留可诊断参数，同时避免密钥和超长内容写入本地日志。
+fn tool_arguments_for_log(raw: &str) -> String {
+    let value = match serde_json::from_str::<serde_json::Value>(raw) {
+        Ok(mut value) => {
+            redact_sensitive_tool_arguments(&mut value);
+            serde_json::to_string(&value).unwrap_or_else(|_| "<参数序列化失败>".to_string())
+        }
+        Err(_) => format!("<无效 JSON> {raw}"),
+    };
+    truncate_log_value(&value, MAX_TOOL_LOG_ARGUMENT_CHARS)
+}
+
+fn redact_sensitive_tool_arguments(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(fields) => {
+            for (name, value) in fields {
+                if is_sensitive_tool_argument(name) {
+                    *value = serde_json::Value::String("[已脱敏]".to_string());
+                } else {
+                    redact_sensitive_tool_arguments(value);
+                }
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                redact_sensitive_tool_arguments(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_sensitive_tool_argument(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().replace(['_', '-'], "").as_str(),
+        "apikey"
+            | "authorization"
+            | "password"
+            | "secret"
+            | "token"
+            | "accesstoken"
+            | "refreshtoken"
+    )
+}
+
+fn truncate_log_value(value: &str, max_chars: usize) -> String {
+    let mut characters = value.chars();
+    let truncated = characters.by_ref().take(max_chars).collect::<String>();
+    if characters.next().is_some() {
+        format!("{truncated}…(已截断)")
+    } else {
+        truncated
+    }
 }
 /// 取消状态：跨命令共享的取消通道
 ///
@@ -753,9 +809,21 @@ pub async fn send_message(
         // 本轮追踪:是否有至少一个 tool 执行成功(非 is_error)?
         let mut turn_has_success = false;
         for call in &out.tool_calls {
+            info!(
+                "[tool] 请求: question_id={}, turn={}, id={}, name={}, arguments={}",
+                question_log_id,
+                turn,
+                call.id,
+                call.name,
+                tool_arguments_for_log(&call.arguments)
+            );
             // 用户点击"停止"后，不再执行本轮剩余的工具调用
             if *cancel_rx.borrow() {
-                info!("[send_message] turn {} 工具循环被用户取消, 跳过剩余 {} 个调用", turn, out.tool_calls.len());
+                info!(
+                    "[send_message] turn {} 工具循环被用户取消, 跳过剩余 {} 个调用",
+                    turn,
+                    out.tool_calls.len()
+                );
                 break;
             }
             // ── ask_user 特殊分支:不进入普通 tool.execute,而是显示内联问答卡等回答 ──
@@ -941,7 +1009,9 @@ pub async fn send_message(
                 approve_all_for_turn: approval.approve_all_for_turn.load(Ordering::Relaxed),
                 cancel_rx: Some(cancel_rx.clone()),
             };
+            let tool_started = Instant::now();
             let result = tool.execute(args_value, ctx).await;
+            let elapsed_ms = tool_started.elapsed().as_millis();
             let (mut content, raw_images, mut is_error) = match &result {
                 Ok(o) => (o.content.clone(), o.images.clone(), o.is_error),
                 Err(e) if call.name == "generate_image" => (
@@ -968,12 +1038,15 @@ pub async fn send_message(
                 ));
             }
             info!(
-                "[send_message] turn {} tool '{}' 执行结果: is_error={}, content_len={}, id={}",
+                "[tool] 完成: question_id={}, turn={}, id={}, name={}, is_error={}, output_chars={}, images={}, elapsed_ms={}",
+                question_log_id,
                 turn,
+                call.id,
                 call.name,
                 is_error,
-                content.len(),
-                call.id
+                content.chars().count(),
+                images.len(),
+                elapsed_ms
             );
             if !is_error {
                 turn_has_success = true;
@@ -1371,6 +1444,30 @@ mod tests {
         assert_eq!(estimate_tokens("你好世界"), 1);
         // 12 Chinese chars → 4 tokens
         assert_eq!(estimate_tokens("这是一段比较长的中文文本内容"), 4);
+    }
+
+    #[test]
+    fn tool_request_log_preserves_query_and_redacts_secrets() {
+        let arguments = tool_arguments_for_log(
+            r#"{"query":"2026年夏アニメ 7月新番 一覧","api_key":"secret","nested":{"token":"value"}}"#,
+        );
+
+        assert!(arguments.contains("2026年夏アニメ 7月新番 一覧"));
+        assert!(!arguments.contains("secret"));
+        assert!(!arguments.contains("value"));
+        assert_eq!(arguments.matches("[已脱敏]").count(), 2);
+    }
+
+    #[test]
+    fn tool_request_log_truncates_long_arguments() {
+        let raw = format!(
+            r#"{{"query":"{}"}}"#,
+            "x".repeat(MAX_TOOL_LOG_ARGUMENT_CHARS)
+        );
+        let arguments = tool_arguments_for_log(&raw);
+
+        assert!(arguments.ends_with("…(已截断)"));
+        assert!(arguments.chars().count() > MAX_TOOL_LOG_ARGUMENT_CHARS);
     }
 
     // ── compute_window_start ──

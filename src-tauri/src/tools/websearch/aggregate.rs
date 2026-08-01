@@ -1,4 +1,4 @@
-use super::{bing, duckduckgo};
+use super::{bing, duckduckgo, so360};
 use serde::Serialize;
 use std::collections::HashSet;
 
@@ -106,6 +106,7 @@ pub(super) fn provider_failure_summary(provider: &WebSearchProviderStatus) -> St
 
 fn provider_label(name: &str) -> &str {
     match name {
+        so360::PROVIDER => "360 搜索",
         bing::PROVIDER => "Bing 中国",
         duckduckgo::PROVIDER => "DuckDuckGo",
         _ => name,
