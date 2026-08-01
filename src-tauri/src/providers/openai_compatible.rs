@@ -22,12 +22,15 @@ use log::{error, info, warn}; // 日志门面
 use reqwest::Client; // 异步 HTTP 客户端
 use serde_json::{json, Value}; // 通用 JSON 值
 use std::pin::Pin; // 自引用指针固定
-use std::time::Duration; // 时间段
+use std::time::{Duration, Instant}; // 时间段与耗时统计
 use tokio::sync::watch; // watch channel（取消信号）
 use tokio::time::timeout; // 异步超时
 
 /// 单次字节块读取超时
 const CHUNK_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// SSE 单行数据上限：正常文本增量远小于此；防止异常/恶意响应把行缓冲撑爆。
+const MAX_SSE_LINE_BYTES: usize = 1 << 20;
 
 /// 模型列表获取超时
 const FETCH_MODELS_TIMEOUT: Duration = Duration::from_secs(15);
@@ -36,6 +39,85 @@ const FETCH_MODELS_TIMEOUT: Duration = Duration::from_secs(15);
 // OpenAICompatibleProvider —— OpenAI 协议族适配器
 // ============================================================================
 pub struct OpenAICompatibleProvider;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PromptCacheUsage {
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    total_tokens: u64,
+    cache_hit_tokens: Option<u64>,
+    cache_miss_tokens: Option<u64>,
+    cache_write_tokens: Option<u64>,
+}
+
+impl PromptCacheUsage {
+    fn hit_rate_percent(&self) -> Option<f64> {
+        let hit = self.cache_hit_tokens?;
+        (self.prompt_tokens > 0).then(|| hit as f64 * 100.0 / self.prompt_tokens as f64)
+    }
+}
+
+fn parse_prompt_cache_usage(json: &Value) -> Option<PromptCacheUsage> {
+    let usage = json.get("usage")?.as_object()?;
+    let prompt_tokens = usage.get("prompt_tokens")?.as_u64()?;
+    let completion_tokens = usage
+        .get("completion_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let total_tokens = usage
+        .get("total_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(prompt_tokens.saturating_add(completion_tokens));
+    let prompt_details = usage
+        .get("prompt_tokens_details")
+        .and_then(Value::as_object);
+    let cache_hit_tokens = usage
+        .get("prompt_cache_hit_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            prompt_details
+                .and_then(|details| details.get("cached_tokens"))
+                .and_then(Value::as_u64)
+        });
+    let cache_miss_tokens = usage
+        .get("prompt_cache_miss_tokens")
+        .and_then(Value::as_u64)
+        .or_else(|| cache_hit_tokens.map(|hit| prompt_tokens.saturating_sub(hit)));
+    let cache_write_tokens = prompt_details
+        .and_then(|details| details.get("cache_write_tokens"))
+        .and_then(Value::as_u64);
+
+    Some(PromptCacheUsage {
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        cache_hit_tokens,
+        cache_miss_tokens,
+        cache_write_tokens,
+    })
+}
+
+fn usage_log_summary(usage: Option<&PromptCacheUsage>) -> String {
+    let Some(usage) = usage else {
+        return "tokens=Provider未返回".to_string();
+    };
+    let cache = match (usage.cache_hit_tokens, usage.hit_rate_percent()) {
+        (Some(hit), Some(rate)) => format!(
+            "cache_hit={}, cache_miss={}, cache_write={}, cache_rate={:.2}%",
+            hit,
+            usage
+                .cache_miss_tokens
+                .unwrap_or_else(|| usage.prompt_tokens.saturating_sub(hit)),
+            usage.cache_write_tokens.unwrap_or(0),
+            rate,
+        ),
+        _ => "cache=Provider未返回".to_string(),
+    };
+    format!(
+        "input_tokens={}, output_tokens={}, total_tokens={}, {}",
+        usage.prompt_tokens, usage.completion_tokens, usage.total_tokens, cache
+    )
+}
 
 fn has_valid_tool_arguments(tool_call: &ToolCall) -> bool {
     !tool_call.id.trim().is_empty()
@@ -51,10 +133,11 @@ impl OpenAICompatibleProvider {
     ///
     /// 与 Anthropic 转换器几乎一致（都是 role + content 数组）
     fn convert_messages(messages: &[Message]) -> Vec<Value> {
-        // 在最前面注入 Buddy 系统提示词，并补充本次请求的本地时间
+        // 系统提示保持静态；每条用户消息根据固定 created_at 重建相同的时间后缀，
+        // 让对话增长时仍保持此前请求的精确前缀。
         let mut result: Vec<Value> = vec![json!({
             "role": "system",
-            "content": super::current_system_prompt(),
+            "content": super::BUDDY_SYSTEM_PROMPT,
         })];
         // 只有参数完整、且存在对应 tool_result 的调用才允许进入下一次请求。
         // 主动停止流式输出时，assistant 中可能留下半截 arguments；MiniMax 会直接以
@@ -147,7 +230,18 @@ impl OpenAICompatibleProvider {
                             },
                         })
                     }));
+                    let context = super::runtime_time_context_for_message(m.created_at);
+                    content.push(json!({
+                        "type": "text",
+                        "text": context,
+                    }));
                     json!(content)
+                } else if m.role == MessageRole::User {
+                    let context = super::runtime_time_context_for_message(m.created_at);
+                    json!(super::append_runtime_time_context(
+                        &m.content,
+                        &context,
+                    ))
                 } else {
                     json!(m.content)
                 };
@@ -255,6 +349,7 @@ impl LlmProvider for OpenAICompatibleProvider {
         base_url: &'a str,
         api_key: &'a str,
         model: &'a str,
+        request_id: &'a str,
         messages: &'a [Message],
         emitter: &'a StreamEventEmitter,
         mut cancel_rx: watch::Receiver<bool>,
@@ -283,51 +378,29 @@ impl LlmProvider for OpenAICompatibleProvider {
 
             // ── 4. 拼接 URL（OpenAI 兼容都是 /chat/completions） ──
             let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-            // P8: 日志打印 tool 列表(帮助验证 tool 是否到了 LLM)
             let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+            let request_bytes = serde_json::to_vec(&body)
+                .map(|serialized| serialized.len())
+                .unwrap_or_else(|_| body.to_string().len());
             info!(
-                "[openai::stream_chat] 开始请求: model={}, url={}, tools=[{}]",
+                "[llm][{}] 请求摘要: protocol=openai_chat_completions, model={}, url={}, body_bytes={}, system_prompt_bytes={}, runtime_contexts={}, {}, available_tools={} [{}]",
+                request_id,
                 model,
                 url,
+                request_bytes,
+                super::BUDDY_SYSTEM_PROMPT.len(),
+                messages
+                    .iter()
+                    .filter(|message| message.role == MessageRole::User)
+                    .count(),
+                super::summarize_messages_for_log(messages),
+                tools.len(),
                 tool_names.join(", ")
-            );
-
-            // ── DEBUG: 打印完整请求体(用于排查 tool_call_id 问题) ──
-            // 逐条打印消息摘要: role + 是否有 tool_calls/tool_call_id
-            for (i, m) in chat_messages.iter().enumerate() {
-                let tool_info = if m.get("tool_calls").is_some() {
-                    format!(" tool_calls={}", m["tool_calls"])
-                } else if m.get("tool_call_id").is_some() {
-                    format!(" tool_call_id={}", m["tool_call_id"])
-                } else {
-                    String::new()
-                };
-                let content_preview: String = m["content"]
-                    .as_str()
-                    .unwrap_or(if m["content"].is_null() {
-                        "<null>"
-                    } else {
-                        "<non-string>"
-                    })
-                    .chars()
-                    .take(80)
-                    .collect();
-                info!(
-                    "[openai::debug] msg[{}] role={} content='{}'{}",
-                    i,
-                    m["role"].as_str().unwrap_or("?"),
-                    content_preview,
-                    tool_info,
-                );
-            }
-            info!(
-                "[openai::debug] 总计 {} 条消息, body 大小≈{} bytes",
-                chat_messages.len(),
-                body.to_string().len(),
             );
 
             // ── 5. 发送请求 ──
             // 与 Anthropic 不同：OpenAI 用 Authorization: Bearer <key>
+            let request_started = Instant::now();
             let response = client
                 .post(&url)
                 .header("Authorization", format!("Bearer {}", api_key))
@@ -347,7 +420,13 @@ impl LlmProvider for OpenAICompatibleProvider {
 
             // ── 6. 检查 HTTP 状态 ──
             let status = response.status();
-            info!("[openai::stream_chat] 收到响应: status={}", status.as_u16());
+            let headers_ms = request_started.elapsed().as_millis() as u64;
+            info!(
+                "[llm][{}] 响应头: status={}, headers_ms={}",
+                request_id,
+                status.as_u16(),
+                headers_ms
+            );
             if !status.is_success() {
                 let body_text = response.text().await.unwrap_or_default();
                 warn!(
@@ -375,13 +454,18 @@ impl LlmProvider for OpenAICompatibleProvider {
 
             // ── 7. 启动字节流读取循环 ──
             let mut byte_stream = response.bytes_stream();
-            let mut buffer = String::new();
+            // 用字节缓冲而不是 String：按网络 chunk 解码会把跨 chunk 的多字节字符
+            // （中文/emoji）永久损坏，必须在完整行处才解码。
+            let mut buffer: Vec<u8> = Vec::new();
             let mut full_response = String::new();
             let mut thinking_response = String::new();
 
             info!("[openai::stream_chat] 开始接收流式数据...");
             let mut chunk_count: u64 = 0;
             let mut token_count: u64 = 0;
+            let mut response_bytes = 0usize;
+            let mut first_output_ms: Option<u64> = None;
+            let mut final_usage: Option<PromptCacheUsage> = None;
 
             let content_index: usize = 0;
             let mut text_started = false;
@@ -454,22 +538,35 @@ impl LlmProvider for OpenAICompatibleProvider {
                 match chunk {
                     Some(Ok(bytes)) => {
                         chunk_count += 1;
-                        let text = String::from_utf8_lossy(&bytes);
-                        if chunk_count <= 3 {
-                            let preview: String = text.chars().take(500).collect();
-                            info!(
-                                "[openai::stream_chat] chunk#{}: {} bytes, raw={}",
-                                chunk_count,
-                                bytes.len(),
-                                preview
+                        response_bytes += bytes.len();
+                        // 累积原始字节而不是按 chunk 解码：若多字节字符（如中文）被 TCP
+                        // 分块从中间切开，逐 chunk 用 from_utf8_lossy 会永久损坏该字符。
+                        // 改为按字节缓冲，遇到完整行（以 0x0A 结尾）才整行解码。
+                        buffer.extend_from_slice(&bytes);
+                        // 单行数据上限：防止异常/恶意响应把行缓冲撑爆
+                        if buffer.len() > MAX_SSE_LINE_BYTES {
+                            warn!(
+                                "[openai::stream_chat] SSE 行数据超过 {} 字节，终止解析",
+                                MAX_SSE_LINE_BYTES
                             );
+                            emitter.error(
+                                StopReason::Error,
+                                "响应数据行超过大小上限",
+                                &full_response,
+                            );
+                            return Ok(StreamOutcome {
+                                full_text: full_response,
+                                thinking_text: thinking_response,
+                                tool_calls: vec![],
+                                had_stream_error: true,
+                            });
                         }
-                        buffer.push_str(&text);
 
                         // ── 逐行解析（OpenAI 协议比 Anthropic 简单） ──
-                        while let Some(pos) = buffer.find('\n') {
-                            let line = buffer[..pos].to_string();
-                            buffer = buffer[pos + 1..].to_string();
+                        // 0x0A 不可能是多字节字符的续字节，按字节切出的完整行保证是合法 UTF-8
+                        while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
+                            let line = String::from_utf8_lossy(&buffer[..pos]).to_string();
+                            buffer.drain(..pos + 1);
 
                             let line = line.trim().to_string();
                             if line.is_empty() {
@@ -487,10 +584,6 @@ impl LlmProvider for OpenAICompatibleProvider {
                                 let data = data.trim();
                                 // OpenAI 流结束标志
                                 if data == "[DONE]" {
-                                    info!(
-                                        "[openai::stream_chat] 完成: {} chunks, {} tokens, {} chars",
-                                        chunk_count, token_count, full_response.len()
-                                    );
                                     if text_started {
                                         emitter.text_end(content_index, &full_response);
                                     }
@@ -498,6 +591,24 @@ impl LlmProvider for OpenAICompatibleProvider {
                                         &mut tool_calls,
                                         &tool_call_indexes,
                                         emitter,
+                                    );
+                                    info!(
+                                        "[llm][{}] 响应摘要: status=success, total_ms={}, headers_ms={}, first_output_ms={}, sse_bytes={}, chunks={}, text_delta_events={}, answer_bytes={}, answer_chars={}, thinking_bytes={}, thinking_chars={}, tool_calls={}, {}",
+                                        request_id,
+                                        request_started.elapsed().as_millis(),
+                                        headers_ms,
+                                        first_output_ms
+                                            .map(|value| value.to_string())
+                                            .unwrap_or_else(|| "无输出".to_string()),
+                                        response_bytes,
+                                        chunk_count,
+                                        token_count,
+                                        full_response.len(),
+                                        full_response.chars().count(),
+                                        thinking_response.len(),
+                                        thinking_response.chars().count(),
+                                        calls.len(),
+                                        usage_log_summary(final_usage.as_ref()),
                                     );
                                     // done 事件由 commands.rs 在整轮 tool 循环结束时统一发射
                                     return Ok(StreamOutcome {
@@ -514,6 +625,9 @@ impl LlmProvider for OpenAICompatibleProvider {
                                 // 解析 JSON
                                 match serde_json::from_str::<Value>(data) {
                                     Ok(json) => {
+                                        if let Some(usage) = parse_prompt_cache_usage(&json) {
+                                            final_usage = Some(usage);
+                                        }
                                         // 检查是否有 reasoning_content（DeepSeek 等支持思考的模型）
                                         // 链式 .get(0).and_then(...).unwrap_or("")：
                                         //   .get(0)         json["choices"] 是数组，.get(0) 拿 Option<&Value>
@@ -526,6 +640,9 @@ impl LlmProvider for OpenAICompatibleProvider {
                                             .unwrap_or("");
 
                                         if !reasoning.is_empty() {
+                                            first_output_ms.get_or_insert_with(|| {
+                                                request_started.elapsed().as_millis() as u64
+                                            });
                                             // reasoning_content 作为思考块发射
                                             emitter.thinking_delta(content_index, reasoning);
                                             thinking_response.push_str(reasoning);
@@ -539,6 +656,9 @@ impl LlmProvider for OpenAICompatibleProvider {
                                             .unwrap_or("");
 
                                         if !delta.is_empty() {
+                                            first_output_ms.get_or_insert_with(|| {
+                                                request_started.elapsed().as_millis() as u64
+                                            });
                                             if !text_started {
                                                 text_started = true;
                                                 emitter.text_start(content_index);
@@ -552,6 +672,11 @@ impl LlmProvider for OpenAICompatibleProvider {
                                             .get(0)
                                             .and_then(|c| c["delta"]["tool_calls"].as_array())
                                         {
+                                            if !calls.is_empty() {
+                                                first_output_ms.get_or_insert_with(|| {
+                                                    request_started.elapsed().as_millis() as u64
+                                                });
+                                            }
                                             for tc in calls {
                                                 let idx = tc
                                                     .get("index")
@@ -572,50 +697,77 @@ impl LlmProvider for OpenAICompatibleProvider {
                                                     .and_then(|f| f.get("arguments"))
                                                     .and_then(|v| v.as_str())
                                                     .unwrap_or("");
-                                                if let Some(ref new_id) = id {
-                                                    if !tool_calls.contains_key(new_id) {
-                                                        tool_calls.insert(
-                                                            new_id.clone(),
-                                                            ToolCall {
-                                                                id: new_id.clone(),
-                                                                name: name
-                                                                    .clone()
-                                                                    .unwrap_or_default(),
-                                                                arguments: String::new(),
-                                                            },
-                                                        );
-                                                        tool_call_indexes
-                                                            .insert(new_id.clone(), idx);
-                                                        emitter.tool_call_start(
-                                                            new_id,
-                                                            name.as_deref().unwrap_or(""),
-                                                            idx,
-                                                        );
+
+                                                // 该 index 是否已有条目（可能是缺 id 时创建的占位键）
+                                                let existing_key_for_idx = tool_call_indexes
+                                                    .iter()
+                                                    .find(|(_, &v)| v == idx)
+                                                    .map(|(k, _)| k.clone());
+
+                                                // 真实 id 到达：把该 index 的占位键升级为真实 id，
+                                                // 避免同一工具调用生成两条记录
+                                                if let (Some(new_id), Some(prev_key)) =
+                                                    (id.as_ref(), existing_key_for_idx.as_ref())
+                                                {
+                                                    if new_id != prev_key {
+                                                        if let Some(t) =
+                                                            tool_calls.remove(prev_key)
+                                                        {
+                                                            tool_call_indexes.remove(prev_key);
+                                                            tool_call_indexes
+                                                                .insert(new_id.clone(), idx);
+                                                            tool_calls.insert(
+                                                                new_id.clone(),
+                                                                ToolCall {
+                                                                    id: new_id.clone(),
+                                                                    ..t
+                                                                },
+                                                            );
+                                                        }
                                                     }
                                                 }
-                                                // Name update: when id is provided, update the name of the existing entry
+
+                                                // 工具条目键：优先用流式 id；缺 id 时用 index 生成
+                                                // 稳定键，保证后续只带 index 的 arguments 增量不会丢
+                                                let key = id
+                                                    .clone()
+                                                    .or(existing_key_for_idx)
+                                                    .unwrap_or_else(|| format!("call_{}", idx));
+
+                                                if !tool_calls.contains_key(&key) {
+                                                    let effective_id =
+                                                        id.clone().unwrap_or_else(|| key.clone());
+                                                    tool_calls.insert(
+                                                        key.clone(),
+                                                        ToolCall {
+                                                            id: effective_id,
+                                                            name: name
+                                                                .clone()
+                                                                .unwrap_or_default(),
+                                                            arguments: String::new(),
+                                                        },
+                                                    );
+                                                    tool_call_indexes.insert(key.clone(), idx);
+                                                    emitter.tool_call_start(
+                                                        &key,
+                                                        name.as_deref().unwrap_or(""),
+                                                        idx,
+                                                    );
+                                                }
+
+                                                // Name update: 更新已有条目的 name
                                                 if let Some(ref new_name) = name {
-                                                    if let Some(ref key) = id {
-                                                        if let Some(e) = tool_calls.get_mut(key) {
-                                                            e.name = new_name.clone();
-                                                        }
+                                                    if let Some(e) = tool_calls.get_mut(&key) {
+                                                        e.name = new_name.clone();
                                                     }
                                                 }
-                                                // Arguments delta: id may be missing in subsequent chunks,
-                                                // fall back to reverse-lookup by index in tool_call_indexes
+
+                                                // Arguments delta: 追加到对应条目
                                                 if !args_delta.is_empty() {
-                                                    let key = id.clone().or_else(|| {
-                                                        tool_call_indexes
-                                                            .iter()
-                                                            .find(|(_, &v)| v == idx)
-                                                            .map(|(k, _)| k.clone())
-                                                    });
-                                                    if let Some(ref key) = key {
-                                                        if let Some(e) = tool_calls.get_mut(key) {
-                                                            e.arguments.push_str(args_delta);
-                                                        }
-                                                        emitter.tool_call_delta(key, args_delta);
+                                                    if let Some(e) = tool_calls.get_mut(&key) {
+                                                        e.arguments.push_str(args_delta);
                                                     }
+                                                    emitter.tool_call_delta(&key, args_delta);
                                                 }
                                             }
                                         }
@@ -631,19 +783,45 @@ impl LlmProvider for OpenAICompatibleProvider {
                             &format!("流读取错误: {}", e),
                             &full_response,
                         );
+                        // 保留已累积的完整工具调用，避免网络错误时整轮工具结果丢失
+                        let calls = flush_tool_calls(&mut tool_calls, &tool_call_indexes, emitter);
                         return Ok(StreamOutcome {
                             full_text: full_response,
                             thinking_text: thinking_response,
-                            tool_calls: vec![],
+                            tool_calls: calls,
                             had_stream_error: true,
                         });
                     }
                     None => {
-                        // 流正常结束
+                        // 走到这里说明从未收到 [DONE] 终止标记（[DONE] 分支会直接 return）。
+                        // 部分 OpenAI 兼容 provider 确实不发送该标记，因此不改变成功语义
+                        // （避免回归），但记录告警便于排查截断。
+                        warn!(
+                            "[openai::stream_chat] 流结束但未收到 [DONE] 标记，已收到 {} chunks / {} tokens",
+                            chunk_count, token_count
+                        );
                         if text_started {
                             emitter.text_end(content_index, &full_response);
                         }
                         let calls = flush_tool_calls(&mut tool_calls, &tool_call_indexes, emitter);
+                        info!(
+                            "[llm][{}] 响应摘要: status=eof_without_done, total_ms={}, headers_ms={}, first_output_ms={}, sse_bytes={}, chunks={}, text_delta_events={}, answer_bytes={}, answer_chars={}, thinking_bytes={}, thinking_chars={}, tool_calls={}, {}",
+                            request_id,
+                            request_started.elapsed().as_millis(),
+                            headers_ms,
+                            first_output_ms
+                                .map(|value| value.to_string())
+                                .unwrap_or_else(|| "无输出".to_string()),
+                            response_bytes,
+                            chunk_count,
+                            token_count,
+                            full_response.len(),
+                            full_response.chars().count(),
+                            thinking_response.len(),
+                            thinking_response.chars().count(),
+                            calls.len(),
+                            usage_log_summary(final_usage.as_ref()),
+                        );
                         // done 事件由 commands.rs 在整轮 tool 循环结束时统一发射
                         return Ok(StreamOutcome {
                             full_text: full_response,
@@ -941,7 +1119,7 @@ fn build_openai_request_body(
     body // 函数末尾的表达式作为返回值（无分号）
 }
 
-fn ensure_object_schema(schema: &Value) -> Value {
+pub(crate) fn ensure_object_schema(schema: &Value) -> Value {
     if schema.is_object() {
         let mut s = schema.clone();
         if let Some(obj) = s.as_object_mut() {
@@ -964,6 +1142,23 @@ mod tests {
     use crate::models::{ImageAttachment, MessageRole};
     use crate::tools::ToolSafety;
 
+    fn make_user_message(id: &str, content: &str, created_at: u64) -> Message {
+        Message {
+            id: id.to_string(),
+            role: MessageRole::User,
+            content: content.to_string(),
+            images: Vec::new(),
+            blocks: None,
+            model_id: None,
+            created_at,
+            tool_calls: None,
+            tool_call_id: None,
+            tool_name: None,
+            is_error: None,
+            parent_message_id: None,
+        }
+    }
+
     fn dummy_tool(name: &str) -> ToolDefinition {
         ToolDefinition {
             name: name.to_string(),
@@ -971,6 +1166,49 @@ mod tests {
             parameters: json!({"type": "object", "properties": {"path": {"type": "string"}}}),
             safety: ToolSafety::Write,
         }
+    }
+
+    #[test]
+    fn test_parses_deepseek_prompt_cache_usage() {
+        let usage = parse_prompt_cache_usage(&json!({
+            "usage": {
+                "prompt_tokens": 10_000,
+                "completion_tokens": 800,
+                "total_tokens": 10_800,
+                "prompt_cache_hit_tokens": 7_500,
+                "prompt_cache_miss_tokens": 2_500
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(usage.cache_hit_tokens, Some(7_500));
+        assert_eq!(usage.cache_miss_tokens, Some(2_500));
+        assert_eq!(usage.completion_tokens, 800);
+        assert_eq!(usage.total_tokens, 10_800);
+        assert_eq!(usage.hit_rate_percent(), Some(75.0));
+    }
+
+    #[test]
+    fn test_parses_openai_prompt_cache_usage() {
+        let usage = parse_prompt_cache_usage(&json!({
+            "usage": {
+                "prompt_tokens": 2_000,
+                "completion_tokens": 300,
+                "total_tokens": 2_300,
+                "prompt_tokens_details": {
+                    "cached_tokens": 1_500,
+                    "cache_write_tokens": 256
+                }
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(usage.cache_hit_tokens, Some(1_500));
+        assert_eq!(usage.cache_miss_tokens, Some(500));
+        assert_eq!(usage.cache_write_tokens, Some(256));
+        assert_eq!(usage.completion_tokens, 300);
+        assert_eq!(usage.total_tokens, 2_300);
+        assert_eq!(usage.hit_rate_percent(), Some(75.0));
     }
 
     #[test]
@@ -1038,6 +1276,33 @@ mod tests {
         assert_eq!(
             content[1]["image_url"]["url"],
             "data:image/png;base64,aGVsbG8="
+        );
+        assert_eq!(content[2]["type"], "text");
+        assert!(content[2]["text"]
+            .as_str()
+            .unwrap()
+            .contains("<buddy_runtime_context>"));
+    }
+
+    #[test]
+    fn test_each_user_message_keeps_its_stable_runtime_time() {
+        let output = OpenAICompatibleProvider::convert_messages(&[
+            make_user_message("u1", "旧问题", 1_700_000_000),
+            make_user_message("u2", "新问题", 1_800_000_000),
+        ]);
+
+        assert_eq!(output[0]["content"], super::super::BUDDY_SYSTEM_PROMPT);
+        let previous = output[1]["content"].as_str().unwrap();
+        assert!(previous.starts_with("旧问题\n\n<buddy_runtime_context>"));
+        let latest = output[2]["content"].as_str().unwrap();
+        assert!(latest.starts_with("新问题\n\n<buddy_runtime_context>"));
+        assert_ne!(previous, latest);
+        assert_eq!(
+            output,
+            OpenAICompatibleProvider::convert_messages(&[
+                make_user_message("u1", "旧问题", 1_700_000_000),
+                make_user_message("u2", "新问题", 1_800_000_000),
+            ])
         );
     }
 

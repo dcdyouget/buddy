@@ -44,8 +44,18 @@ export function useSmoothTextRenderer() {
       }
     };
 
+    const stopLoop = () => {
+      if (rafRef.current !== 0) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = 0;
+      }
+    };
+
     const enterBackgroundMode = () => {
       window.clearTimeout(resumeTimer);
+      // WebKit 可能在窗口隐藏时直接丢弃已登记的 rAF 回调。主动取消并清零，
+      // 避免恢复后把一个永远不会执行的旧句柄误认为“循环仍在运行”。
+      stopLoop();
       renderImmediately = true;
       nextRevealAtRef.current = 0;
       flushPendingText();
@@ -53,6 +63,7 @@ export function useSmoothTextRenderer() {
 
     const leaveBackgroundMode = () => {
       // 先清已有缓冲，再给 Tauri/WebView 一小段时间派发隐藏期间积压的事件。
+      stopLoop();
       renderImmediately = true;
       flushPendingText();
       queueMicrotask(flushPendingText);
@@ -61,6 +72,7 @@ export function useSmoothTextRenderer() {
         flushPendingText();
         renderImmediately = false;
         nextRevealAtRef.current = 0;
+        startLoop();
       }, RESUME_CATCH_UP_DURATION);
     };
 
@@ -71,16 +83,6 @@ export function useSmoothTextRenderer() {
         leaveBackgroundMode();
       }
     };
-
-    const unsubscribeStore = useChatStore.subscribe((state, previous) => {
-      if (
-        renderImmediately &&
-        state.pendingTextBuffer &&
-        state.pendingTextBuffer !== previous.pendingTextBuffer
-      ) {
-        flushPendingText();
-      }
-    });
 
     window.addEventListener(WINDOW_WILL_HIDE_EVENT, enterBackgroundMode);
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -109,10 +111,14 @@ export function useSmoothTextRenderer() {
     }
 
     const tick = (timestamp: number) => {
+      // 当前回调已经开始执行，对应句柄不再处于 pending 状态。
+      // 先清零，允许本帧内到达的新 delta 安排下一帧。
+      rafRef.current = 0;
+      if (disposed) return;
+
       if (renderImmediately) {
         flushPendingText();
         nextRevealAtRef.current = 0;
-        rafRef.current = requestAnimationFrame(tick);
         return;
       }
 
@@ -134,14 +140,41 @@ export function useSmoothTextRenderer() {
       } else {
         nextRevealAtRef.current = 0;
       }
+      // smoothTextDelta 会同步更新 store，必须按最新缓冲决定是否继续，
+      // 不能使用本帧开始时的 pendingTextBuffer 快照。
+      startLoop();
+    };
+
+    const startLoop = () => {
+      if (disposed || renderImmediately || rafRef.current !== 0) return;
+      const { pendingTextBuffer, isStreaming } = useChatStore.getState();
+      if (!isStreaming || pendingTextBuffer.length === 0) return;
       rafRef.current = requestAnimationFrame(tick);
     };
 
-    rafRef.current = requestAnimationFrame(tick);
+    const unsubscribeStore = useChatStore.subscribe((state, previous) => {
+      // 有新内容入队：确保 rAF 循环在运行（空闲时它已停止）
+      if (
+        state.pendingTextBuffer &&
+        state.pendingTextBuffer !== previous.pendingTextBuffer
+      ) {
+        if (renderImmediately) {
+          flushPendingText();
+        } else {
+          startLoop();
+        }
+      }
+    });
+
+    if (renderImmediately) {
+      flushPendingText();
+    } else {
+      startLoop();
+    }
     return () => {
       disposed = true;
       window.clearTimeout(resumeTimer);
-      cancelAnimationFrame(rafRef.current);
+      stopLoop();
       unsubscribeStore();
       unlistenFocus?.();
       window.removeEventListener(

@@ -26,18 +26,22 @@ use tauri::WebviewWindow;
 ///
 /// ## 配合的窗口配置
 ///
-/// tauri.conf.json 中：
-/// - `alwaysOnTop: true`：窗口已经在顶层，toggle 才能触发 z 序刷新
-/// - `skipTaskbar: true`：窗口不在任务栏，DWM 单独处理
+/// 本应用窗口实际配置为 `alwaysOnTop: false`（点击外部即失去焦点隐藏），
+/// 因此 toggle 后必须恢复初始状态，否则窗口会永久置顶、悬浮在其它应用之上。
 pub fn bring_to_front(window: &WebviewWindow) {
     // 1. show + unminimize：确保窗口是可见且非最小化状态
     let _ = window.show();
     let _ = window.unminimize();
 
     // 2. toggle always_on_top：触发 DWM 重新计算 z 序，绕过前台锁定
-    //    因为窗口配置里 alwaysOnTop: true，所以最终的 always_on_top 状态不变
+    //    记录初始状态，toggle 后再恢复——避免窗口在应用整个生命周期里被永久置顶
+    //    （tauri.conf.json 里 alwaysOnTop 为 false，若只 toggle 不恢复即引入 bug）
+    let was_always_on_top = window.is_always_on_top().unwrap_or(false);
     let _ = window.set_always_on_top(false);
     let _ = window.set_always_on_top(true);
+    if !was_always_on_top {
+        let _ = window.set_always_on_top(false);
+    }
 
     // 3. set_focus：在 z 序刷新后调用，这次能稳定拿到焦点
     let _ = window.set_focus();

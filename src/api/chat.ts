@@ -28,11 +28,21 @@ export async function stopGeneration(): Promise<void> {
 export async function saveChatImage(
   image: ImageAttachment,
 ): Promise<ImageAttachment> {
+  // 后端 save_chat_image 要求 data_url 必填；类型上可选是因为持久化后的附件
+  // 只有 path 没有 data_url。这里显式校验，避免把 undefined 传过去。
+  if (!image.data_url) {
+    throw new Error(`图片缺少数据内容: ${image.name}`);
+  }
   return invokeBackend('save_chat_image', {
     name: image.name,
     mediaType: image.media_type,
     dataUrl: image.data_url,
   });
+}
+
+/** 删除已保存的聊天图片附件（移除未发送的输入框图片时清理孤儿文件）。 */
+export async function deleteChatImage(path: string): Promise<boolean> {
+  return invokeBackend('delete_chat_image', { path });
 }
 
 /**

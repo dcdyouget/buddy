@@ -1,6 +1,7 @@
 use super::{Tool, ToolContext, ToolError, ToolOutput, ToolSafety};
 use crate::models::ImageAttachment;
 use async_trait::async_trait;
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -341,6 +342,43 @@ struct OpenAiImageGenerationResponse {
     data: Vec<ApiImage>,
 }
 
+/// 从图片字节嗅探真实媒体类型；识别不出时返回 None。
+fn sniff_image_media_type(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some(("image/png", "png"))
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        Some(("image/jpeg", "jpg"))
+    } else if bytes.starts_with(b"GIF8") {
+        Some(("image/gif", "gif"))
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some(("image/webp", "webp"))
+    } else {
+        None
+    }
+}
+
+/// 用 base64 前缀（前 16 字符 ≈ 12 字节）嗅探真实图片格式，
+/// 避免把所有 OpenAI 家族响应都硬标成 image/png（可能是 JPEG/WebP）。
+fn sniff_base64_media_type(base64: &str) -> Option<(&'static str, &'static str)> {
+    let head = base64.get(..16)?;
+    let bytes = BASE64_STANDARD.decode(head).ok()?;
+    sniff_image_media_type(&bytes)
+}
+
+/// 图片地址只接受 HTTPS（与下载路径的校验一致）。
+fn is_https_image_url(url: &str) -> bool {
+    url.starts_with("https://")
+}
+
+/// 等待取消信号；无信号源（None）时永不完成。
+async fn wait_for_cancel(cancel_rx: &mut Option<tokio::sync::watch::Receiver<bool>>) {
+    if let Some(rx) = cancel_rx.as_mut() {
+        let _ = rx.changed().await;
+    } else {
+        std::future::pending::<()>().await;
+    }
+}
+
 fn parse_openai_response(
     payload: &str,
     model_id: &str,
@@ -352,19 +390,34 @@ fn parse_openai_response(
     let mut images = Vec::new();
     let mut revised_prompts = Vec::new();
     for (index, item) in response.data.into_iter().enumerate() {
-        let data_url = match (
-            item.b64_json.filter(|value| !value.trim().is_empty()),
-            item.url.filter(|value| !value.trim().is_empty()),
-        ) {
-            (Some(base64), _) => format!("data:image/png;base64,{}", base64),
-            (None, Some(url)) => url,
+        let b64 = item.b64_json.filter(|value| !value.trim().is_empty());
+        let url = item.url.filter(|value| !value.trim().is_empty());
+        let attachment = match (b64, url) {
+            (Some(base64), _) => {
+                // 按真实字节嗅探媒体类型，而不是硬编码 image/png
+                let (media_type, extension) =
+                    sniff_base64_media_type(&base64).unwrap_or(("image/png", "png"));
+                image_attachment(
+                    index,
+                    format!("data:{media_type};base64,{}", base64),
+                    media_type,
+                    extension,
+                )
+            }
+            (None, Some(url)) => {
+                // 只接受 HTTPS 图片地址，避免任意协议/内网 URL 进入渲染与下载流程
+                if !is_https_image_url(&url) {
+                    continue;
+                }
+                image_attachment(index, url, "image/png", "png")
+            }
             (None, None) => continue,
         };
 
         if let Some(revised) = item.revised_prompt.filter(|value| !value.trim().is_empty()) {
             revised_prompts.push(revised);
         }
-        images.push(image_attachment(index, data_url, "image/png", "png"));
+        images.push(attachment);
     }
 
     build_output(model_id, original_prompt, images, revised_prompts)
@@ -438,7 +491,7 @@ fn parse_minimax_response(
     for url in data
         .image_urls
         .into_iter()
-        .filter(|value| !value.trim().is_empty())
+        .filter(|value| !value.trim().is_empty() && is_https_image_url(value))
     {
         let index = images.len();
         images.push(image_attachment(index, url, "image/jpeg", "jpg"));
@@ -465,7 +518,7 @@ fn parse_qwen_response(
     let images = content
         .filter_map(|item| item.get("image").and_then(Value::as_str))
         .map(str::trim)
-        .filter(|url| !url.is_empty())
+        .filter(|url| !url.is_empty() && is_https_image_url(url))
         .enumerate()
         .map(|(index, url)| image_attachment(index, url.to_string(), "image/png", "png"))
         .collect();
@@ -498,12 +551,19 @@ impl Tool for GenerateImageTool {
     }
 
     fn parameters_schema(&self) -> Value {
+        // 不同厂商对 prompt 长度上限不同：按当前 API 类型公布正确的上限，
+        // 避免模型生成超长 prompt 被 MiniMax(1500)/Zhipu(1000) 拒绝。
+        let max_prompt_chars = match self.api {
+            ImageApi::MiniMax => MINIMAX_MAX_PROMPT_CHARS,
+            ImageApi::Zhipu => ZHIPU_MAX_PROMPT_CHARS,
+            _ => OPENAI_MAX_PROMPT_CHARS,
+        };
         json!({
             "type": "object",
             "properties": {
                 "prompt": {
                     "type": "string",
-                    "maxLength": OPENAI_MAX_PROMPT_CHARS,
+                    "maxLength": max_prompt_chars,
                     "description": "用于生成图片的完整提示词"
                 },
                 "size": {
@@ -537,7 +597,7 @@ impl Tool for GenerateImageTool {
         ToolSafety::ReadOnly
     }
 
-    async fn execute(&self, args: Value, _ctx: ToolContext) -> Result<ToolOutput, ToolError> {
+    async fn execute(&self, args: Value, mut ctx: ToolContext) -> Result<ToolOutput, ToolError> {
         let prompt = args
             .get("prompt")
             .and_then(Value::as_str)
@@ -550,16 +610,24 @@ impl Tool for GenerateImageTool {
             .build()
             .map_err(|error| ToolError::Other(format!("创建图片生成客户端失败: {}", error)))?;
 
+        // 用户点击"停止生成"后立即中止（生图请求最长 180s，不能继续等待/消耗额度）
         let max_attempts = if self.api == ImageApi::MiniMax { 2 } else { 1 };
         for attempt in 0..max_attempts {
-            let response = match client
-                .post(self.endpoint())
-                .header("Authorization", format!("Bearer {}", self.api_key))
-                .header("Content-Type", "application/json")
-                .json(&body)
-                .send()
-                .await
-            {
+            if ctx.is_cancelled() {
+                return Err(ToolError::Other("用户已取消图片生成".to_string()));
+            }
+            let response = match tokio::select! {
+                r = client
+                    .post(self.endpoint())
+                    .header("Authorization", format!("Bearer {}", self.api_key))
+                    .header("Content-Type", "application/json")
+                    .json(&body)
+                    .send() => r,
+                _ = wait_for_cancel(&mut ctx.cancel_rx) => {
+                    // 停止信号触发：watch 只发 true，到达即为取消
+                    return Err(ToolError::Other("用户已取消图片生成".to_string()));
+                }
+            } {
                 Ok(response) => response,
                 Err(error)
                     if attempt + 1 < max_attempts && (error.is_timeout() || error.is_connect()) =>
@@ -573,10 +641,13 @@ impl Tool for GenerateImageTool {
             };
 
             let status = response.status();
-            let payload = response
-                .text()
-                .await
-                .map_err(|error| ToolError::Other(format!("读取图片生成响应失败: {}", error)))?;
+            let payload = tokio::select! {
+                t = response.text() => t,
+                _ = wait_for_cancel(&mut ctx.cancel_rx) => {
+                    return Err(ToolError::Other("用户已取消图片生成".to_string()));
+                }
+            }
+            .map_err(|error| ToolError::Other(format!("读取图片生成响应失败: {}", error)))?;
             let should_retry = attempt + 1 < max_attempts
                 && (status.as_u16() == 429
                     || status.is_server_error()

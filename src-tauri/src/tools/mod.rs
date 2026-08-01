@@ -44,6 +44,17 @@ pub struct ToolContext {
     /// (P4 实现审批状态机后由 commands::send_message 注入)
     #[allow(dead_code)] // MCP tool 接入后会使用
     pub approve_all_for_turn: bool,
+    /// 全局"停止生成"取消信号（watch channel 接收端）。
+    /// 长耗时工具（如生图 HTTP 请求）应借此及时中止，
+    /// 避免用户停止后仍消耗额度/继续等待。
+    pub cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
+}
+
+impl ToolContext {
+    /// 是否已收到"停止生成"取消信号
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel_rx.as_ref().is_some_and(|rx| *rx.borrow())
+    }
 }
 
 /// Tool 执行结果

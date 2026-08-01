@@ -132,7 +132,9 @@ describe('MessageBubble 图片消息', () => {
     );
     fireEvent.error(getByAltText('missing.png'));
 
-    expect(getByText('图片已删除')).toBeTruthy();
+    // 有来源但加载失败：显示可重试的失败态（而不是误导性的"图片已删除"）
+    expect(getByText('图片加载失败')).toBeTruthy();
+    expect(getByText('重试')).toBeTruthy();
     expect(
       getByText('/Users/test/Buddy/attachments/missing.png'),
     ).toBeTruthy();

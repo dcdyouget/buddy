@@ -50,11 +50,11 @@ pub fn get_selected_text(app: &tauri::AppHandle) {
     use std::thread;
     use std::time::Duration;
 
-    let mut clipboard = match Clipboard::new() {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-    let old_text = clipboard.get_text().unwrap_or_default();
+    // 读旧剪贴板必须发生在模拟 Cmd+C 之前，否则读到的是复制后的新内容
+    let old_text = Clipboard::new()
+        .ok()
+        .and_then(|mut clipboard| clipboard.get_text().ok())
+        .unwrap_or_default();
 
     let source = CGEventSource::new(core_graphics::event_source::CGEventSourceStateID::Private)
         .unwrap_or_else(|_| {
@@ -69,18 +69,27 @@ pub fn get_selected_text(app: &tauri::AppHandle) {
     let key_up = CGEvent::new_keyboard_event(source, 8, false).unwrap();
     key_down.set_flags(flags);
     key_up.set_flags(flags);
+    // 模拟 Cmd+C 必须同步发出：此刻目标应用仍处于前台
     key_down.post(CGEventTapLocation::HID);
     key_up.post(CGEventTapLocation::HID);
 
-    thread::sleep(Duration::from_millis(50));
-
-    if let Ok(new_text) = clipboard.get_text() {
-        if !new_text.is_empty() && new_text != old_text {
-            let _ = app.emit("selected-text", new_text);
+    // 「等待剪贴板更新 + 读取 + 恢复」放到后台线程：
+    // 热键回调运行在主线程，同步 sleep 50ms 会让每次唤出窗口时 UI 卡一下。
+    // 剪贴板（general pasteboard）是线程安全的，可在后台读取。
+    let app_handle = app.clone();
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(50));
+        if let Ok(new_text) = Clipboard::new().and_then(|mut c| c.get_text()) {
+            if !new_text.is_empty() && new_text != old_text {
+                // 前端收到后也会 trim；这里直接发 trim 后的文本保持一致
+                let _ = app_handle.emit("selected-text", new_text.trim().to_string());
+            }
         }
-    }
-
-    let _ = clipboard.set_text(old_text);
+        // 恢复旧剪贴板（即使读取失败也恢复，避免弄丢用户剪贴板内容）
+        if let Ok(mut clipboard) = Clipboard::new() {
+            let _ = clipboard.set_text(old_text);
+        }
+    });
 }
 
 /// 非 macOS 平台的取词空实现

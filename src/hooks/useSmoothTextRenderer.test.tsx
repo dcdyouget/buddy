@@ -117,4 +117,35 @@ describe('useSmoothTextRenderer 后台输出', () => {
 
     expect(useChatStore.getState().pendingTextBuffer).toBe('新字');
   });
+
+  it('隐藏窗口丢失旧动画帧后，恢复时仍能启动正文渲染', async () => {
+    visibilityState = 'hidden';
+    render(<RendererHarness />);
+
+    // 模拟 WebKit 在隐藏窗口中丢弃已登记的 rAF 回调。
+    frameCallback = undefined;
+    act(() => {
+      visibilityState = 'visible';
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600);
+    });
+
+    act(() => {
+      useChatStore.getState().handleThinkingDelta(0, '已经思考完成');
+      useChatStore.getState().feedTextDelta('正文');
+    });
+
+    // 正文到达时必须登记一个新的帧，不能被失效的旧句柄挡住。
+    expect(frameCallback).toBeDefined();
+    act(() => {
+      frameCallback?.(0);
+    });
+    expect(useChatStore.getState().messages[0].content).toBe('正');
+    expect(useChatStore.getState().streamingBlocks).toEqual([
+      { type: 'thinking', content: '已经思考完成', is_open: false },
+      { type: 'text', content: '正' },
+    ]);
+  });
 });

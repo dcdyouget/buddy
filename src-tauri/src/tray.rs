@@ -53,8 +53,11 @@ pub fn create_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
     let stored_auto_start = storage::get_config(app.handle())
         .map(|config| config.auto_start)
         .unwrap_or(false);
+    // 菜单勾选状态以 OS 实际状态为准。
+    // 注意：这里不把 OS 状态写回 config——启动时静默改写 config.auto_start
+    // 会覆盖用户显式设置过的偏好（如登录项被外部移除后，用户偏好被悄悄改成 false）。
+    // config 只在用户通过托盘菜单切换时更新。
     let auto_start_enabled = app.autolaunch().is_enabled().unwrap_or(stored_auto_start);
-    sync_auto_start_config(app.handle(), auto_start_enabled);
 
     let autostart_item = CheckMenuItem::with_id(
         app,

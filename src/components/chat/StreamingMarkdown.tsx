@@ -176,12 +176,24 @@ function StreamingNextStar({ revealKey }: { revealKey: number }) {
 }
 
 /**
- * 判断 URL 是否为外链（http/https/mailto 等）。内部锚点（#/）不算。
+ * 判断 URL 是否需要拦截（除内部锚点与 mailto 外一律视为外链）。
+ * 模型输出中常出现不带 scheme 的裸域名（example.com）、相对路径、协议相对链接
+ * （//host），若放行它们会触发 webview 整体导航走——应用界面被替换/白屏。
+ * 空 href（如被 urlTransform 中和掉的 javascript: 链接）也要拦截，避免页面刷新。
  */
 function isExternalUrl(href: string): boolean {
-  if (!href) return false;
-  if (href.startsWith('#')) return false;
-  return /^(https?:|mailto:)/i.test(href);
+  if (!href) return true;
+  if (href.startsWith('#')) return false; // 内部锚点
+  return !/^mailto:/i.test(href);
+}
+
+/** 把无 scheme 的链接规范化为 https，便于系统默认浏览器正确打开。 */
+function normalizeHref(href: string): string {
+  if (!href || href.startsWith('#') || /^[a-z][a-z0-9+.-]*:/i.test(href)) {
+    return href;
+  }
+  if (href.startsWith('//')) return `https:${href}`;
+  return `https://${href}`;
 }
 
 /**
@@ -256,16 +268,18 @@ const COMPONENTS = {
   // 拦截外链：阻止 webview 内部跳转，强制走系统默认浏览器
   a({ href, children, ...props }: any) {
     const external = isExternalUrl(href);
+    const resolvedHref = normalizeHref(href);
     return (
       <a
         className="markdown-link"
-        href={href}
+        href={resolvedHref}
         rel="noopener noreferrer"
-        // 外链点击时拦截，强制走系统默认应用（Tauri shell.open / 浏览器 window.open）
+        // 除内部锚点外一律拦截，强制走系统默认应用（Tauri shell.open / 浏览器 window.open），
+        // 防止无 scheme / 相对 / 协议相对链接把整个 webview 导航走。
         onClick={(e) => {
           if (!external) return; // 内部锚点放行
           e.preventDefault();
-          openInDefaultApp(href);
+          openInDefaultApp(resolvedHref);
         }}
         {...props}
       >

@@ -286,6 +286,22 @@ export function ChatPage() {
     [messages],
   );
 
+  // 每条 assistant 消息向上查找最近一条 user 消息。
+  // 原来在 render 里对每条消息做 arr.slice(0,i).reverse().find(...)，是 O(n²)；
+  // 改为一次遍历建 Map（O(n)），只在 visible 变化时重算，流式期间不重算。
+  const previousUserIds = useMemo(() => {
+    const map = new Map<string, string>();
+    let lastUserId: string | null = null;
+    for (const message of visible) {
+      if (message.role === 'user') {
+        lastUserId = message.id;
+      } else if (message.role === 'assistant' && lastUserId) {
+        map.set(message.id, lastUserId);
+      }
+    }
+    return map;
+  }, [visible]);
+
   // liveToolCalls 引用稳定: 仅当 activeToolCalls 真的变化时,Object.values 重新计算。
   // 之前每帧 `Object.values(activeToolCalls)` 分配新数组,让 MessageBubble memo 永远失效。
   const liveToolCallsForLast = useMemo(
@@ -354,11 +370,8 @@ export function ChatPage() {
           {isHistoryVisible && visible.map((msg, i, arr) => {
             // 工具消息不会单独显示，工具循环后的最终 assistant 消息在可见列表中
             // 可能紧跟另一条 assistant。向上按钮需跨过这些续段，定位到本轮原始问题。
-            const previousUser =
-              msg.role === 'assistant'
-                ? arr.slice(0, i).reverse().find((candidate) => candidate.role === 'user')
-                : undefined;
-            const questionId = previousUser ? `msg-${previousUser.id}` : undefined;
+            const previousUserId = msg.role === 'assistant' ? previousUserIds.get(msg.id) : undefined;
+            const questionId = previousUserId ? `msg-${previousUserId}` : undefined;
             const isLast = isStreaming && msg.role === 'assistant' && i === arr.length - 1;
             const isLatestAssistant =
               msg.role === 'assistant' && i === arr.length - 1;

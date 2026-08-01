@@ -328,18 +328,34 @@ export function hydrateHistoryMessages(messages: Message[]): Message[] {
   return messages.map((msg) => {
     if (msg.role !== 'assistant') return msg;
 
-    const hydrated = { ...msg };
-    if ((!hydrated.blocks || hydrated.blocks.length === 0) && hydrated.content) {
-      hydrated.blocks = parseThinkFromText(hydrated.content);
+    // 只在实际需要水化（补 blocks / tool_calls 状态）时才创建新对象；
+    // 否则返回原引用。流式期间 smoothTextDelta 每帧都会 set 新 messages 数组，
+    // 若这里对所有 assistant 消息都 `{ ...msg }` 拷贝一份，MessageBubble 的
+    // memo 会在每帧失效，导致整屏重新渲染。
+    let hydrated: Message = msg;
+    let changed = false;
+
+    if ((!msg.blocks || msg.blocks.length === 0) && msg.content) {
+      hydrated = { ...hydrated, blocks: parseThinkFromText(msg.content) };
+      changed = true;
     }
-    if (hydrated.tool_calls?.length) {
-      hydrated.tool_calls = hydrated.tool_calls.map((toolCall) => {
+    if (msg.tool_calls?.length) {
+      const newCalls: ToolCall[] = msg.tool_calls.map((toolCall): ToolCall => {
         const result = toolResults.get(toolCall.id);
         if (result) {
           const isError = result.is_error === true;
+          const status: ToolCallStatus = isError ? 'error' : 'done';
+          if (
+            toolCall.status === status &&
+            toolCall.result === result.content &&
+            toolCall.is_error_result === isError &&
+            toolCall.images === result.images
+          ) {
+            return toolCall;
+          }
           return {
             ...toolCall,
-            status: isError ? 'error' : 'done',
+            status,
             result: result.content,
             is_error_result: isError,
             images: result.images,
@@ -353,8 +369,13 @@ export function hydrateHistoryMessages(messages: Message[]): Message[] {
         }
         return toolCall;
       });
+      if (newCalls.some((call, index) => call !== msg.tool_calls![index])) {
+        hydrated = changed ? hydrated : { ...msg };
+        hydrated.tool_calls = newCalls;
+        changed = true;
+      }
     }
-    return hydrated;
+    return changed ? hydrated : msg;
   });
 }
 
@@ -403,9 +424,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
   removeDraftImage: (id: string) => {
+    const target = (get().draftImages || []).find((image) => image.id === id);
+    const targetPath = target?.path;
     set((state) => ({
       draftImages: (state.draftImages || []).filter((image) => image.id !== id),
     }));
+    // 图片在选入时已被写入磁盘；若未发送就被移除，删除对应文件避免孤儿堆积。
+    // （发送后 draftImages 被清空，此时图片随消息持久化，不走此路径。）
+    if (targetPath && !isBrowser) {
+      import('@/api/chat')
+        .then(({ deleteChatImage }) => deleteChatImage(targetPath))
+        .catch(() => {});
+    }
   },
   clearDraftImages: () => {
     set({ draftImages: [] });
@@ -486,7 +516,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const { sendMessage: sendMsg } = await import('@/api/chat');
       await sendMsg(toSend, modelId);
     } catch (e) {
+      // 发送失败（参数校验/图片水化失败等）：移除刚创建的空 assistant 占位气泡，
+      // 避免"幽灵气泡"留在对话里、并在下一次发送时被重新发给 API。
+      const { messages: current } = get();
+      const idx = findLastAssistantIdx(current);
+      let updated = [...current];
+      if (
+        idx >= 0 &&
+        idx === updated.length - 1 &&
+        !updated[idx].content &&
+        !(updated[idx].blocks && updated[idx].blocks.length > 0)
+      ) {
+        updated.splice(idx, 1);
+      }
       set({
+        messages: updated,
         isStreaming: false,
         error: String(e),
       });
@@ -618,6 +662,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
           set({ streamingBlocks: blocks });
           return;
         }
+        // 判断传入的 content 是否是「过期快照」:多轮工具循环中 text_end 可能被渲染
+        // 缓冲延迟,当缓冲最终排空时,消息里已经累积了后续轮次的文本,本 turn 的
+        // content 只是累积文本的严格前缀。若用该过期快照去 splice,会覆盖掉后续轮次
+        // 的文本(数据丢失)—— 这是本方法的核心防御。
+        const { messages } = get();
+        const lastAssistantIdx = findLastAssistantIdx(messages);
+        const accumulated =
+          lastAssistantIdx >= 0 ? (messages[lastAssistantIdx].content || '') : '';
+        const staleSnapshot =
+          accumulated.length > content.length && accumulated.startsWith(content);
+
         // 找到本 turn 对应的 text 块位置:
         // - 若末尾是空 text 块(说明上一轮 text_end 已推入分隔符),则倒数第二块是本 turn 的 text
         // - 否则末尾就是本 turn 的 text
@@ -628,8 +683,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
           blocks[lastIdx].content === '';
         const targetIdx = isTrailingSeparator ? lastIdx - 1 : lastIdx;
         if (targetIdx >= 0) {
-          // 替换为目标位置上的内容 (1 个或多个 block: 可能是 [thinking, text] 或 [text])
-          blocks.splice(targetIdx, 1, ...parsed);
+          const targetBlock = blocks[targetIdx];
+          if (staleSnapshot && targetBlock.type === 'text') {
+            // 过期快照: 以该文本块当前累积的内容重建, 保留后续轮次的文本
+            // (thinking 块由 thinking_delta / <think> 标签增量生成, 不在 content 里,
+            // 因此只重建文本块, 不整体重parse)。
+            blocks.splice(targetIdx, 1, ...parseThinkFromText(targetBlock.content));
+          } else {
+            // 替换为目标位置上的内容 (1 个或多个 block: 可能是 [thinking, text] 或 [text])
+            blocks.splice(targetIdx, 1, ...parsed);
+          }
         } else {
           // 极端情况: 没有任何 block —— 退化为追加
           blocks.push(...parsed);
@@ -764,18 +827,27 @@ export const useChatStore = create<ChatState>((set, get) => ({
     get().flushTextBuffer();
     // 错误时仅保留此前已经完成的调用，不能把半截调用伪装成 error 后写入历史。
     const { messages, activeToolCalls } = get();
-    let updated = messages;
-    const lastAssistantIdx = findLastAssistantIdx(messages);
-    const toolCallsList = getPersistableToolCalls(activeToolCalls);
+    let updated = [...messages];
+    const lastAssistantIdx = findLastAssistantIdx(updated);
     if (lastAssistantIdx >= 0) {
-      const lastAssistant = { ...messages[lastAssistantIdx] } as Message;
-      if (toolCallsList.length > 0) {
-        lastAssistant.tool_calls = toolCallsList;
+      const lastAssistant = updated[lastAssistantIdx];
+      const isEmpty =
+        !lastAssistant.content &&
+        !(lastAssistant.blocks && lastAssistant.blocks.length > 0);
+      // 流式立即报错且没有任何产出（无内容、无工具结果依赖它）时，移除空占位气泡，
+      // 避免"幽灵气泡"留在对话里、并在下一次发送时被重新发给 API。
+      if (isEmpty && lastAssistantIdx === updated.length - 1) {
+        updated.splice(lastAssistantIdx, 1);
       } else {
-        delete lastAssistant.tool_calls;
+        const toolCallsList = getPersistableToolCalls(activeToolCalls);
+        const updatedAssistant = { ...lastAssistant } as Message;
+        if (toolCallsList.length > 0) {
+          updatedAssistant.tool_calls = toolCallsList;
+        } else {
+          delete updatedAssistant.tool_calls;
+        }
+        updated[lastAssistantIdx] = updatedAssistant;
       }
-      updated = [...messages];
-      updated[lastAssistantIdx] = lastAssistant;
     }
     set({
       messages: updated,

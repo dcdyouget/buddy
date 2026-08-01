@@ -66,10 +66,7 @@ export function useStreaming() {
     const unlisteners: Array<() => void> = [];
 
     import('@tauri-apps/api/event').then(async ({ listen }) => {
-      if (epoch !== epochRef.current) return;
-
-      unlisteners.push(
-        await listen<StreamEvent>('stream-event', (event) => {
+      const unlisten = await listen<StreamEvent>('stream-event', (event) => {
           const e = event.payload;
           switch (e.event) {
             case 'start':
@@ -224,8 +221,16 @@ export function useStreaming() {
               break;
             }
           }
-        }),
-      );
+        });
+
+      // 竞态防御：组件可能在 `await listen()` 期间被卸载。
+      // epoch 在 await 之前已校验一次；若卸载发生在 await 期间，cleanup 已经跑完
+      // （unlisteners 不再会被注销），这里再次校验 epoch，不一致则立即注销刚注册的监听器。
+      if (epoch !== epochRef.current) {
+        unlisten();
+        return;
+      }
+      unlisteners.push(unlisten);
     });
 
     return () => {

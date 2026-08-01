@@ -90,16 +90,15 @@ export function AskUserCard({
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
+    const indexes = Array.from(selected).sort((a, b) => a - b);
+    const inputs = indexes.map((index) => (optionInputs[index] || '').trim());
     if (customTrimmed) {
-      await submitAnswer([], [], customTrimmed);
+      // 自定义回答与已选选项（含补充输入）一起提交，避免静默丢弃用户的选择
+      await submitAnswer(indexes, inputs, customTrimmed);
       return;
     }
 
-    const indexes = Array.from(selected).sort((a, b) => a - b);
-    await submitAnswer(
-      indexes,
-      indexes.map((index) => (optionInputs[index] || '').trim()),
-    );
+    await submitAnswer(indexes, inputs);
   };
 
   const handleSkip = () => submitAnswer([], []);

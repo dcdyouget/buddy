@@ -58,6 +58,10 @@ export function AddProviderPanel({ onBack }: AddProviderPanelProps) {
   /** 选择预设 Provider，自动填充其默认 Base URL */
   const handleSelectPreset = (presetId: string) => {
     setSelectedPreset(presetId);
+    // 切换预设/自定义后清空上次获取的模型，避免"添加"时把旧预设的模型
+    // 挂到新 Provider 上（baseUrl 已变，模型列表属于旧厂商）。
+    setFetchedModels([]);
+    setSelectedModelIds(new Set());
     const preset = PROVIDER_PRESETS.find((p) => p.id === presetId);
     if (preset) setBaseUrl(preset.base_url);
   };
@@ -267,7 +271,13 @@ export function AddProviderPanel({ onBack }: AddProviderPanelProps) {
 
         {/* 自定义 OpenAI 兼容服务入口 */}
         <button
-          onClick={() => { setSelectedPreset('custom'); setBaseUrl(''); }}
+          onClick={() => {
+            setSelectedPreset('custom');
+            setBaseUrl('');
+            // 清空上次获取的模型，避免与自定义 Provider 混用
+            setFetchedModels([]);
+            setSelectedModelIds(new Set());
+          }}
           style={{
             border: 'none',
             background: 'none',
@@ -631,7 +641,9 @@ export function AddProviderPanel({ onBack }: AddProviderPanelProps) {
         onCancel={onBack}
         onConfirm={handleAdd}
         confirmLabel="添加"
-        confirmDisabled={!selectedPreset || !apiKey || selectedModelIds.size === 0}
+        confirmDisabled={
+          !selectedPreset || !baseUrl.trim() || !apiKey || selectedModelIds.size === 0
+        }
       />
     </GlassPanel>
   );

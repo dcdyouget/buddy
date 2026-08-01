@@ -171,18 +171,36 @@ function App() {
     if (typeof window === 'undefined' || !(window as any).__TAURI_INTERNALS__) {
       return;
     }
-    import('@tauri-apps/api/event').then(({ listen }) => {
-      listen<string>('selected-text', (event) => {
-        const text = event.payload.trim();
-        if (text) {
-          const uiPage = useUIStore.getState().currentPage;
-          // 仅在可以输入的状态下设置草稿文本
-          if (uiPage === 'empty' || uiPage === 'noapikey' || uiPage === 'conversation') {
-            useChatStore.getState().setDraftInput(text);
+    // disposed 守卫：处理 StrictMode 下 effect 运行两次 + listen() 是异步的竞态，
+    // 避免在等待期间被卸载后注册一个永远不注销的监听器（监听器泄漏 / 事件重复处理）。
+    let disposed = false;
+    const unlisteners: Array<() => void> = [];
+    import('@tauri-apps/api/event')
+      .then(async ({ listen }) => {
+        const unlisten = await listen<string>('selected-text', (event) => {
+          const text = event.payload.trim();
+          if (text) {
+            const uiPage = useUIStore.getState().currentPage;
+            // 仅在可以输入的状态下设置草稿文本
+            if (uiPage === 'empty' || uiPage === 'noapikey' || uiPage === 'conversation') {
+              useChatStore.getState().setDraftInput(text);
+            }
           }
+        });
+        if (disposed) {
+          unlisten();
+          return;
         }
+        unlisteners.push(unlisten);
+      })
+      .catch((error) => {
+        console.error('[Buddy] selected-text 事件监听失败:', error);
       });
-    });
+
+    return () => {
+      disposed = true;
+      unlisteners.forEach((unlisten) => unlisten());
+    };
   }, []);
 
   return (

@@ -1,4 +1,5 @@
 use super::aggregate::SearchHit;
+use super::web_fetch::read_search_body;
 use dom_query::{Document, Selection};
 use reqwest::{Client, Url};
 use serde::Deserialize;
@@ -48,10 +49,7 @@ async fn search_modern_page(
         .map_err(|error| format!("主搜索页请求失败：{error}"))?;
     ensure_success_status(response.status())?;
 
-    let html = response
-        .text()
-        .await
-        .map_err(|error| format!("主搜索页读取失败：{error}"))?;
+    let html = read_search_body(response, "主搜索页").await?;
     if looks_like_challenge(&html) {
         return Err("主搜索页返回了人机验证".to_string());
     }
@@ -67,10 +65,7 @@ async fn search_modern_page(
         .map_err(|error| format!("结果数据请求失败：{error}"))?;
     ensure_success_status(response.status())?;
 
-    let script = response
-        .text()
-        .await
-        .map_err(|error| format!("结果数据读取失败：{error}"))?;
+    let script = read_search_body(response, "结果数据").await?;
     if looks_like_challenge(&script) {
         return Err("结果数据返回了人机验证".to_string());
     }
@@ -99,10 +94,7 @@ async fn search_legacy_page(
 
     ensure_success_status(response.status())?;
 
-    let html = response
-        .text()
-        .await
-        .map_err(|error| format!("DuckDuckGo 响应读取失败：{error}"))?;
+    let html = read_search_body(response, "DuckDuckGo").await?;
     if looks_like_challenge(&html) {
         return Err("DuckDuckGo 返回了人机验证页面".to_string());
     }

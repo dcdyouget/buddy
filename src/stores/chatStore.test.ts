@@ -235,7 +235,9 @@ describe('chatStore 流式中断收尾', () => {
     useChatStore.getState().handleStreamError('network', '网络错误');
 
     const state = useChatStore.getState();
-    expect(state.messages[0].tool_calls).toBeUndefined();
+    // 空 assistant 占位气泡在流式立即报错时被移除（避免"幽灵气泡"残留、
+    // 下一次发送时被重新发给 API），未完成调用也不会写入历史。
+    expect(state.messages).toEqual([]);
     expect(state.activeToolCalls).toEqual({});
     expect(state.error).toBe('网络错误');
   });

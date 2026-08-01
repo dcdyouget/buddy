@@ -3,6 +3,7 @@
 use parking_lot::Mutex;
 use tauri::Manager;
 use tauri_plugin_global_shortcut::Shortcut;
+use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
 
 mod commands;
 mod hotkey;
@@ -24,6 +25,20 @@ pub use window::positioning::SavedWindowPositions;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .targets([
+                    Target::new(TargetKind::Stdout),
+                    Target::new(TargetKind::LogDir {
+                        file_name: Some("buddy".to_string()),
+                    }),
+                ])
+                .level(log::LevelFilter::Info)
+                .max_file_size(5 * 1024 * 1024)
+                .rotation_strategy(RotationStrategy::KeepSome(3))
+                .timezone_strategy(TimezoneStrategy::UseLocal)
+                .build(),
+        )
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![]),
@@ -44,6 +59,16 @@ pub fn run() {
             current: Mutex::new(None),
         })
         .setup(|app| {
+            let log_dir = app
+                .path()
+                .app_log_dir()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|error| format!("无法解析：{error}"));
+            log::info!(
+                "[app] Buddy 启动: version={}, log_dir={}",
+                app.package_info().version,
+                log_dir
+            );
             match storage::migrate_legacy_image_attachments(app.handle()) {
                 Ok(count) if count > 0 => {
                     log::info!("已将 {} 张旧版 Base64 图片迁移为本地附件", count);
@@ -63,7 +88,9 @@ pub fn run() {
                 .current
                 .lock()
                 .replace(shortcut);
-            hotkey::register(app.handle(), shortcut);
+            if let Err(error) = hotkey::register(app.handle(), shortcut) {
+                log::warn!("[hotkey] 启动时注册全局快捷键失败: {}", error);
+            }
 
             // 创建系统托盘
             tray::create_tray(app)?;
@@ -89,6 +116,7 @@ pub fn run() {
             commands::get_message_count,
             commands::save_message,
             commands::save_chat_image,
+            commands::delete_chat_image,
             commands::download_generated_image,
         ])
         .on_window_event(|window, event| {
