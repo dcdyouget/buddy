@@ -1,4 +1,5 @@
 use super::aggregate::SearchHit;
+use super::web_fetch::read_search_body;
 use dom_query::{Document, Selection};
 use reqwest::{
     header::{ACCEPT, LOCATION},
@@ -55,10 +56,7 @@ pub(super) async fn search_bing(
         }
 
         ensure_success_status(response.status())?;
-        let html = response
-            .text()
-            .await
-            .map_err(|error| format!("Bing 中国响应读取失败：{error}"))?;
+        let html = read_search_body(response, "Bing 中国").await?;
         if looks_like_challenge(&html) {
             return Err("Bing 中国返回了人机验证页面".to_string());
         }

@@ -105,17 +105,32 @@ export function InputDock({
     // 立即聚焦（组件挂载或 isStreaming 变为 false 时）
     requestAnimationFrame(() => ta.focus());
 
-    // 监听窗口获得焦点事件（快捷键呼出 / 点击托盘图标时触发）
+    // 监听窗口获得焦点事件（快捷键呼出 / 点击托盘图标时触发）。
+    // 竞态防御：onFocusChanged 是异步注册的，effect 可能因 isStreaming 变化而重跑。
+    // 若旧 effect 的监听器在 await 期间注册成功，靠 disposed 守卫立即注销，避免
+    // 每个流式会话泄漏一个 focus 监听器（多个监听器 → 聚焦事件被处理多次）。
+    let disposed = false;
     let unlisten: (() => void) | undefined;
-    import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
-      getCurrentWindow().onFocusChanged((focused) => {
-        if (focused && !isStreamingRef.current) {
-          requestAnimationFrame(() => textareaRef.current?.focus());
-        }
-      }).then((fn) => { unlisten = fn; });
-    }).catch(() => {});
+    import('@tauri-apps/api/window')
+      .then(({ getCurrentWindow }) => {
+        getCurrentWindow()
+          .onFocusChanged((focused) => {
+            if (focused && !isStreamingRef.current) {
+              requestAnimationFrame(() => textareaRef.current?.focus());
+            }
+          })
+          .then((fn) => {
+            if (disposed) {
+              fn();
+              return;
+            }
+            unlisten = fn;
+          });
+      })
+      .catch(() => {});
 
     return () => {
+      disposed = true;
       unlisten?.();
     };
   }, [isStreaming]);
@@ -164,7 +179,8 @@ export function InputDock({
       onAttachmentError?.('单张图片不能超过 5 MB');
     }
 
-    const images = await Promise.all(
+    // 用 allSettled 而非 all：单个 FileReader 失败不应丢掉整批已成功读取的图片
+    const results = await Promise.allSettled(
       accepted.map(
         (file) =>
           new Promise<ImageAttachment>((resolve, reject) => {
@@ -188,10 +204,16 @@ export function InputDock({
             reader.readAsDataURL(file);
           }),
       ),
-    ).catch((error) => {
-      onAttachmentError?.(String(error));
-      return [];
-    });
+    );
+    const images = results
+      .filter(
+        (r): r is PromiseFulfilledResult<ImageAttachment> => r.status === 'fulfilled',
+      )
+      .map((r) => r.value);
+    const failedCount = results.length - images.length;
+    if (failedCount > 0) {
+      onAttachmentError?.(`有 ${failedCount} 张图片读取失败，已跳过`);
+    }
     if (images.length > 0) {
       setIsSavingImages(true);
       try {

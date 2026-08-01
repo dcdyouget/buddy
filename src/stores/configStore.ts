@@ -65,8 +65,10 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
       await saveCfg(config);
       set({ config, loading: false });
     } catch (e) {
+      // 保存失败：记录错误但不向调用方抛异常。
+      // 内部各 action（updateTheme/addProvider/updateHotkey…）都不捕获，
+      // 抛出去只会产生 unhandled rejection。配置保持为旧值，避免误显示已保存。
       set({ error: String(e), loading: false });
-      if (!isBrowser) throw e;
     }
   },
 

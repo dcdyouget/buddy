@@ -13,9 +13,38 @@ use tokio::net::lookup_host;
 const MAX_REDIRECTS: usize = 5;
 const MAX_BODY_BYTES: usize = 1_000_000;
 const MAX_CONTENT_CHARS: usize = 4_000;
+const MAX_SEARCH_BODY_BYTES: usize = 1_000_000;
+
+/// 带上限的响应体读取：搜索页面/结果数据不应过大，
+/// 防止异常或恶意响应占满内存。
+pub(super) async fn read_search_body(
+    response: reqwest::Response,
+    what: &str,
+) -> Result<String, String> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_SEARCH_BODY_BYTES as u64)
+    {
+        return Err(format!("{what}响应过大"));
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| format!("{what}读取失败：{error}"))?;
+    if bytes.len() > MAX_SEARCH_BODY_BYTES {
+        return Err(format!("{what}响应过大"));
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
 
 pub(super) fn build_http_client() -> Result<Client, String> {
-    Client::builder()
+    client_builder()
+        .build()
+        .map_err(|error| format!("HTTP 客户端初始化失败：{error}"))
+}
+
+fn client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
         .user_agent(
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
              AppleWebKit/605.1.15 (KHTML, like Gecko) \
@@ -24,16 +53,16 @@ pub(super) fn build_http_client() -> Result<Client, String> {
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(12))
         .redirect(Policy::none())
-        .build()
-        .map_err(|error| format!("HTTP 客户端初始化失败：{error}"))
 }
 
 pub(super) async fn fetch_web_page(client: &Client, value: &str) -> Result<String, String> {
     let mut url = parse_public_url(value)?;
 
     for _ in 0..=MAX_REDIRECTS {
-        ensure_public_destination(&url).await?;
-        let response = client
+        // 校验目标为公网地址，并返回一个「已固定 DNS 解析结果」的客户端，
+        // 确保校验通过的地址与实际连接的地址一致（防止 DNS rebinding）。
+        let request_client = ensure_public_destination(client, &url).await?;
+        let response = request_client
             .get(url.clone())
             .header(
                 "Accept",
@@ -189,16 +218,21 @@ fn parse_public_url(value: &str) -> Result<Url, String> {
     Ok(url)
 }
 
-async fn ensure_public_destination(url: &Url) -> Result<(), String> {
+/// 校验目标 URL 指向公网地址；返回一个已用「校验过的公网地址」固定该域名
+/// 解析结果的请求客户端（hostname 情形），或复用传入的客户端（IP 字面量情形）。
+///
+/// 关键：`reqwest::ClientBuilder::resolve()` 会覆盖该域名的解析结果，使实际连接的
+/// 地址与这里校验通过的地址完全一致，堵住「校验后、连接前 DNS 被篡改」的 rebinding 攻击。
+async fn ensure_public_destination(base: &Client, url: &Url) -> Result<Client, String> {
     let host = url
         .host_str()
         .ok_or_else(|| "网页地址缺少主机名".to_string())?;
     if let Some(ip) = parse_ip_host(host) {
-        return if is_public_ip(ip) {
-            Ok(())
-        } else {
-            Err("不允许读取私有或本地 IP 地址".to_string())
-        };
+        if !is_public_ip(ip) {
+            return Err("不允许读取私有或本地 IP 地址".to_string());
+        }
+        // IP 字面量直连，不经过 DNS 解析，无 rebinding 风险，复用传入客户端
+        return Ok(base.clone());
     }
     let port = url
         .port_or_known_default()
@@ -210,10 +244,18 @@ async fn ensure_public_destination(url: &Url) -> Result<(), String> {
     if addresses.is_empty() {
         return Err("网页域名没有可用地址".to_string());
     }
-    if addresses.iter().any(|address| !is_public_ip(address.ip())) {
-        return Err("网页域名解析到了私有或本地地址".to_string());
+    for address in &addresses {
+        if !is_public_ip(address.ip()) {
+            return Err("网页域名解析到了私有或本地地址".to_string());
+        }
     }
-    Ok(())
+    let mut builder = client_builder();
+    for address in &addresses {
+        builder = builder.resolve(host, *address);
+    }
+    builder
+        .build()
+        .map_err(|error| format!("HTTP 客户端初始化失败：{error}"))
 }
 
 fn parse_ip_host(host: &str) -> Option<IpAddr> {
@@ -235,6 +277,16 @@ fn is_public_ip(ip: IpAddr) -> bool {
                 || ip.is_documentation())
         }
         IpAddr::V6(ip) => {
+            // IPv4-mapped (::ffff:a.b.c.d) 与 IPv4-compatible (::a.b.c.d) 会被系统
+            // 路由到底层 IPv4 地址，可能指向内网/回环/云元数据，一律视为非公网。
+            if ip.to_ipv4_mapped().is_some()
+                || (ip.segments()[0] == 0
+                    && ip.segments()[1] == 0
+                    && ip.segments()[2] == 0
+                    && ip.segments()[3] == 0)
+            {
+                return false;
+            }
             let first = ip.segments()[0];
             !(ip.is_loopback()
                 || ip.is_unspecified()
@@ -277,6 +329,11 @@ mod tests {
         assert!(parse_public_url("http://192.168.1.1/test").is_err());
         assert!(parse_public_url("http://[::1]/test").is_err());
         assert!(parse_public_url("http://[fc00::1]/test").is_err());
+        // IPv4-mapped / IPv4-compatible 地址不得绕过 IPv4 检查
+        assert!(parse_public_url("http://[::ffff:127.0.0.1]/test").is_err());
+        assert!(parse_public_url("http://[::ffff:192.168.1.1]/test").is_err());
+        assert!(parse_public_url("http://[::ffff:169.254.169.254]/test").is_err());
+        assert!(parse_public_url("http://[::ffff:0.0.0.0]/test").is_err());
         assert!(parse_public_url("https://example.com/path").is_ok());
     }
 

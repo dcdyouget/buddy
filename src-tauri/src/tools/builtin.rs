@@ -17,15 +17,86 @@
 //   - 用户传入的 path 可以是绝对路径或相对路径
 //   - 相对路径相对 cwd 处理(注:buddy 是 Tauri 应用,启动时 cwd 是 app bundle 目录,
 //     实际使用中 model 通常传绝对路径,这里按"原样使用"处理,不强制 canonicalize)
-//   - 不做符号链接解析(避免 TOCTOU),写入时直接覆盖
+//   - 符号链接防护:写入前解析"最近已存在祖先"的真实路径再校验一次白名单,
+//     阻止 allowed_paths 目录内指向白名单外的符号链接(写入时仍直接操作原路径,
+//     不额外引入 check-then-act 的 TOCTOU 面)
 // ============================================================================
 
 use super::{Tool, ToolContext, ToolError, ToolOutput, ToolSafety};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
+
+/// 覆盖写临时文件的全局序号：保证并发覆盖同一目标时临时文件名不冲突。
+static OVERWRITE_TMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+/// 写工具的统一路径校验：先做词法白名单校验；allowed_paths 非空时，
+/// 再解析「路径上最近已存在祖先」的真实路径并复检一次，堵住符号链接逃逸。
+pub(super) fn check_write_allowed_with_symlinks(
+    path: &Path,
+    allowed_paths: &[String],
+) -> Result<(), ToolError> {
+    // 词法白名单（快路径）
+    check_write_allowed(path, allowed_paths)?;
+    if allowed_paths.is_empty() {
+        return Ok(());
+    }
+    // 解析目标路径的符号链接后再校验一次，堵住白名单目录内指向外部的软链。
+    let Some(resolved) = canonicalize_nearest_existing(path) else {
+        return Ok(());
+    };
+    if resolved == normalize_path(path) {
+        return Ok(()); // 无符号链接差异，词法校验已足够
+    }
+    // 与「规范化后的白名单前缀」比较：macOS 上 /var → /private/var 这类系统软链
+    // 会让 canonicalize 结果与配置里的字面量不一致，因此白名单两侧都要 canonicalize。
+    for allowed in allowed_paths {
+        if allowed.trim().is_empty() {
+            continue;
+        }
+        let allowed_path = Path::new(allowed);
+        let normalized = normalize_path(allowed_path);
+        let canonical = std::fs::canonicalize(allowed_path)
+            .unwrap_or_else(|_| normalized.clone());
+        if resolved == normalized
+            || resolved.starts_with(&normalized)
+            || resolved == canonical
+            || resolved.starts_with(&canonical)
+        {
+            return Ok(());
+        }
+    }
+    Err(ToolError::PermissionDenied(format!(
+        "路径 {} 不在 allowed_paths 白名单中",
+        path.display()
+    )))
+}
+
+/// 解析「路径上最近已存在的祖先」的符号链接，再拼回尚未创建的部分。
+fn canonicalize_nearest_existing(path: &Path) -> Option<PathBuf> {
+    let mut ancestor = path.to_path_buf();
+    let mut missing = Vec::new();
+    loop {
+        match std::fs::canonicalize(&ancestor) {
+            Ok(mut resolved) => {
+                for component in missing.iter().rev() {
+                    resolved.push(component);
+                }
+                return Some(resolved);
+            }
+            Err(_) => match ancestor.file_name() {
+                Some(name) => {
+                    missing.push(name.to_os_string());
+                    ancestor = ancestor.parent()?.to_path_buf();
+                }
+                None => return None,
+            },
+        }
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 路径检查工具
@@ -190,14 +261,7 @@ impl Tool for CreateFileTool {
 
     async fn execute(&self, args: Value, _ctx: ToolContext) -> Result<ToolOutput, ToolError> {
         let path = extract_path(&args)?;
-        check_write_allowed(&path, &self.allowed_paths)?;
-
-        if fs::metadata(&path).await.is_ok() {
-            return Err(ToolError::InvalidArgs(format!(
-                "文件已存在: {} (请用 overwrite_file 或 append_file)",
-                path.display()
-            )));
-        }
+        check_write_allowed_with_symlinks(&path, &self.allowed_paths)?;
 
         // 自动创建父目录
         if let Some(parent) = path.parent() {
@@ -207,7 +271,22 @@ impl Tool for CreateFileTool {
         }
 
         let content = extract_content(&args);
-        let mut f = fs::File::create(&path).await?;
+        // create_new(true)：原子地"仅当不存在时创建"，避免检查-创建之间的 TOCTOU 覆盖已有文件
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .await
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::AlreadyExists {
+                    ToolError::InvalidArgs(format!(
+                        "文件已存在: {} (请用 overwrite_file 或 append_file)",
+                        path.display()
+                    ))
+                } else {
+                    ToolError::Io(e)
+                }
+            })?;
         f.write_all(content.as_bytes()).await?;
         f.sync_all().await?;
 
@@ -251,7 +330,7 @@ impl Tool for OverwriteFileTool {
 
     async fn execute(&self, args: Value, _ctx: ToolContext) -> Result<ToolOutput, ToolError> {
         let path = extract_path(&args)?;
-        check_write_allowed(&path, &self.allowed_paths)?;
+        check_write_allowed_with_symlinks(&path, &self.allowed_paths)?;
 
         if fs::metadata(&path).await.is_err() {
             return Err(ToolError::InvalidArgs(format!(
@@ -261,7 +340,12 @@ impl Tool for OverwriteFileTool {
         }
 
         let content = extract_content(&args);
-        let tmp = path.with_extension("tmp_buddy_overwrite");
+        // 唯一临时名：并发覆盖同一目标时互不冲突
+        let tmp = path.with_extension(format!(
+            "tmp_buddy_overwrite_{}_{}",
+            std::process::id(),
+            OVERWRITE_TMP_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+        ));
         {
             let mut f = fs::File::create(&tmp).await?;
             f.write_all(content.as_bytes()).await?;
@@ -313,7 +397,7 @@ impl Tool for AppendFileTool {
 
     async fn execute(&self, args: Value, _ctx: ToolContext) -> Result<ToolOutput, ToolError> {
         let path = extract_path(&args)?;
-        check_write_allowed(&path, &self.allowed_paths)?;
+        check_write_allowed_with_symlinks(&path, &self.allowed_paths)?;
 
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {

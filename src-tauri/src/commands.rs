@@ -12,9 +12,25 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use log::{info, warn};
 use parking_lot::Mutex;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Instant;
 use tauri::{Manager, State};
 use tokio::sync::{oneshot, watch};
+
+/// 消息 ID 序列号：同一毫秒内会生成多条消息（工具循环的多条 tool 消息/assistant 分段），
+/// 只靠毫秒时间戳会撞 ID，导致前端 React key 冲突。
+static MESSAGE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+/// 生成带全局序列号的消息 ID，保证同毫秒内也不重复。
+fn unique_message_id(prefix: &str, turn: usize) -> String {
+    format!(
+        "{}-{}-{}-{}",
+        prefix,
+        turn,
+        chrono::Utc::now().timestamp_millis(),
+        MESSAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    )
+}
 /// 取消状态：跨命令共享的取消通道
 ///
 /// 使用 watch channel 实现：send_message 创建发送端，
@@ -173,6 +189,11 @@ fn unique_download_path(download_dir: &Path, extension: &str) -> PathBuf {
 async fn generated_image_bytes(data_url: &str, media_type: &str) -> Result<Vec<u8>, String> {
     let expected_prefix = format!("data:{media_type};base64,");
     if let Some(encoded) = data_url.strip_prefix(&expected_prefix) {
+        // 先按 Base64 编码长度粗略预检，避免对超大 payload 做完整解码
+        // （base64：3 字节 → 4 字符；+4 容忍填充与舍入）
+        if encoded.len() > (MAX_GENERATED_IMAGE_BYTES / 3) * 4 + 4 {
+            return Err("生成图片超过 25 MB，无法下载".to_string());
+        }
         let bytes = BASE64_STANDARD
             .decode(encoded)
             .map_err(|_| "生成图片的 base64 数据无效".to_string())?;
@@ -284,11 +305,16 @@ fn prepare_images_for_provider(
     Ok(())
 }
 
+/// 将生图工具产出的图片持久化为本地附件。
+///
+/// 返回 (已存储的图片, 失败的张数)。失败的图片不再静默丢弃——
+/// 调用方据此把工具结果降级为错误，避免「UI 显示完成但图丢失」。
 async fn persist_tool_images(
     app: &tauri::AppHandle,
     images: Vec<crate::models::ImageAttachment>,
-) -> Vec<crate::models::ImageAttachment> {
+) -> (Vec<crate::models::ImageAttachment>, usize) {
     let mut stored = Vec::with_capacity(images.len());
+    let mut failed = 0usize;
     for image in images {
         if !image.path.is_empty() {
             stored.push(image);
@@ -303,19 +329,27 @@ async fn persist_tool_images(
                 "generated",
             ) {
                 Ok(attachment) => stored.push(attachment),
-                Err(error) => warn!("保存生成图片失败：{}", error),
+                Err(error) => {
+                    failed += 1;
+                    warn!("保存生成图片失败：{}", error);
+                }
             },
-            Ok(_) => warn!("生成图片内容为空：{}", image.name),
+            Ok(_) => {
+                failed += 1;
+                warn!("生成图片内容为空：{}", image.name);
+            }
             Err(error) => {
                 warn!("缓存生成图片失败：{}", error);
                 // HTTPS 地址本身很小，可作为兼容兜底；Base64 绝不再写入聊天记录。
                 if image.data_url.starts_with("https://") {
                     stored.push(image);
+                } else {
+                    failed += 1;
                 }
             }
         }
     }
-    stored
+    (stored, failed)
 }
 
 /// 将用户选择的图片复制到 Buddy 应用数据目录。
@@ -334,6 +368,13 @@ pub async fn save_chat_image(
         5 * 1024 * 1024,
         "upload",
     )
+}
+
+/// 删除已保存的聊天图片附件（用户从输入框移除未发送的图片时调用，
+/// 清理已写盘的孤儿文件；仅限应用数据目录内的附件文件）。
+#[tauri::command]
+pub async fn delete_chat_image(app: tauri::AppHandle, path: String) -> Result<bool, String> {
+    storage::delete_attachment_file(&app, &path)
 }
 
 /// 将生图工具的结果保存到系统下载目录。
@@ -415,7 +456,7 @@ fn build_tool_msg(
     is_error: bool,
 ) -> Message {
     Message {
-        id: format!("t-{}-{}", turn, chrono::Utc::now().timestamp_millis()),
+        id: unique_message_id("t", turn),
         role: MessageRole::Tool,
         content,
         images,
@@ -462,6 +503,14 @@ pub async fn send_message(
     messages: Vec<Message>,
     model_id: String,
 ) -> Result<(), String> {
+    let question_started = Instant::now();
+    let question_log_id = messages
+        .iter()
+        .rev()
+        .find(|message| message.role == MessageRole::User)
+        .map(|message| message.id.clone())
+        .unwrap_or_else(|| unique_message_id("q", 0));
+
     // 从配置中查找模型对应的 Provider
     let config = storage::get_config(&app)?;
     let model = config
@@ -490,7 +539,8 @@ pub async fn send_message(
     let provider_type = ProviderType::from_str(&provider.provider_type);
 
     info!(
-        "[send_message] model={}, provider={}, type={:?}, history_len={}, est_tokens={}, context_window={}",
+        "[llm][{}] 问题开始: model={}, provider={}, type={:?}, history_len={}, estimated_input_tokens={}, context_window={}",
+        question_log_id,
         model_id,
         provider.id,
         provider_type,
@@ -531,6 +581,12 @@ pub async fn send_message(
     // 本轮产生的用户、assistant 与工具消息先放在内存，结束时统一批量写入。
     let mut pending_persistence: Vec<Message> = messages.last().cloned().into_iter().collect();
 
+    // 防止并发 send_message：若有生成任务在跑，拒绝新的，避免第二个任务覆盖
+    // 第一个任务的取消通道，导致 stop_generation 对第一个任务失效。
+    if state.sender.lock().is_some() {
+        return Err("已有生成任务正在进行中".to_string());
+    }
+
     // 创建取消通道
     let (cancel_tx, mut cancel_rx) = watch::channel(false);
     *state.sender.lock() = Some(cancel_tx);
@@ -566,7 +622,15 @@ pub async fn send_message(
             message.images.clear();
         }
     } else {
-        prepare_images_for_provider(&app, &mut conv_messages)?;
+        // 图片预处理失败：不要用 `?` 直接退出——那样会泄漏取消通道、
+        // 丢失用户消息，且前端收不到任何流事件提示。
+        if let Err(error) = prepare_images_for_provider(&app, &mut conv_messages) {
+            warn!("[send_message] 图片预处理失败: {}", error);
+            state.sender.lock().take();
+            flush_pending_messages(app.clone(), pending_persistence).await;
+            emitter.error(StopReason::Error, &error, "");
+            return Ok(());
+        }
     }
 
     // 每次 send_message 开始时重置"本次都允许"标志，防止上次被中断时残留
@@ -581,6 +645,13 @@ pub async fn send_message(
     const MAX_CONSECUTIVE_FAILED_TURNS: usize = 3;
     let mut turn: usize = 0;
     let mut consecutive_failed_turns: usize = 0;
+    let mut api_requests = 0usize;
+    let mut total_api_ms = 0u128;
+    let mut total_answer_bytes = 0usize;
+    let mut total_answer_chars = 0usize;
+    let mut total_thinking_bytes = 0usize;
+    let mut total_thinking_chars = 0usize;
+    let mut total_tool_calls = 0usize;
 
     let outcome: Result<crate::streaming::StreamOutcome, _> = loop {
         turn += 1;
@@ -598,11 +669,15 @@ pub async fn send_message(
         let windowed = &conv_messages[start_idx..];
 
         let tools = registry.all_definitions();
+        let request_id = format!("{}#{}", question_log_id, turn);
+        api_requests += 1;
+        let api_started = Instant::now();
         let outcome = llm_provider
             .stream_chat(
                 &provider.base_url,
                 &provider.api_key,
                 &model_id,
+                &request_id,
                 windowed,
                 &emitter,
                 cancel_rx.clone(),
@@ -610,11 +685,17 @@ pub async fn send_message(
                 &tools,
             )
             .await;
+        total_api_ms += api_started.elapsed().as_millis();
 
         let out = match outcome {
             Ok(o) => o,
             Err(e) => break Err(e),
         };
+        total_answer_bytes += out.full_text.len();
+        total_answer_chars += out.full_text.chars().count();
+        total_thinking_bytes += out.thinking_text.len();
+        total_thinking_chars += out.thinking_text.chars().count();
+        total_tool_calls += out.tool_calls.len();
 
         // 持久化本轮 assistant 消息
         if !out.full_text.is_empty() || !out.tool_calls.is_empty() || !out.thinking_text.is_empty()
@@ -637,7 +718,7 @@ pub async fn send_message(
                 ContentBlock::parse_from_text(&out.full_text)
             };
             let assistant_msg = Message {
-                id: format!("a-{}-{}", turn, chrono::Utc::now().timestamp_millis()),
+                id: unique_message_id("a", turn),
                 role: MessageRole::Assistant,
                 content: out.full_text.clone(),
                 images: Vec::new(),
@@ -672,6 +753,11 @@ pub async fn send_message(
         // 本轮追踪:是否有至少一个 tool 执行成功(非 is_error)?
         let mut turn_has_success = false;
         for call in &out.tool_calls {
+            // 用户点击"停止"后，不再执行本轮剩余的工具调用
+            if *cancel_rx.borrow() {
+                info!("[send_message] turn {} 工具循环被用户取消, 跳过剩余 {} 个调用", turn, out.tool_calls.len());
+                break;
+            }
             // ── ask_user 特殊分支:不进入普通 tool.execute,而是显示内联问答卡等回答 ──
             if call.name == "ask_user" {
                 let args_value: serde_json::Value = match serde_json::from_str(&call.arguments) {
@@ -799,11 +885,23 @@ pub async fn send_message(
                 });
                 let approved = tokio::select! {
                     _ = cancel_rx.changed() => {
-                        // User cancelled during approval wait — remove the slot from pending
-                        if let Some(idx) = approval.pending.lock().iter().position(|s| s.id == call.id) {
-                            approval.pending.lock().remove(idx);
+                        // User cancelled during approval wait — remove the slot from pending.
+                        // position + remove 必须在同一持锁作用域内完成：并发 approve_tool_call
+                        // 可能在两次 lock 之间改动 Vec，导致 idx 失效（误删其他 slot 或越界 panic）。
+                        let removed = {
+                            let mut pending = approval.pending.lock();
+                            if let Some(idx) = pending.iter().position(|s| s.id == call.id) {
+                                pending.remove(idx);
+                                true
+                            } else {
+                                false
+                            }
+                        };
+                        if removed {
+                            warn!("[send_message] 审批被用户取消, 已移除 pending slot id={}", call.id);
+                        } else {
+                            warn!("[send_message] 审批取消时找不到 slot id={} (可能已处理)", call.id);
                         }
-                        warn!("[send_message] 审批被用户取消");
                         false
                     }
                     result = rx => {
@@ -841,9 +939,10 @@ pub async fn send_message(
             };
             let ctx = crate::tools::ToolContext {
                 approve_all_for_turn: approval.approve_all_for_turn.load(Ordering::Relaxed),
+                cancel_rx: Some(cancel_rx.clone()),
             };
             let result = tool.execute(args_value, ctx).await;
-            let (content, raw_images, is_error) = match &result {
+            let (mut content, raw_images, mut is_error) = match &result {
                 Ok(o) => (o.content.clone(), o.images.clone(), o.is_error),
                 Err(e) if call.name == "generate_image" => (
                     format!(
@@ -855,7 +954,19 @@ pub async fn send_message(
                 ),
                 Err(e) => (format!("执行失败: {}", e), Vec::new(), true),
             };
-            let images = persist_tool_images(&app, raw_images).await;
+            let (images, failed_image_count) = persist_tool_images(&app, raw_images).await;
+            if failed_image_count > 0 {
+                // 有图片落盘失败：不能再声称"图片生成完成"。
+                // 降级为错误并明确告知模型，避免它因"不要重复生成"而丢失整组图片。
+                is_error = true;
+                if !content.is_empty() {
+                    content.push('\n');
+                }
+                content.push_str(&format!(
+                    "[图片保存失败] 有 {} 张生成的图片未能保存到本地，请直接向用户说明失败原因并建议重新生成。",
+                    failed_image_count
+                ));
+            }
             info!(
                 "[send_message] turn {} tool '{}' 执行结果: is_error={}, content_len={}, id={}",
                 turn,
@@ -922,6 +1033,25 @@ pub async fn send_message(
             error_emitter.error(StopReason::Error, &error_msg, "");
         }
     }
+
+    let final_status = match &outcome {
+        Ok(out) if out.had_stream_error => "partial_or_aborted",
+        Ok(_) => "success",
+        Err(_) => "error",
+    };
+    info!(
+        "[llm][{}] 问题总结: status={}, total_ms={}, api_ms={}, api_requests={}, answer_bytes={}, answer_chars={}, thinking_bytes={}, thinking_chars={}, tool_calls={}",
+        question_log_id,
+        final_status,
+        question_started.elapsed().as_millis(),
+        total_api_ms,
+        api_requests,
+        total_answer_bytes,
+        total_answer_chars,
+        total_thinking_bytes,
+        total_thinking_chars,
+        total_tool_calls,
+    );
 
     // 不论正常完成、取消还是工具循环报错，均保存本轮已经生成的完整记录。
     flush_pending_messages(app.clone(), pending_persistence).await;
@@ -992,6 +1122,23 @@ pub async fn approve_tool_call(
 /// - 自定义:`User responded: <text>`
 /// - 跳过:`User skipped the question`
 fn format_ask_user_answer(options: &[AskUserOption], answer: &AskUserAnswer) -> String {
+    // 同时存在已选选项和自定义文本时，两者都要呈现给模型
+    // （用户可能既勾选了选项又补充了自定义回答，不能静默丢弃任何一部分）。
+    let custom_suffix = answer
+        .custom
+        .as_deref()
+        .map(str::trim)
+        .filter(|custom| !custom.is_empty())
+        .map(|custom| format!("\nUser also responded: {}", custom))
+        .unwrap_or_default();
+    let append_custom = |main: String| -> String {
+        if custom_suffix.is_empty() {
+            main
+        } else {
+            format!("{main}{custom_suffix}")
+        }
+    };
+
     // 优先用 selected 索引
     if !answer.selected.is_empty() {
         // 收集 (label, optional_input) 对
@@ -1011,10 +1158,12 @@ fn format_ask_user_answer(options: &[AskUserOption], answer: &AskUserAnswer) -> 
             // 单选 + 带输入
             if pairs.len() == 1 {
                 let (label, input) = &pairs[0];
-                if !input.trim().is_empty() {
-                    return format!("User selected: {}\nUser input: {}", label, input.trim());
-                }
-                return format!("User selected: {}", label);
+                let base = if !input.trim().is_empty() {
+                    format!("User selected: {}\nUser input: {}", label, input.trim())
+                } else {
+                    format!("User selected: {}", label)
+                };
+                return append_custom(base);
             }
             // 多选
             let lines: Vec<String> = pairs
@@ -1027,7 +1176,7 @@ fn format_ask_user_answer(options: &[AskUserOption], answer: &AskUserAnswer) -> 
                     }
                 })
                 .collect();
-            return format!("User selected:\n{}", lines.join("\n"));
+            return append_custom(format!("User selected:\n{}", lines.join("\n")));
         }
     }
     // 回退到自定义文本
@@ -1103,10 +1252,12 @@ pub async fn save_config(app: tauri::AppHandle, config: AppConfig) -> Result<(),
         }
     }
 
-    storage::save_config(&app, &config)?;
+    // 先应用热键变更（先注册新组合、成功后注销旧组合），
+    // 失败则整体拒绝保存：避免把无法注册的组合持久化到磁盘，
+    // 也避免旧快捷键被注销后新快捷键注册失败（静默失能）。
+    crate::hotkey::update_hotkey(&app, &config.hotkey)?;
 
-    // 热键配置变更后，重新注册全局快捷键
-    crate::hotkey::update_hotkey(&app, &config.hotkey);
+    storage::save_config(&app, &config)?;
 
     Ok(())
 }

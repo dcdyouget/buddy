@@ -33,6 +33,7 @@ export function EmptyPage() {
     removeDraftImage,
     error,
     setError,
+    isStreaming,
   } = useChatStore();
   const draftImages = storedDraftImages ?? [];
   const { config } = useConfigStore();
@@ -131,7 +132,7 @@ export function EmptyPage() {
         )}
 
         <InputDock
-          isStreaming={false}
+          isStreaming={isStreaming}
           selectedModel={selectedModel}
           draftInput={draftInput}
           draftImages={draftImages}

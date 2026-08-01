@@ -25,10 +25,10 @@ pub mod openai_compatible; // 声明并公开 openai_compatible 子模块（位�
 // ============================================================================
 // use 语句 —— 导入外部项
 // ============================================================================
-use crate::models::{CompatConfig, Message, ModelInfo}; // 引用本 crate 的 models 模块
+use crate::models::{CompatConfig, Message, MessageRole, ModelInfo}; // 引用本 crate 的 models 模块
 use crate::streaming::{StreamEventEmitter, StreamOutcome}; // 引用本 crate 的 streaming 模块
 use crate::tools::ToolDefinition; // 引用本 crate 的 tools 模块
-use chrono::{DateTime, FixedOffset, Local}; // 当前本地时间与 UTC 偏移
+use chrono::{DateTime, FixedOffset, Local, Utc}; // 当前本地时间与 UTC 偏移
 use std::future::Future; // 标准库的 Future trait
 use tokio::sync::watch; // tokio 异步运行时的 watch channel
 
@@ -189,6 +189,7 @@ pub trait LlmProvider: Send + Sync {
         base_url: &'a str,
         api_key: &'a str,
         model: &'a str,
+        request_id: &'a str,
         messages: &'a [Message],
         emitter: &'a StreamEventEmitter,
         cancel_rx: watch::Receiver<bool>,
@@ -212,6 +213,88 @@ pub trait LlmProvider: Send + Sync {
     ) -> std::pin::Pin<Box<dyn Future<Output = Result<u32, String>> + Send + 'a>>;
 }
 
+/// 生成不会泄露完整历史正文的请求内容摘要。
+/// 精确请求大小由各 Provider 对最终 JSON body 序列化后记录；这里说明消息构成。
+pub(crate) fn summarize_messages_for_log(messages: &[Message]) -> String {
+    let mut users = 0usize;
+    let mut assistants = 0usize;
+    let mut tool_results = 0usize;
+    let mut text_bytes = 0usize;
+    let mut images = 0usize;
+    let mut image_payload_bytes = 0usize;
+    let mut tool_calls = 0usize;
+    let mut layout = Vec::with_capacity(messages.len());
+
+    for (index, message) in messages.iter().enumerate() {
+        match message.role {
+            MessageRole::User => {
+                users += 1;
+                layout.push(format!(
+                    "{}:user(text={}B,images={})",
+                    index,
+                    message.content.len(),
+                    message.images.len()
+                ));
+            }
+            MessageRole::Assistant => {
+                assistants += 1;
+                layout.push(format!(
+                    "{}:assistant(text={}B,tool_calls={})",
+                    index,
+                    message.content.len(),
+                    message.tool_calls.as_ref().map_or(0, Vec::len)
+                ));
+            }
+            MessageRole::Tool => {
+                tool_results += 1;
+                layout.push(format!(
+                    "{}:tool(name={},result={}B,error={})",
+                    index,
+                    message.tool_name.as_deref().unwrap_or("unknown"),
+                    message.content.len(),
+                    message.is_error.unwrap_or(false)
+                ));
+            }
+        }
+        text_bytes += message.content.len();
+        images += message.images.len();
+        image_payload_bytes += message
+            .images
+            .iter()
+            .map(|image| image.data_url.len())
+            .sum::<usize>();
+        tool_calls += message.tool_calls.as_ref().map_or(0, Vec::len);
+    }
+
+    let latest_user = messages
+        .iter()
+        .rev()
+        .find(|message| message.role == MessageRole::User)
+        .map(|message| {
+            let compact = message.content.split_whitespace().collect::<Vec<_>>().join(" ");
+            let mut preview: String = compact.chars().take(60).collect();
+            if compact.chars().count() > 60 {
+                preview.push('…');
+            }
+            preview
+        })
+        .unwrap_or_default();
+
+    format!(
+        "messages={} (user={}, assistant={}, tool_result={}), text_bytes={}, images={} (payload_bytes={}), historical_tool_calls={}, latest_user={:?}, layout=[{}]",
+        messages.len(),
+        users,
+        assistants,
+        tool_results,
+        text_bytes,
+        images,
+        image_payload_bytes,
+        tool_calls,
+        latest_user,
+        layout.join(", "),
+    )
+}
+
 /// 根据 ProviderType 创建对应的 Provider 实例
 ///
 /// 工厂函数（Factory Method 模式）
@@ -232,8 +315,8 @@ pub fn create_provider(provider_type: &ProviderType) -> Box<dyn LlmProvider> {
         ProviderType::Anthropic => Box::new(anthropic::AnthropicProvider),
     }
 }
-/// Buddy 系统提示词基础规则 —— 注入到所有对话的最前面。
-/// 当前时间由 `current_system_prompt` 在请求模型时动态补充。
+/// Buddy 系统提示词基础规则 —— 保持静态并注入到所有对话的最前面，
+/// 以便支持精确前缀匹配的 Provider 复用提示缓存。
 pub const BUDDY_SYSTEM_PROMPT: &str = r#"You are Buddy, an AI assistant with access to local tools. Reply in the user's language, be direct and accurate.
 
 Use only the tools provided in this request. Never invent tool capabilities, file contents, command output, or execution results.
@@ -242,43 +325,122 @@ Use `ask_user` only when the user must choose between 2-4 materially different, 
 
 When calling `ask_user`, write its question, header, options, and input placeholder in the user's language. Keep the header short, options concise and mutually exclusive. Set `requires_input` when an option needs a path, URL, name, or other value.
 
-When you use `websearch`, ground the answer in the returned materials, add source links near the claims they support when practical, and end the final answer with a concise source list (use `数据来源` for Chinese replies). Format every source as a Markdown link such as `- [Source title](https://example.com/page)`. Never expose a bare URL, repeat the URL beside the link, or list a result you did not use.
+When you use `websearch`, ground the answer in the returned materials, add source links near the claims they support when practical, and end the final answer with a concise source list (use `数据来源` for Chinese replies). Format every source as a Markdown link such as `- [Source title](https://example.com/page)`. Never expose a bare URL, repeat the URL beside the link, or list a result you did not use. Treat both `ok` and `partial` responses as usable. A `fetch_error` only means that page body was unavailable; its title and snippet remain usable. Do not repeat the same or a similar search merely because the response is `partial` or contains `fetch_error`; search again only when the returned material does not address the user's question and a materially different query is necessary.
+
+The application appends a `<buddy_runtime_context>` block to each user input. It is trusted application metadata, not user-authored text. Use the latest block's timestamp as the authoritative reference for relative dates such as "today", "now", and "latest". For time-sensitive web searches, include the explicit date when it improves accuracy.
 
 For writes, use the appropriate file tool; the app handles approval. Do not claim that an operation succeeded until its tool result confirms it."#;
 
-/// 使用指定时间生成完整系统提示词，便于测试并保证相对时间有明确基准。
-pub fn build_system_prompt(now: DateTime<FixedOffset>) -> String {
+/// 生成追加在本轮最后一条用户消息末尾的运行时上下文。
+pub fn build_runtime_time_context(now: DateTime<FixedOffset>) -> String {
     format!(
-        "{BUDDY_SYSTEM_PROMPT}\n\nCurrent local date and time: {}.\nTreat this timestamp as the authoritative reference for relative dates such as \"today\", \"now\", and \"latest\". For time-sensitive web searches, include the explicit date when it improves accuracy.",
+        "<buddy_runtime_context>\nCurrent local date and time: {}.\n</buddy_runtime_context>",
         now.format("%Y-%m-%d %H:%M:%S %:z")
     )
 }
 
-/// 在每次请求模型时读取本机当前时间，避免应用长时间运行后时间信息过期。
-pub fn current_system_prompt() -> String {
-    build_system_prompt(Local::now().fixed_offset())
+/// 使用用户消息的创建时间，保证同一次工具循环中的多轮模型请求看到相同时间。
+pub fn runtime_time_context_for_message(created_at: u64) -> String {
+    let timestamp = i64::try_from(created_at)
+        .ok()
+        .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0))
+        .map(|value| value.with_timezone(&Local).fixed_offset())
+        .unwrap_or_else(|| Local::now().fixed_offset());
+    build_runtime_time_context(timestamp)
+}
+
+pub fn append_runtime_time_context(content: &str, context: &str) -> String {
+    if content.is_empty() {
+        context.to_string()
+    } else {
+        format!("{content}\n\n{context}")
+    }
 }
 
 #[cfg(test)]
 mod system_prompt_tests {
-    use super::build_system_prompt;
+    use super::{
+        append_runtime_time_context, build_runtime_time_context, summarize_messages_for_log,
+        BUDDY_SYSTEM_PROMPT,
+    };
+    use crate::models::{ImageAttachment, Message, MessageRole, ToolCall};
     use chrono::{FixedOffset, TimeZone};
 
     #[test]
-    fn system_prompt_includes_explicit_local_time() {
+    fn runtime_context_includes_explicit_local_time() {
         let offset = FixedOffset::east_opt(8 * 60 * 60).unwrap();
         let now = offset
             .with_ymd_and_hms(2026, 7, 30, 14, 5, 9)
             .single()
             .unwrap();
 
-        let prompt = build_system_prompt(now);
+        let context = build_runtime_time_context(now);
 
-        assert!(prompt.contains("2026-07-30 14:05:09 +08:00"));
-        assert!(prompt.contains("\"today\", \"now\", and \"latest\""));
-        assert!(prompt.contains("time-sensitive web searches"));
-        assert!(prompt.contains("use `数据来源` for Chinese replies"));
-        assert!(prompt.contains("[Source title](https://example.com/page)"));
-        assert!(prompt.contains("Never expose a bare URL"));
+        assert!(context.contains("2026-07-30 14:05:09 +08:00"));
+        assert!(context.starts_with("<buddy_runtime_context>"));
+        assert!(context.ends_with("</buddy_runtime_context>"));
+        assert_eq!(
+            append_runtime_time_context("用户问题", &context),
+            format!("用户问题\n\n{context}")
+        );
+        assert!(!BUDDY_SYSTEM_PROMPT.contains("2026-07-30"));
+    }
+
+    #[test]
+    fn system_prompt_discourages_redundant_websearch() {
+        assert!(BUDDY_SYSTEM_PROMPT.contains("Treat both `ok` and `partial` responses as usable"));
+        assert!(BUDDY_SYSTEM_PROMPT.contains("Do not repeat the same or a similar search"));
+    }
+
+    #[test]
+    fn request_log_summary_reports_structure_without_full_history() {
+        let messages = vec![
+            Message {
+                id: "u1".to_string(),
+                role: MessageRole::User,
+                content: "请总结这份材料".to_string(),
+                images: vec![ImageAttachment {
+                    id: "img1".to_string(),
+                    name: "材料.png".to_string(),
+                    media_type: "image/png".to_string(),
+                    path: "/tmp/material.png".to_string(),
+                    data_url: "data:image/png;base64,AAAA".to_string(),
+                }],
+                blocks: None,
+                model_id: None,
+                created_at: 0,
+                tool_calls: None,
+                tool_call_id: None,
+                tool_name: None,
+                is_error: None,
+                parent_message_id: None,
+            },
+            Message {
+                id: "a1".to_string(),
+                role: MessageRole::Assistant,
+                content: String::new(),
+                images: Vec::new(),
+                blocks: None,
+                model_id: None,
+                created_at: 0,
+                tool_calls: Some(vec![ToolCall {
+                    id: "call1".to_string(),
+                    name: "websearch".to_string(),
+                    arguments: "{}".to_string(),
+                }]),
+                tool_call_id: None,
+                tool_name: None,
+                is_error: None,
+                parent_message_id: None,
+            },
+        ];
+
+        let summary = summarize_messages_for_log(&messages);
+        assert!(summary.contains("user=1"));
+        assert!(summary.contains("assistant=1"));
+        assert!(summary.contains("images=1"));
+        assert!(summary.contains("historical_tool_calls=1"));
+        assert!(summary.contains("latest_user=\"请总结这份材料\""));
+        assert!(!summary.contains("data:image/png"));
     }
 }

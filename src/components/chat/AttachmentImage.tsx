@@ -41,10 +41,15 @@ export function AttachmentImage({
     () => attachmentSource(image),
     [image.path, image.data_url],
   );
+  // missing = 完全没有可显示来源（文件与 data_url 都不存在）——永久性
   const [missing, setMissing] = useState(!source);
+  // loadFailed = 有来源但 <img> 加载失败（可能是暂时性错误）——允许重试
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [retryKey, setRetryKey] = useState(0);
 
   useEffect(() => {
     setMissing(!source);
+    setLoadFailed(false);
   }, [source]);
 
   if (missing) {
@@ -64,15 +69,51 @@ export function AttachmentImage({
     );
   }
 
+  if (loadFailed) {
+    // 暂时性加载失败：提供重试，避免瞬时错误被当成"图片已删除"永久卡死
+    return (
+      <div
+        className={`attachment-image-missing ${className || ''}`}
+        style={style}
+        role="img"
+        aria-label={`${alt}，图片加载失败`}
+      >
+        <ImageOff size={18} aria-hidden="true" />
+        <span>图片加载失败</span>
+        <button
+          type="button"
+          onClick={() => {
+            setLoadFailed(false);
+            setRetryKey((key) => key + 1);
+          }}
+          style={{
+            border: 'none',
+            background: 'transparent',
+            color: 'var(--buddy-primary)',
+            cursor: 'pointer',
+            fontSize: '12px',
+            textDecoration: 'underline',
+          }}
+        >
+          重试
+        </button>
+        <code title={image.path || image.name}>
+          {image.path || image.name}
+        </code>
+      </div>
+    );
+  }
+
   return (
     <img
+      key={retryKey}
       className={className}
       src={source}
       alt={alt}
       title={image.name}
       style={style}
       loading={loading}
-      onError={() => setMissing(true)}
+      onError={() => setLoadFailed(true)}
     />
   );
 }

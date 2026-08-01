@@ -19,13 +19,21 @@ use super::mcp::McpServerConfig;
 /// 应用全局配置（持久化到磁盘的根 JSON 对象）
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppConfig {
-    pub theme: Theme,                   // 当前主题
-    pub hotkey: String,                 // 全局快捷键字符串，如 "CmdOrCtrl+J"
+    // 所有字段都带 serde 默认值：老版本/半写入的 config.json 缺字段时用默认值补齐，
+    // 而不是整个解析失败回退成默认配置、下一次保存把用户的真实配置覆盖掉。
+    #[serde(default = "default_theme")]
+    pub theme: Theme, // 当前主题
+    #[serde(default = "default_hotkey")]
+    pub hotkey: String, // 全局快捷键字符串，如 "CmdOrCtrl+J"
+    #[serde(default)]
     pub providers: Vec<ProviderConfig>, // 用户配置的所有 API 提供商
     // Vec<T> ≈ Java 的 ArrayList<T>，但栈上是指针
+    #[serde(default)]
     pub models: Vec<super::message::ModelInfo>, // 已知模型列表（含 context_window 等）
-    pub selected_model_id: String,              // UI 当前选中的模型 ID
-    pub auto_start: bool,                       // 开机自启动
+    #[serde(default)]
+    pub selected_model_id: String, // UI 当前选中的模型 ID
+    #[serde(default)]
+    pub auto_start: bool, // 开机自启动
 
     // ── Tool / MCP 相关字段 ──
     // 缺省时使用 vec![] —— 老 config.json 无这些字段也能正常加载
@@ -36,6 +44,14 @@ pub struct AppConfig {
     /// MCP server 配置列表
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
+}
+
+fn default_theme() -> Theme {
+    Theme::Light
+}
+
+fn default_hotkey() -> String {
+    "CmdOrCtrl+J".to_string()
 }
 
 // 给 AppConfig 提供默认值；新建配置文件时使用
@@ -122,6 +138,9 @@ pub struct CompatConfig {
     pub supports_temperature: Option<bool>,
     #[serde(default)]
     pub supports_tools: Option<bool>,
+    /// 前端类型里存在但此前 Rust 侧缺失的字段；补上避免保存配置时被 serde 静默丢弃
+    #[serde(default)]
+    pub supports_long_cache_retention: Option<bool>,
 }
 
 // impl 块：给 CompatConfig 添加方法（类似 Java 的 getter）
@@ -160,6 +179,11 @@ impl CompatConfig {
     pub fn supports_tools(&self) -> bool {
         self.supports_tools.unwrap_or(true)
     }
+
+    #[allow(dead_code)] // 预留：前端类型中有此字段，保持与前端一致
+    pub fn supports_long_cache_retention(&self) -> bool {
+        self.supports_long_cache_retention.unwrap_or(true)
+    }
 }
 
 // 给 CompatConfig 提供默认值（用于 `Option<CompatConfig>` 的兜底场景）
@@ -174,6 +198,7 @@ impl Default for CompatConfig {
             supports_developer_role: None,
             supports_temperature: None,
             supports_tools: None,
+            supports_long_cache_retention: None,
         }
     }
 }

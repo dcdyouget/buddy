@@ -27,7 +27,7 @@ use log::{error, info, warn}; // 日志门面（log crate）
 use reqwest::Client; // HTTP 客户端
 use serde_json::{json, Value}; // 通用 JSON 值类型
 use std::pin::Pin; // 用于 Pin<Box<...>>
-use std::time::Duration; // 时间段
+use std::time::{Duration, Instant}; // 时间段与耗时统计
 use tokio::sync::watch; // watch channel（取消信号）
 use tokio::time::timeout; // 给异步操作加超时
 
@@ -36,6 +36,9 @@ const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 /// 单次字节块读取超时
 const CHUNK_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// SSE 单行数据上限：正常文本增量远小于此；防止异常/恶意响应把行缓冲撑爆。
+const MAX_SSE_LINE_BYTES: usize = 1 << 20;
 
 // ============================================================================
 // AnthropicProvider —— Anthropic 适配器
@@ -47,6 +50,15 @@ const CHUNK_TIMEOUT: Duration = Duration::from_secs(30);
 // ============================================================================
 pub struct AnthropicProvider;
 
+fn has_valid_tool_arguments(tool_call: &ToolCall) -> bool {
+    !tool_call.id.trim().is_empty()
+        && !tool_call.name.trim().is_empty()
+        && matches!(
+            serde_json::from_str::<Value>(&tool_call.arguments),
+            Ok(Value::Object(_))
+        )
+}
+
 impl AnthropicProvider {
     /// 将内部消息格式转换为 Anthropic API 格式
     ///
@@ -55,11 +67,23 @@ impl AnthropicProvider {
     fn convert_messages(messages: &[Message]) -> Vec<Value> {
         // 收集所有 assistant 消息中有效的 tool_use id
         // (此函数只负责 messages 数组；系统提示通过请求体顶层 `system` 字段注入,见 stream_chat)
+        // 只有参数完整、且存在对应 tool_result 的调用才允许进入下一次请求。
+        // 主动停止流式输出时，assistant 中可能留下半截 arguments（input_json_delta
+        // 未收完）；Anthropic API 要求 tool_use 的 input 是 JSON 对象，否则整次请求 400。
+        let tool_result_ids: std::collections::HashSet<&str> = messages
+            .iter()
+            .filter(|m| m.role == MessageRole::Tool)
+            .filter_map(|m| m.tool_call_id.as_deref())
+            .filter(|id| !id.trim().is_empty())
+            .collect();
+
         let valid_tool_use_ids: std::collections::HashSet<&str> = messages
             .iter()
             .filter(|m| m.role == MessageRole::Assistant)
             .filter_map(|m| m.tool_calls.as_ref())
-            .flat_map(|calls| calls.iter().map(|tc| tc.id.as_str()))
+            .flat_map(|calls| calls.iter())
+            .filter(|tc| has_valid_tool_arguments(tc) && tool_result_ids.contains(tc.id.as_str()))
+            .map(|tc| tc.id.as_str())
             .collect();
 
         messages
@@ -69,9 +93,9 @@ impl AnthropicProvider {
                 // 整条过滤掉，不发给 API
                 if m.role == MessageRole::Tool {
                     let id = m.tool_call_id.as_deref().unwrap_or("");
-                    if !id.is_empty() && !valid_tool_use_ids.contains(id) {
+                    if id.is_empty() || !valid_tool_use_ids.contains(id) {
                         warn!(
-                            "[anthropic::convert_messages] 过滤孤儿 tool 消息, tool_use_id='{}' 找不到对应的 assistant tool_use",
+                            "[anthropic::convert_messages] 过滤孤儿 tool 消息, tool_use_id='{}' 找不到有效的 assistant tool_use",
                             id
                         );
                         return None;
@@ -81,7 +105,10 @@ impl AnthropicProvider {
                 let result = match m.role {
                     MessageRole::User => {
                         if m.images.is_empty() {
-                            json!({ "role": "user", "content": m.content })
+                            let context = super::runtime_time_context_for_message(m.created_at);
+                            let content =
+                                super::append_runtime_time_context(&m.content, &context);
+                            json!({ "role": "user", "content": content })
                         } else {
                             let mut content = m
                                 .images
@@ -104,30 +131,68 @@ impl AnthropicProvider {
                                     "text": m.content,
                                 }));
                             }
+                            let context = super::runtime_time_context_for_message(m.created_at);
+                            content.push(json!({
+                                "type": "text",
+                                "text": context,
+                            }));
                             json!({ "role": "user", "content": content })
                         }
                     }
                     MessageRole::Assistant => {
-                        let mut obj = json!({ "role": "assistant" });
-                        if let Some(calls) = &m.tool_calls {
-                            let mut content: Vec<Value> = if m.content.is_empty() {
-                                vec![]
-                            } else {
-                                vec![json!({"type": "text", "text": m.content})]
-                            };
-                            for tc in calls {
-                                let args: Value = serde_json::from_str(&tc.arguments).unwrap_or(Value::Null);
-                                content.push(json!({
-                                    "type": "tool_use",
-                                    "id": tc.id,
-                                    "name": tc.name,
-                                    "input": args,
-                                }));
-                            }
-                            obj["content"] = json!(content);
-                        } else {
-                            obj["content"] = json!(m.content);
+                        let original_has_tool_calls =
+                            m.tool_calls.as_ref().is_some_and(|calls| !calls.is_empty());
+                        // 只保留参数完整、且存在对应 tool_result 的调用；
+                        // 主动停止/中断流时可能留下孤儿 tool_use 或半截 arguments。
+                        let valid_calls: Vec<&ToolCall> = m
+                            .tool_calls
+                            .iter()
+                            .flatten()
+                            .filter(|tc| {
+                                if !has_valid_tool_arguments(tc) {
+                                    warn!(
+                                        "[anthropic::convert_messages] 丢弃参数不完整的 tool_use, id='{}', name='{}'",
+                                        tc.id, tc.name
+                                    );
+                                    return false;
+                                }
+                                if !tool_result_ids.contains(tc.id.as_str()) {
+                                    warn!(
+                                        "[anthropic::convert_messages] 丢弃没有结果的 tool_use, id='{}', name='{}'",
+                                        tc.id, tc.name
+                                    );
+                                    return false;
+                                }
+                                true
+                            })
+                            .collect();
+
+                        // 纯工具调用消息在中断后若没有任何可发送的调用，就不能留下空 assistant
+                        if original_has_tool_calls
+                            && valid_calls.is_empty()
+                            && m.content.trim().is_empty()
+                        {
+                            return None;
                         }
+
+                        let mut obj = json!({ "role": "assistant" });
+                        let mut content: Vec<Value> = if m.content.is_empty() {
+                            vec![]
+                        } else {
+                            vec![json!({"type": "text", "text": m.content})]
+                        };
+                        for tc in valid_calls {
+                            // has_valid_tool_arguments 已保证 arguments 可解析为 JSON 对象
+                            let args: Value =
+                                serde_json::from_str(&tc.arguments).unwrap_or(Value::Null);
+                            content.push(json!({
+                                "type": "tool_use",
+                                "id": tc.id,
+                                "name": tc.name,
+                                "input": args,
+                            }));
+                        }
+                        obj["content"] = json!(content);
                         obj
                     }
                     MessageRole::Tool => {
@@ -193,6 +258,7 @@ impl LlmProvider for AnthropicProvider {
         base_url: &'a str,
         api_key: &'a str,
         model: &'a str,
+        request_id: &'a str,
         messages: &'a [Message],
         emitter: &'a StreamEventEmitter,
         mut cancel_rx: watch::Receiver<bool>,
@@ -240,11 +306,16 @@ impl LlmProvider for AnthropicProvider {
             // 与 Python 中 f-string 不同，它是静态字面量 + 占位符的混合体
             // P5: request body with tools (Anthropic format)
             // 注意: Anthropic 用顶层 `system` 字段(不是 messages 里的 system 消息)
-            // 注入 Buddy 系统提示词，并补充本次请求的本地时间
+            // 系统提示保持静态，每条用户消息的固定时间后缀已在转换阶段追加。
+            // Anthropic 要求 max_tokens 不能超过模型的 context_window；
+            // 固定 4096 在小窗口模型上会被 API 拒绝。取 min(4096, context_window 的一半)，
+            // 大窗口模型保持 4096 不变。
+            let max_tokens =
+                std::cmp::min(4096u32, get_context_window(model).saturating_div(2).max(1));
             let mut body = serde_json::json!({
                 "model": model,
-                "max_tokens": 4096,
-                "system": super::current_system_prompt(),
+                "max_tokens": max_tokens,
+                "system": super::BUDDY_SYSTEM_PROMPT,
                 "messages": anthropic_messages,
                 "stream": true,
             });
@@ -255,7 +326,8 @@ impl LlmProvider for AnthropicProvider {
                         json!({
                             "name": t.name,
                             "description": t.description,
-                            "input_schema": t.parameters,
+                            // 与 OpenAI provider 保持一致：确保 input_schema 是标准对象
+                            "input_schema": super::openai_compatible::ensure_object_schema(&t.parameters),
                         })
                     })
                     .collect();
@@ -267,38 +339,24 @@ impl LlmProvider for AnthropicProvider {
             // format!("{}/v1/messages", ...) ≈ Java 的 String.format("%s/v1/messages", baseUrl)
             // trim_end_matches('/') 移除结尾的 '/'，防止出现 "//v1"
             let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
+            let request_bytes = serde_json::to_vec(&body)
+                .map(|serialized| serialized.len())
+                .unwrap_or_else(|_| body.to_string().len());
+            let tool_names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
             info!(
-                "[anthropic::stream_chat] 开始请求: model={}, url={}",
-                model, url
-            );
-
-            // ── DEBUG: 打印完整请求体(用于排查 tool_use_id 问题) ──
-            for (i, m) in anthropic_messages.iter().enumerate() {
-                let role = m["role"].as_str().unwrap_or("?");
-                let content_info = if m["content"].is_array() {
-                    let types: Vec<&str> = m["content"]
-                        .as_array()
-                        .map(|arr| arr.iter().filter_map(|c| c["type"].as_str()).collect())
-                        .unwrap_or_default();
-                    format!(" content_types={:?}", types)
-                } else {
-                    let preview: String = m["content"]
-                        .as_str()
-                        .unwrap_or("?")
-                        .chars()
-                        .take(80)
-                        .collect();
-                    format!(" content='{}'", preview)
-                };
-                info!(
-                    "[anthropic::debug] msg[{}] role={}{}",
-                    i, role, content_info,
-                );
-            }
-            info!(
-                "[anthropic::debug] 总计 {} 条消息, body 大小≈{} bytes",
-                anthropic_messages.len(),
-                body.to_string().len(),
+                "[llm][{}] 请求摘要: protocol=anthropic_messages, model={}, url={}, body_bytes={}, system_prompt_bytes={}, runtime_contexts={}, {}, available_tools={} [{}]",
+                request_id,
+                model,
+                url,
+                request_bytes,
+                super::BUDDY_SYSTEM_PROMPT.len(),
+                messages
+                    .iter()
+                    .filter(|message| message.role == MessageRole::User)
+                    .count(),
+                super::summarize_messages_for_log(messages),
+                tools.len(),
+                tool_names.join(", ")
             );
 
             // ── 5. 发送 POST 请求 ──
@@ -313,6 +371,7 @@ impl LlmProvider for AnthropicProvider {
             //       挂起当前 Future，等 send 的 Future 完成
             //       完成后取回 Result
             //     ≈ Java 的 CompletableFuture.get() 或 Kotlin 的 suspend fun
+            let request_started = Instant::now();
             let response = client
                 .post(&url)
                 .header("x-api-key", api_key)
@@ -335,9 +394,12 @@ impl LlmProvider for AnthropicProvider {
 
             // ── 6. 检查 HTTP 状态码 ──
             let status = response.status();
+            let headers_ms = request_started.elapsed().as_millis() as u64;
             info!(
-                "[anthropic::stream_chat] 收到响应: status={}",
-                status.as_u16()
+                "[llm][{}] 响应头: status={}, headers_ms={}",
+                request_id,
+                status.as_u16(),
+                headers_ms
             );
             if !status.is_success() {
                 let body_text = response.text().await.unwrap_or_default();
@@ -371,8 +433,10 @@ impl LlmProvider for AnthropicProvider {
             //   - Stream<Item = Result<Bytes, Error>>
             //   - 类似 Java 的 InputStream，但包装成 Future/Stream API
             let mut byte_stream = response.bytes_stream();
-            // buffer 累积"未完整行"，SSE 按行解析，必须自己组行
-            let mut buffer = String::new();
+            // buffer 累积"未完整行"，SSE 按行解析，必须自己组行。
+            // 注意：用字节缓冲而不是 String——按网络 chunk 解码会把跨 chunk 的
+            // 多字节字符（中文/emoji）永久损坏，必须在完整行处才解码。
+            let mut buffer: Vec<u8> = Vec::new();
 
             // 流式状态追踪变量（mut 表示可变）
             let mut full_response = String::new(); // 累积完整回复文本
@@ -383,6 +447,13 @@ impl LlmProvider for AnthropicProvider {
 
             let mut chunk_count: u64 = 0; // 接收到的字节块数
             let mut token_count: u64 = 0; // 已发出的文本 token 数
+            let mut response_bytes = 0usize;
+            let mut first_output_ms: Option<u64> = None;
+            let mut input_tokens = 0u64;
+            let mut output_tokens = 0u64;
+            let mut cache_hit_tokens = 0u64;
+            let mut cache_write_tokens = 0u64;
+            let mut has_usage = false;
 
             // P5: tool_call 流式追踪 (key=index, Anthropic 用 index 区分 block)
             use std::collections::HashMap;
@@ -391,6 +462,19 @@ impl LlmProvider for AnthropicProvider {
                 |tc: &mut HashMap<usize, ToolCall>, em: &StreamEventEmitter| -> Vec<ToolCall> {
                     let mut ordered: Vec<(usize, ToolCall)> = tc.drain().collect();
                     ordered.sort_by_key(|(i, _)| *i);
+                    // 丢弃从未收到 input_json_delta 的不完整 tool_use（如流被中断/提前结束），
+                    // 避免把半截调用当作可执行工具。空参数说明该块从未真正开始执行。
+                    ordered.retain(|(_, t)| {
+                        if t.arguments.trim().is_empty() {
+                            warn!(
+                                "[anthropic::stream_chat] 丢弃参数为空的不完整 tool_use, id='{}', name='{}'",
+                                t.id, t.name
+                            );
+                            false
+                        } else {
+                            true
+                        }
+                    });
                     let pending = ordered.len();
                     for (_, t) in &ordered {
                         em.tool_call_end(&t.id, &t.name, &t.arguments);
@@ -461,29 +545,36 @@ impl LlmProvider for AnthropicProvider {
                 match chunk {
                     Some(Ok(bytes)) => {
                         chunk_count += 1;
-                        // from_utf8_lossy 把字节转成 &str，UTF-8 非法字符替换为 �
-                        let text = String::from_utf8_lossy(&bytes);
-                        // 前 3 个块做预览日志
-                        if chunk_count <= 3 {
-                            let preview: String = text.chars().take(500).collect();
-                            info!(
-                                "[anthropic::stream_chat] chunk#{}: {} bytes, raw={}",
-                                chunk_count,
-                                bytes.len(),
-                                preview
+                        response_bytes += bytes.len();
+                        // 累积原始字节而不是按 chunk 解码：若多字节字符被 TCP 分块
+                        // 从中间切开，逐 chunk 用 from_utf8_lossy 会永久损坏该字符。
+                        // 改为按字节缓冲，遇到完整行（以 0x0A 结尾）才整行解码。
+                        buffer.extend_from_slice(&bytes);
+                        // 单行数据上限：防止异常/恶意响应把行缓冲撑爆
+                        if buffer.len() > MAX_SSE_LINE_BYTES {
+                            warn!(
+                                "[anthropic::stream_chat] SSE 行数据超过 {} 字节，终止解析",
+                                MAX_SSE_LINE_BYTES
                             );
+                            emitter.error(
+                                StopReason::Error,
+                                "响应数据行超过大小上限",
+                                &full_response,
+                            );
+                            return Ok(StreamOutcome {
+                                full_text: full_response,
+                                thinking_text: thinking_response,
+                                tool_calls: vec![],
+                                had_stream_error: true,
+                            });
                         }
-                        // 把新字节追加到 buffer
-                        buffer.push_str(&text);
 
                         // 逐行解析：SSE 是行分隔的协议
-                        // while let Some(pos) = buffer.find('\n') { ... }
-                        //   - 找换行位置
-                        //   - 切出一行
-                        //   - 处理完，把 buffer 切成剩余部分
-                        while let Some(pos) = buffer.find('\n') {
-                            let line = buffer[..pos].to_string();
-                            buffer = buffer[pos + 1..].to_string();
+                        // 注意：0x0A 不可能是多字节字符的续字节，所以按字节找 \n 切出的
+                        // 完整行保证是合法 UTF-8，可安全解码，不会损坏跨 chunk 的字符。
+                        while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
+                            let line = String::from_utf8_lossy(&buffer[..pos]).to_string();
+                            buffer.drain(..pos + 1);
 
                             // 尝试解析 SSE 字段行（"field: value"）
                             if let Some((field, value)) = Self::parse_sse_line(&line) {
@@ -510,14 +601,22 @@ impl LlmProvider for AnthropicProvider {
                                                             .as_object()
                                                             .or_else(|| json["usage"].as_object());
                                                         if let Some(u) = usage {
-                                                            // u.get("input_tokens") 拿 Option<&Value>
-                                                            // .and_then(|v| v.as_u64())  Option<&Value> → Option<u64>
-                                                            // .unwrap_or(0)             None 时给默认值 0
-                                                            let input = u
+                                                            let uncached_input = u
                                                                 .get("input_tokens")
                                                                 .and_then(|v| v.as_u64())
                                                                 .unwrap_or(0);
-                                                            info!("[anthropic] message_start: input_tokens={}", input);
+                                                            cache_hit_tokens = u
+                                                                .get("cache_read_input_tokens")
+                                                                .and_then(|v| v.as_u64())
+                                                                .unwrap_or(0);
+                                                            cache_write_tokens = u
+                                                                .get("cache_creation_input_tokens")
+                                                                .and_then(|v| v.as_u64())
+                                                                .unwrap_or(0);
+                                                            input_tokens = uncached_input
+                                                                .saturating_add(cache_hit_tokens)
+                                                                .saturating_add(cache_write_tokens);
+                                                            has_usage = true;
                                                         }
                                                     }
                                                     "content_block_start" => {
@@ -536,6 +635,10 @@ impl LlmProvider for AnthropicProvider {
                                                                 emitter.thinking_start(idx);
                                                             }
                                                             "tool_use" => {
+                                                                first_output_ms.get_or_insert_with(|| {
+                                                                    request_started.elapsed().as_millis()
+                                                                        as u64
+                                                                });
                                                                 let block = &json["content_block"];
                                                                 let id = block["id"]
                                                                     .as_str()
@@ -568,6 +671,12 @@ impl LlmProvider for AnthropicProvider {
                                                                     .as_str()
                                                                     .unwrap_or("");
                                                                 if !text.is_empty() {
+                                                                    first_output_ms.get_or_insert_with(|| {
+                                                                        request_started
+                                                                            .elapsed()
+                                                                            .as_millis()
+                                                                            as u64
+                                                                    });
                                                                     token_count += 1;
                                                                     // push_str(&str) 追加字符串
                                                                     full_response.push_str(text);
@@ -583,6 +692,12 @@ impl LlmProvider for AnthropicProvider {
                                                                     .as_str()
                                                                     .unwrap_or("");
                                                                 if !thinking.is_empty() {
+                                                                    first_output_ms.get_or_insert_with(|| {
+                                                                        request_started
+                                                                            .elapsed()
+                                                                            .as_millis()
+                                                                            as u64
+                                                                    });
                                                                     emitter.thinking_delta(
                                                                         content_index,
                                                                         thinking,
@@ -639,22 +754,56 @@ impl LlmProvider for AnthropicProvider {
                                                             .as_str()
                                                             .unwrap_or("");
                                                         let usage = &json["usage"];
-                                                        let output_tokens = usage["output_tokens"]
+                                                        output_tokens = usage["output_tokens"]
                                                             .as_u64()
                                                             .unwrap_or(0);
-                                                        info!(
-                                                            "[anthropic] message_delta: stop_reason={}, output_tokens={}",
-                                                            stop_reason, output_tokens
-                                                        );
+                                                        has_usage = has_usage || output_tokens > 0;
+                                                        info!("[llm][{}] stop_reason={}", request_id, stop_reason);
                                                     }
                                                     "message_stop" => {
-                                                        info!(
-                                                            "[anthropic::stream_chat] message_stop: {} chunks, {} tokens, {} chars",
-                                                            chunk_count, token_count, full_response.len()
-                                                        );
                                                         let calls = flush_tool_calls(
                                                             &mut tool_calls,
                                                             emitter,
+                                                        );
+                                                        let usage_summary = if has_usage {
+                                                            let total_tokens = input_tokens
+                                                                .saturating_add(output_tokens);
+                                                            let cache_rate = if input_tokens > 0 {
+                                                                cache_hit_tokens as f64 * 100.0
+                                                                    / input_tokens as f64
+                                                            } else {
+                                                                0.0
+                                                            };
+                                                            format!(
+                                                                "input_tokens={}, output_tokens={}, total_tokens={}, cache_hit={}, cache_miss={}, cache_write={}, cache_rate={:.2}%",
+                                                                input_tokens,
+                                                                output_tokens,
+                                                                total_tokens,
+                                                                cache_hit_tokens,
+                                                                input_tokens.saturating_sub(cache_hit_tokens),
+                                                                cache_write_tokens,
+                                                                cache_rate,
+                                                            )
+                                                        } else {
+                                                            "tokens=Provider未返回".to_string()
+                                                        };
+                                                        info!(
+                                                            "[llm][{}] 响应摘要: status=success, total_ms={}, headers_ms={}, first_output_ms={}, sse_bytes={}, chunks={}, text_delta_events={}, answer_bytes={}, answer_chars={}, thinking_bytes={}, thinking_chars={}, tool_calls={}, {}",
+                                                            request_id,
+                                                            request_started.elapsed().as_millis(),
+                                                            headers_ms,
+                                                            first_output_ms
+                                                                .map(|value| value.to_string())
+                                                                .unwrap_or_else(|| "无输出".to_string()),
+                                                            response_bytes,
+                                                            chunk_count,
+                                                            token_count,
+                                                            full_response.len(),
+                                                            full_response.chars().count(),
+                                                            thinking_response.len(),
+                                                            thinking_response.chars().count(),
+                                                            calls.len(),
+                                                            usage_summary,
                                                         );
                                                         // done 事件由 commands.rs 在整轮 tool 循环结束时统一发射
                                                         return Ok(StreamOutcome {
@@ -708,10 +857,31 @@ impl LlmProvider for AnthropicProvider {
                         }
                     }
                     Some(Err(e)) => {
-                        // 网络错误
+                        // 网络错误：保留已累积的完整工具调用（不完整调用在 flush 内被丢弃），
+                        // 避免整轮工具结果因网络错误而丢失。
                         emitter.error(
                             StopReason::Error,
                             &format!("流读取错误: {}", e),
+                            &full_response,
+                        );
+                        let calls = flush_tool_calls(&mut tool_calls, emitter);
+                        return Ok(StreamOutcome {
+                            full_text: full_response,
+                            thinking_text: thinking_response,
+                            tool_calls: calls,
+                            had_stream_error: true,
+                        });
+                    }
+                    None => {
+                        // 流结束但没收到 message_stop：连接被提前切断（异常结束）。
+                        // Anthropic 协议保证正常完成的响应必然以 message_stop 收尾，
+                        // 走到这里说明消息不完整——按网络错误处理，不执行未完成工具调用。
+                        warn!(
+                            "[anthropic::stream_chat] 流提前结束(未收到 message_stop)，视为异常"
+                        );
+                        emitter.error(
+                            StopReason::Error,
+                            "流提前结束(连接中断)",
                             &full_response,
                         );
                         return Ok(StreamOutcome {
@@ -719,16 +889,6 @@ impl LlmProvider for AnthropicProvider {
                             thinking_text: thinking_response,
                             tool_calls: vec![],
                             had_stream_error: true,
-                        });
-                    }
-                    None => {
-                        let calls = flush_tool_calls(&mut tool_calls, emitter);
-                        // done 事件由 commands.rs 在整轮 tool 循环结束时统一发射
-                        return Ok(StreamOutcome {
-                            full_text: full_response,
-                            thinking_text: thinking_response,
-                            tool_calls: calls,
-                            had_stream_error: false,
                         });
                     }
                 }
@@ -909,7 +1069,24 @@ fn builtin_anthropic_models() -> Vec<ModelInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::ImageAttachment;
+    use crate::models::{ImageAttachment, MessageRole};
+
+    fn make_user_message(id: &str, content: &str, created_at: u64) -> Message {
+        Message {
+            id: id.to_string(),
+            role: MessageRole::User,
+            content: content.to_string(),
+            images: Vec::new(),
+            blocks: None,
+            model_id: None,
+            created_at,
+            tool_calls: None,
+            tool_call_id: None,
+            tool_name: None,
+            is_error: None,
+            parent_message_id: None,
+        }
+    }
 
     #[test]
     fn test_parse_sse_line_event() {
@@ -970,5 +1147,31 @@ mod tests {
         assert_eq!(content[0]["source"]["media_type"], "image/png");
         assert_eq!(content[0]["source"]["data"], "aGVsbG8=");
         assert_eq!(content[1]["type"], "text");
+        assert_eq!(content[2]["type"], "text");
+        assert!(content[2]["text"]
+            .as_str()
+            .unwrap()
+            .contains("<buddy_runtime_context>"));
+    }
+
+    #[test]
+    fn test_each_user_message_keeps_its_stable_runtime_time() {
+        let output = AnthropicProvider::convert_messages(&[
+            make_user_message("u1", "旧问题", 1_700_000_000),
+            make_user_message("u2", "新问题", 1_800_000_000),
+        ]);
+
+        let previous = output[0]["content"].as_str().unwrap();
+        assert!(previous.starts_with("旧问题\n\n<buddy_runtime_context>"));
+        let latest = output[1]["content"].as_str().unwrap();
+        assert!(latest.starts_with("新问题\n\n<buddy_runtime_context>"));
+        assert_ne!(previous, latest);
+        assert_eq!(
+            output,
+            AnthropicProvider::convert_messages(&[
+                make_user_message("u1", "旧问题", 1_700_000_000),
+                make_user_message("u2", "新问题", 1_800_000_000),
+            ])
+        );
     }
 }

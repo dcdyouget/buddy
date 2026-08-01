@@ -23,7 +23,10 @@ pub struct HotkeyState {
 /// - **显示且已聚焦**（在最前）→ 隐藏
 ///
 /// 仅在按键按下（Pressed）时触发，避免按下/释放各触发一次。
-pub fn register(app: &tauri::AppHandle, shortcut: Shortcut) {
+///
+/// 返回 Result：注册失败（组合被系统保留、被其它应用占用等）时向上传播，
+/// 调用方才能把错误反馈给用户，而不是静默吞掉。
+pub fn register(app: &tauri::AppHandle, shortcut: Shortcut) -> Result<(), String> {
     app.global_shortcut()
         .on_shortcut(shortcut, move |app, _sc, event| {
             if event.state == ShortcutState::Pressed {
@@ -70,7 +73,8 @@ pub fn register(app: &tauri::AppHandle, shortcut: Shortcut) {
                 }
             }
         })
-        .ok();
+        .map(|_| ())
+        .map_err(|error| format!("全局快捷键注册失败: {}", error))
 }
 
 /// 注销指定的全局热键
@@ -81,28 +85,32 @@ pub fn unregister(app: &tauri::AppHandle, shortcut: Shortcut) {
     let _ = app.global_shortcut().unregister(shortcut);
 }
 
-/// 更新全局热键：注销旧热键 → 注册新热键 → 更新状态
+/// 更新全局热键：注册新热键 → 注销旧热键 → 更新状态
 ///
 /// 参数 `hotkey_str` 为用户配置的热键字符串（如 "CmdOrCtrl+J"）。
-/// 若字符串解析失败（无效热键格式），静默忽略，不改变当前注册的热键。
-pub fn update_hotkey(app: &tauri::AppHandle, hotkey_str: &str) {
-    let shortcut = match hotkey_str.parse::<Shortcut>() {
-        Ok(s) => s,
-        Err(_) => return,
-    };
+///
+/// 顺序设计（关键安全点）：
+/// 1. 先注册新热键；若注册失败（组合被系统保留/被其它应用占用）直接返回 Err，
+///    **旧热键保持可用**，不会出现"旧键已注销、新键注册失败"的静默失能。
+/// 2. 注册成功后，才注销旧热键并更新状态。
+/// 3. 若新组合与当前组合相同，直接返回（避免每次保存配置都注销/注册一遍全局快捷键）。
+pub fn update_hotkey(app: &tauri::AppHandle, hotkey_str: &str) -> Result<(), String> {
+    let shortcut = hotkey_str
+        .parse::<Shortcut>()
+        .map_err(|_| format!("无效的热键格式: {}", hotkey_str))?;
 
-    // 先注销旧热键
-    {
-        let state = app.state::<HotkeyState>();
-        let mut current = state.current.lock();
-        if let Some(old) = current.take() {
-            unregister(app, old);
-        }
+    let state = app.state::<HotkeyState>();
+    let mut current = state.current.lock();
+    // 组合未变化：无需重新注册（正常保存配置时 hotkey 大多没变）
+    if current.as_ref() == Some(&shortcut) {
+        return Ok(());
     }
 
-    // 注册新热键
-    register(app, shortcut);
+    // 先注册新热键，成功后再注销旧热键
+    register(app, shortcut)?;
 
-    // 更新状态
-    app.state::<HotkeyState>().current.lock().replace(shortcut);
+    if let Some(old) = current.replace(shortcut) {
+        unregister(app, old);
+    }
+    Ok(())
 }

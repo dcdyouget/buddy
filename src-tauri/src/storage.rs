@@ -30,6 +30,25 @@ fn ensure_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+// ── 原子写工具 ────────────────────────────────────────────
+
+/// 原子写文件：先写临时文件，再 rename 覆盖目标。
+///
+/// `fs::write` 直接写目标文件在进程崩溃/断电时会留下半个文件（JSON 解析失败、
+/// 被当作空数据回退 → 下一次保存覆盖真实数据）。rename 在同类文件系统上是原子的，
+/// 保证目标文件要么是旧内容、要么是新内容，绝不会是半截内容。
+fn write_file_atomic(
+    dir: &PathBuf,
+    file_name: &str,
+    content: &str,
+    label: &str,
+) -> Result<(), String> {
+    let tmp_path = dir.join(format!(".{file_name}.tmp"));
+    fs::write(&tmp_path, content).map_err(|e| format!("写入{label}临时文件失败: {e}"))?;
+    fs::rename(&tmp_path, dir.join(file_name)).map_err(|e| format!("写入{label}失败: {e}"))?;
+    Ok(())
+}
+
 // ── Config ────────────────────────────────────────────────
 
 /// 读取应用配置
@@ -54,11 +73,9 @@ pub fn get_config(app: &tauri::AppHandle) -> Result<AppConfig, String> {
 /// 保存应用配置到磁盘
 pub fn save_config(app: &tauri::AppHandle, config: &AppConfig) -> Result<(), String> {
     let dir = ensure_data_dir(app)?;
-    let path = dir.join("config.json");
     let content =
         serde_json::to_string_pretty(config).map_err(|e| format!("序列化配置失败: {}", e))?;
-    fs::write(&path, content).map_err(|e| format!("写入配置文件失败: {}", e))?;
-    Ok(())
+    write_file_atomic(&dir, "config.json", &content, "配置文件")
 }
 
 // ── Manifest ──────────────────────────────────────────────
@@ -86,11 +103,9 @@ fn read_manifest(dir: &PathBuf) -> Manifest {
 
 /// 写入 manifest.json
 fn write_manifest(dir: &PathBuf, manifest: &Manifest) -> Result<(), String> {
-    let path = dir.join("manifest.json");
     let content =
         serde_json::to_string_pretty(manifest).map_err(|e| format!("序列化索引失败: {}", e))?;
-    fs::write(&path, content).map_err(|e| format!("写入索引文件失败: {}", e))?;
-    Ok(())
+    write_file_atomic(dir, "manifest.json", &content, "索引文件")
 }
 
 // ── Messages ──────────────────────────────────────────────
@@ -156,6 +171,11 @@ pub fn store_image_data_url(
     let encoded = data_url
         .strip_prefix(&prefix)
         .ok_or_else(|| format!("图片数据格式无效：{name}"))?;
+    // 先按 Base64 编码长度粗略预检，避免对超大 payload 做完整解码
+    // （base64：3 字节 → 4 字符；+4 容忍填充与舍入）
+    if encoded.len() > (max_bytes / 3) * 4 + 4 {
+        return Err(format!("图片文件过大：{name}"));
+    }
     let bytes = BASE64_STANDARD
         .decode(encoded)
         .map_err(|_| format!("图片 Base64 数据无效：{name}"))?;
@@ -163,6 +183,24 @@ pub fn store_image_data_url(
         return Err(format!("图片文件过大：{name}"));
     }
     store_image_bytes(app, name, media_type, &bytes, id_prefix)
+}
+
+/// 删除已保存的附件文件（仅允许应用数据目录 attachments 子目录内的文件）。
+///
+/// 返回 Ok(false) = 文件不存在；Ok(true) = 已删除。
+/// 限制在 attachments 目录内，防止任意路径的穿越删除。
+pub fn delete_attachment_file(app: &tauri::AppHandle, path: &str) -> Result<bool, String> {
+    let dir = data_dir(app)?;
+    let attachments_dir = dir.join("attachments");
+    let target = std::path::Path::new(path);
+    if !target.starts_with(&attachments_dir) {
+        return Err("不允许删除附件目录之外的文件".to_string());
+    }
+    match fs::remove_file(target) {
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(format!("删除附件文件失败: {e}")),
+    }
 }
 
 /// 将旧版聊天记录中的 Base64 图片迁移为本地附件文件并重写分块。
@@ -309,7 +347,7 @@ fn read_chunk(dir: &PathBuf, file: &str) -> Result<ChatChunk, String> {
 fn write_chunk(dir: &PathBuf, file: &str, chunk: &ChatChunk) -> Result<(), String> {
     let content =
         serde_json::to_string_pretty(chunk).map_err(|e| format!("序列化消息失败: {}", e))?;
-    fs::write(dir.join(file), content).map_err(|e| format!("写入消息文件失败: {}", e))
+    write_file_atomic(dir, file, &content, "消息文件")
 }
 
 /// 按偏移量和数量加载历史消息（支持跨分块查询）
@@ -369,6 +407,11 @@ pub fn load_messages(
             }
         });
 
+        // 以实际消息数而非 manifest 计数为准推进偏移。
+        // manifest 计数与实际内容可能不一致（如写入中途崩溃），按 manifest 算偏移
+        // 会静默跳过或重复消息；读取到的分块一律用真实长度。
+        let actual_count = chunk.messages.len() as u64;
+
         // 计算该分块内的起始索引（跨 chunk offset 修正）
         let local_start = if messages_before >= offset {
             0 // offset 落在已遍历的分块之内
@@ -378,7 +421,7 @@ pub fn load_messages(
 
         // 防御：若 manifest 计数与实际消息数不一致，跳过无效范围
         if local_start >= chunk.messages.len() {
-            messages_before += chunk_count;
+            messages_before += actual_count;
             continue;
         }
 
@@ -390,7 +433,7 @@ pub fn load_messages(
 
         // 提取消息并加入结果集
         collected.extend(chunk.messages[local_start..local_end].iter().cloned());
-        messages_before += chunk_count;
+        messages_before += actual_count;
     }
 
     Ok(collected)

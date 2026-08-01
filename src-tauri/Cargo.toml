@@ -22,11 +22,11 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 dom_query = "0.27"
 tokio = { version = "1", features = ["full"] }
 tauri-plugin-global-shortcut = "2"
+tauri-plugin-log = "2"
 chrono = "0.4"
 futures-util = "0.3"
 arboard = "3"
 log = "0.4"
-env_logger = "0.11"
 image = { version = "0.25", default-features = false, features = ["png"] }
 async-trait = "0.1"
 thiserror = "1"
