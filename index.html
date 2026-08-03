@@ -1,13 +1,460 @@
 <!doctype html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Buddy</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Buddy · 遇到问题，按一下快捷键</title>
+<meta name="description" content="Buddy 是一款支持 macOS 与 Windows 11 的轻量桌面 AI 助手。无需切换网页，按下全局快捷键即可提问并获得流式回答。" />
+<style>
+  :root {
+    --brand: #2F6BFF;
+    --brand-2: #5A93FF;
+    --brand-3: #38BDF8;
+    --ink: #0B1B3A;
+    --ink-soft: #43526E;
+    --ink-mute: #7A879C;
+    --bg: #F4F8FF;
+    --card: rgba(255, 255, 255, 0.82);
+    --line: rgba(47, 107, 255, 0.14);
+    --radius: 20px;
+    --shadow: 0 24px 60px -20px rgba(47, 107, 255, 0.35);
+    --shadow-sm: 0 8px 24px -8px rgba(11, 27, 58, 0.14);
+    --app-icon: url("data:image/png;base64,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");
+    font-synthesis: none;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { scroll-behavior: smooth; scroll-padding-top: 82px; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro SC", "PingFang SC",
+      "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    line-height: 1.6;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a:focus-visible {
+    outline: 3px solid rgba(47, 107, 255, 0.3);
+    outline-offset: 4px;
+  }
+
+  /* ===== animated aurora background ===== */
+  .aurora {
+    position: fixed;
+    inset: 0;
+    z-index: -2;
+    overflow: hidden;
+    background:
+      radial-gradient(1000px 700px at 15% -5%, rgba(90, 147, 255, 0.28), transparent 60%),
+      radial-gradient(900px 700px at 95% 10%, rgba(56, 189, 248, 0.22), transparent 55%),
+      radial-gradient(800px 600px at 50% 110%, rgba(47, 107, 255, 0.18), transparent 60%),
+      var(--bg);
+  }
+  .blob {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(60px);
+    opacity: 0.55;
+    animation: float 18s ease-in-out infinite;
+  }
+  .blob.b1 { width: 420px; height: 420px; left: -80px; top: 4%;
+    background: radial-gradient(circle, var(--brand), transparent 70%); }
+  .blob.b2 { width: 360px; height: 360px; right: -60px; top: 24%;
+    background: radial-gradient(circle, var(--brand-3), transparent 70%); animation-delay: -6s; }
+  .blob.b3 { width: 340px; height: 340px; left: 40%; top: 60%;
+    background: radial-gradient(circle, var(--brand-2), transparent 70%); animation-delay: -11s; }
+  @keyframes float {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    33% { transform: translate(40px, -30px) scale(1.08); }
+    66% { transform: translate(-30px, 25px) scale(0.95); }
+  }
+  /* subtle grid overlay for tech feel */
+  .grid-overlay {
+    position: fixed; inset: 0; z-index: -1; pointer-events: none;
+    background-image:
+      linear-gradient(rgba(47,107,255,0.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(47,107,255,0.05) 1px, transparent 1px);
+    background-size: 44px 44px;
+    mask-image: radial-gradient(circle at 50% 20%, black, transparent 78%);
+  }
+
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+
+  /* ===== nav ===== */
+  nav {
+    position: sticky; top: 0; z-index: 50;
+    backdrop-filter: saturate(180%) blur(16px);
+    -webkit-backdrop-filter: saturate(180%) blur(16px);
+    background: rgba(244, 248, 255, 0.6);
+    border-bottom: 1px solid var(--line);
+  }
+  .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 66px; }
+  .brand { display: flex; align-items: center; gap: 11px; font-weight: 800; font-size: 19px; letter-spacing: -0.02em; }
+  .logo {
+    width: 34px; height: 34px; border-radius: 9px;
+    background-image: var(--app-icon);
+    background-size: cover; background-position: center;
+    display: block; flex: none;
+    box-shadow: 0 6px 16px -4px rgba(47,107,255,0.35);
+  }
+  .nav-links { display: flex; gap: 28px; align-items: center; }
+  .nav-links a { color: var(--ink-soft); text-decoration: none; font-size: 15px; font-weight: 500; transition: color .2s; }
+  .nav-links a:hover { color: var(--brand); }
+  @media (max-width: 720px) { .nav-links a { display: none; } }
+
+  /* ===== hero ===== */
+  .hero { padding: 84px 0 40px; text-align: center; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 7px 15px; border-radius: 999px;
+    background: rgba(255,255,255,0.7); border: 1px solid var(--line);
+    font-size: 13.5px; font-weight: 600; color: var(--brand);
+    box-shadow: var(--shadow-sm);
+  }
+  .badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--brand-3);
+    box-shadow: 0 0 0 4px rgba(56,189,248,0.25); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:.4;} }
+
+  h1 {
+    font-size: clamp(40px, 7vw, 76px); line-height: 1.04; letter-spacing: -0.04em;
+    font-weight: 850; margin: 26px 0 20px;
+  }
+  h1 .grad {
+    background: linear-gradient(100deg, var(--brand) 10%, var(--brand-2) 45%, var(--brand-3) 95%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .sub { font-size: clamp(17px, 2.4vw, 21px); color: var(--ink-soft); max-width: 620px; margin: 0 auto 36px; }
+
+  .cta-row { display: flex; gap: 16px; justify-content: center; align-items: center; flex-wrap: wrap; }
+  .btn-dl {
+    display: inline-flex; align-items: center; gap: 12px;
+    padding: 16px 30px; border-radius: 16px; text-decoration: none;
+    background: linear-gradient(135deg, var(--brand), var(--brand-2));
+    color: #fff; font-weight: 700; font-size: 17px;
+    box-shadow: var(--shadow); transition: transform .22s cubic-bezier(.2,.8,.2,1), box-shadow .22s;
+  }
+  .btn-dl:hover { transform: translateY(-3px) scale(1.02); box-shadow: 0 30px 70px -18px rgba(47,107,255,0.5); }
+  .btn-dl svg { width: 26px; height: 26px; }
+  .btn-dl .lines { display: flex; flex-direction: column; line-height: 1.15; text-align: left; }
+  .btn-dl .lines small { font-size: 11.5px; font-weight: 500; opacity: 0.85; }
+  .btn-dl.windows { background: var(--ink); }
+  .windows-mark { width: 25px; height: 25px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 2px; flex: none; }
+  .windows-mark i { display: block; background: currentColor; }
+  .btn-ghost {
+    display: inline-flex; align-items: center; gap: 8px; padding: 15px 22px;
+    border-radius: 16px; text-decoration: none; color: var(--ink);
+    background: rgba(255,255,255,0.7); border: 1px solid var(--line); font-weight: 600; font-size: 16px;
+    transition: transform .2s, border-color .2s;
+  }
+  .btn-ghost:hover { transform: translateY(-2px); border-color: var(--brand); }
+
+  .meta-line { margin-top: 18px; font-size: 13.5px; color: var(--ink-mute); display: flex; gap: 18px; justify-content: center; flex-wrap: wrap; }
+  .meta-line span { display: inline-flex; align-items: center; gap: 6px; }
+  .meta-line b { color: var(--brand); font-weight: 700; }
+
+  /* ===== hero mock window ===== */
+  .mock-stage { margin: 66px auto 0; max-width: 560px; position: relative; }
+  .mock-glow { position: absolute; inset: -40px -20px; z-index: -1; filter: blur(48px); opacity: .5;
+    background: radial-gradient(circle, var(--brand-2), transparent 70%); }
+  .win {
+    background: var(--card); backdrop-filter: blur(24px) saturate(160%);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    border: 1px solid rgba(255,255,255,0.7); border-radius: 22px;
+    box-shadow: var(--shadow); overflow: hidden; text-align: left;
+    animation: rise 1s cubic-bezier(.2,.8,.2,1) both;
+  }
+  @keyframes rise { from { opacity:0; transform: translateY(30px) scale(.98); } to { opacity:1; transform:none; } }
+  .win-bar { display: flex; align-items: center; gap: 10px; padding: 15px 18px; border-bottom: 1px solid var(--line); }
+  .kbd { margin-left: auto; display: flex; gap: 6px; }
+  .kbd span { font-size: 12px; font-weight: 700; color: var(--brand);
+    background: rgba(47,107,255,0.1); padding: 3px 9px; border-radius: 7px; border: 1px solid var(--line); }
+  .win-mini { font-size: 13px; color: var(--ink-mute); }
+  .win-body { padding: 20px 20px 24px; }
+  .msg { max-width: 84%; padding: 12px 15px; border-radius: 14px; font-size: 14.5px; margin-bottom: 12px; }
+  .msg.u { margin-left: auto; background: linear-gradient(135deg, var(--brand), var(--brand-2)); color: #fff; border-bottom-right-radius: 5px; }
+  .msg.a { background: rgba(255,255,255,0.85); border: 1px solid var(--line); border-bottom-left-radius: 5px; color: var(--ink); }
+  .think { font-size: 12.5px; color: var(--ink-mute); background: rgba(47,107,255,0.06);
+    border-left: 3px solid var(--brand-2); padding: 8px 12px; border-radius: 8px; margin-bottom: 12px; }
+  .caret { display:inline-block; width:8px; height:15px; background: var(--brand); border-radius:2px; vertical-align:-2px; animation: blink 1.1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* ===== section shells ===== */
+  section { padding: 78px 0; }
+  .sec-head { text-align: center; max-width: 640px; margin: 0 auto 52px; }
+  .eyebrow { font-size: 14px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--brand); }
+  .sec-head h2 { font-size: clamp(30px, 4.5vw, 44px); letter-spacing: -0.03em; margin: 12px 0 14px; font-weight: 820; }
+  .sec-head p { color: var(--ink-soft); font-size: 17px; }
+
+  /* ===== features grid ===== */
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: repeat(2,1fr); } }
+  @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
+  .feat {
+    background: var(--card); backdrop-filter: blur(12px); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 28px 24px; box-shadow: var(--shadow-sm);
+    transition: transform .28s cubic-bezier(.2,.8,.2,1), box-shadow .28s; position: relative; overflow: hidden;
+  }
+  .feat::before { content:""; position:absolute; inset:0 0 auto 0; height:3px;
+    background: linear-gradient(90deg, var(--brand), var(--brand-3)); transform: scaleX(0); transform-origin:left; transition: transform .3s; }
+  .feat:hover { transform: translateY(-6px); box-shadow: var(--shadow); }
+  .feat:hover::before { transform: scaleX(1); }
+  .fi {
+    width: 50px; height: 50px; border-radius: 14px; display: grid; place-items: center; margin-bottom: 18px;
+    background: linear-gradient(135deg, rgba(47,107,255,0.12), rgba(56,189,248,0.14)); color: var(--brand);
+  }
+  .fi svg { width: 26px; height: 26px; }
+  .feat h3 { font-size: 19px; font-weight: 750; margin-bottom: 8px; letter-spacing: -0.01em; }
+  .feat p { color: var(--ink-soft); font-size: 15px; }
+
+  /* ===== how it works ===== */
+  .steps { display: grid; grid-template-columns: repeat(3,1fr); gap: 20px; }
+  @media (max-width: 780px) { .steps { grid-template-columns: 1fr; } }
+  .step { text-align: center; padding: 8px; }
+  .step .num {
+    width: 56px; height: 56px; margin: 0 auto 16px; border-radius: 50%;
+    display: grid; place-items: center; font-weight: 850; font-size: 22px; color: #fff;
+    background: linear-gradient(135deg, var(--brand), var(--brand-2)); box-shadow: 0 10px 24px -8px rgba(47,107,255,0.55);
+  }
+  .step h4 { font-size: 18px; margin-bottom: 6px; font-weight: 750; }
+  .step p { color: var(--ink-soft); font-size: 15px; }
+
+  /* ===== stats ===== */
+  .stats { display: grid; grid-template-columns: repeat(4,1fr); gap: 18px; }
+  @media (max-width: 720px) { .stats { grid-template-columns: repeat(2,1fr); } }
+  .stat { text-align: center; background: var(--card); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 26px 16px; box-shadow: var(--shadow-sm); }
+  .stat .big { font-size: 38px; font-weight: 860; letter-spacing: -0.03em;
+    background: linear-gradient(120deg, var(--brand), var(--brand-3)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .stat .big.platforms { font-size: clamp(24px, 3vw, 34px); }
+  .stat .lbl { color: var(--ink-soft); font-size: 14px; margin-top: 4px; }
+  .privacy-note { margin-top: 18px; text-align: center; color: var(--ink-mute); font-size: 13px; }
+
+  /* ===== download CTA ===== */
+  .dl-card {
+    background: linear-gradient(135deg, #2F6BFF, #4C86FF 55%, #38BDF8);
+    border-radius: 30px; padding: 60px 40px; text-align: center; color: #fff;
+    position: relative; overflow: hidden; box-shadow: var(--shadow);
+  }
+  .dl-card::after { content:""; position:absolute; inset:0;
+    background: radial-gradient(600px 300px at 20% 0%, rgba(255,255,255,0.28), transparent 60%),
+                radial-gradient(600px 300px at 90% 100%, rgba(56,189,248,0.35), transparent 60%); }
+  .dl-card > * { position: relative; z-index: 1; }
+  .dl-card h2 { font-size: clamp(28px, 4vw, 42px); letter-spacing: -0.03em; margin-bottom: 14px; font-weight: 840; }
+  .dl-card p { color: rgba(255,255,255,0.82); font-size: 17px; margin-bottom: 30px; }
+  .dl-card .btn-dl { background: #fff; color: var(--brand); }
+  .dl-card .btn-dl.windows { background: rgba(11,27,58,0.9); color: #fff; }
+  .dl-card .btn-dl:hover { box-shadow: 0 30px 70px -18px rgba(0,0,0,0.5); }
+  .req { margin-top: 20px; font-size: 13.5px; color: rgba(255,255,255,0.68); }
+
+  /* ===== footer ===== */
+  footer { padding: 40px 0 60px; text-align: center; color: var(--ink-mute); font-size: 14px; border-top: 1px solid var(--line); }
+  footer .brand { justify-content: center; margin-bottom: 14px; font-size: 17px; color: var(--ink); }
+
+  /* reveal on scroll */
+  .reveal { opacity: 0; transform: translateY(26px); transition: opacity .7s, transform .7s; }
+  .reveal.in { opacity: 1; transform: none; }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  }
+</style>
+</head>
+<body>
+  <div class="aurora">
+    <div class="blob b1"></div>
+    <div class="blob b2"></div>
+    <div class="blob b3"></div>
+  </div>
+  <div class="grid-overlay"></div>
+
+  <!-- NAV -->
+  <nav>
+    <div class="wrap nav-inner">
+      <div class="brand"><span class="logo"></span> Buddy</div>
+      <div class="nav-links">
+        <a href="#features">功能特性</a>
+        <a href="#how">如何使用</a>
+        <a href="#specs">规格参数</a>
+        <a href="changelog.html">更新日志</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- HERO -->
+  <header class="hero">
+    <div class="wrap">
+      <span class="badge"><span class="dot"></span> 支持 macOS 与 Windows 11</span>
+      <h1>遇到问题，<br><span class="grad">按一下快捷键。</span></h1>
+      <p class="sub">不用打开网页，不必离开手头的工作。Buddy 会在你需要时出现，直接提问，快速获得答案。</p>
+
+      <div class="cta-row">
+        <a class="btn-dl" href="https://ssh-count.oss-cn-beijing.aliyuncs.com/Buddy_1.0.0_aarch64.dmg" data-download data-platform="macOS" aria-label="下载 Buddy macOS 版本">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.365 1.43c0 1.14-.417 2.2-1.11 2.98-.75.85-1.98 1.5-3.02 1.42-.12-1.09.42-2.24 1.09-2.97.75-.83 2.06-1.44 3.04-1.43zM20.9 17.02c-.55 1.27-.81 1.84-1.52 2.96-.98 1.56-2.36 3.5-4.08 3.51-1.52.02-1.91-.99-3.98-.98-2.07.01-2.5 1-4.02.97-1.72-.03-3.03-1.78-4.01-3.34C.62 15.79-.02 10.6 1.9 8.02c1.16-1.62 2.99-2.57 4.72-2.57 1.75 0 2.85 1 4.3 1 1.4 0 2.25-1 4.28-1 1.53 0 3.16.83 4.32 2.27-3.79 2.07-3.17 7.48 1.38 9.3z"/></svg>
+          <span class="lines">免费下载 for Mac<small>Apple Silicon · macOS 12+</small></span>
+        </a>
+        <a class="btn-dl windows" href="" data-download data-platform="Windows 11" aria-label="Windows 11 版本下载链接即将上线">
+          <span class="windows-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+          <span class="lines">下载 for Windows<small>Windows 11 · 即将上线</small></span>
+        </a>
+      </div>
+
+      <div class="meta-line">
+        <span>轻量安装包 <b>&lt; 20 MB</b></span>
+        <span><b>全局快捷键</b> 唤起即用</span>
+        <span><b>本机保存</b> 配置与记录</span>
+        <span><b>多模型</b> 自由选择</span>
+      </div>
+
+      <!-- MOCK WINDOW -->
+      <div class="mock-stage reveal">
+        <div class="mock-glow"></div>
+        <div class="win">
+          <div class="win-bar">
+            <span class="logo" style="width:26px;height:26px;border-radius:7px;"></span>
+            <span class="win-mini">Buddy · 对话中</span>
+            <span class="kbd"><span>⌘ / Ctrl</span><span>J</span></span>
+          </div>
+          <div class="win-body">
+            <div class="msg u">这段报错是什么意思？应该怎么处理？</div>
+            <div class="think">正在分析问题并整理解决步骤…</div>
+            <div class="msg a">这是一个连接超时错误。先检查网络与服务地址，再确认代理配置是否可用。<span class="caret"></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- FEATURES -->
+  <section id="features">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <div class="eyebrow">Features</div>
+        <h2>问题出现时，不打断当前工作</h2>
+        <p>少一次窗口切换，少一段被打断的思路，让提问成为工作流里自然的一步。</p>
+      </div>
+      <div class="grid">
+        <div class="feat reveal">
+          <div class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v12H5.17L4 17.17V4z"/><path d="M8 9h8M8 12h5"/></svg></div>
+          <h3>全局快捷键唤起</h3>
+          <p>在任意应用中按下 ⌘ / Ctrl + J，Buddy 即刻出现在当前屏幕。</p>
+        </div>
+        <div class="feat reveal">
+          <div class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg></div>
+          <h3>看到哪里，问到哪里</h3>
+          <p>选中当前应用里的文字即可带入输入框，围绕眼前内容继续提问。</p>
+        </div>
+        <div class="feat reveal">
+          <div class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8z"/></svg></div>
+          <h3>流式返回答案</h3>
+          <p>回答逐步呈现，生成过程中就能开始阅读，不必等待完整结果。</p>
+        </div>
+        <div class="feat reveal">
+          <div class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg></div>
+          <h3>自己的模型，自己选择</h3>
+          <p>兼容 OpenAI 协议与 Anthropic，可接入 DeepSeek、Claude 等常用模型。</p>
+        </div>
+        <div class="feat reveal">
+          <div class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a4 4 0 0 0-4 4v3H6a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6a2 2 0 0 0-2-2h-2V7a4 4 0 0 0-4-4z"/><path d="M14 11h4M6 15v-1"/></svg></div>
+          <h3>点走即隐，不打断生成</h3>
+          <p>点击别处或按 Esc 即可隐藏窗口，回答仍会在后台继续生成。</p>
+        </div>
+        <div class="feat reveal">
+          <div class="fi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div>
+          <h3>轻量且私密</h3>
+          <p>安装包小于 20 MB；API 配置与聊天记录保存在本机，由你自行管理。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- HOW IT WORKS -->
+  <section id="how">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <div class="eyebrow">How it works</div>
+        <h2>三步，从问题到答案</h2>
+        <p>不改变原来的工作节奏，用完就走。</p>
+      </div>
+      <div class="steps">
+        <div class="step reveal">
+          <div class="num">1</div>
+          <h4>按下快捷键</h4>
+          <p>macOS 按 ⌘ J，Windows 11 按 Ctrl J，Buddy 立即出现。</p>
+        </div>
+        <div class="step reveal">
+          <div class="num">2</div>
+          <h4>直接提问</h4>
+          <p>输入眼前的问题，选择自己的模型，实时查看流式回答。</p>
+        </div>
+        <div class="step reveal">
+          <div class="num">3</div>
+          <h4>继续手头的事</h4>
+          <p>点击别处或按 Esc 隐藏窗口，生成不会因此中断。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STATS / SPECS -->
+  <section id="specs">
+    <div class="wrap">
+      <div class="sec-head reveal">
+        <div class="eyebrow">Specs</div>
+        <h2>小身材，硬实力</h2>
+      </div>
+      <div class="stats">
+        <div class="stat reveal"><div class="big">&lt;20MB</div><div class="lbl">轻量安装包</div></div>
+        <div class="stat reveal"><div class="big platforms">macOS + Win11</div><div class="lbl">双平台使用</div></div>
+        <div class="stat reveal"><div class="big">2 类</div><div class="lbl">OpenAI 兼容 / Anthropic</div></div>
+        <div class="stat reveal"><div class="big">本机</div><div class="lbl">保存配置与聊天记录</div></div>
+      </div>
+      <p class="privacy-note">提问内容会发送至你所选择的模型服务商；Buddy 不额外托管你的聊天数据。</p>
+    </div>
+  </section>
+
+  <!-- DOWNLOAD -->
+  <section id="download">
+    <div class="wrap">
+      <div class="dl-card reveal">
+        <h2>让 AI 在你需要的那一秒出现</h2>
+        <p>遇到问题时按一下快捷键，Buddy 随时在你的桌面待命。</p>
+        <div class="req">系统要求：macOS 12.0+（Apple Silicon，暂不支持 Intel）或 Windows 11。</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FOOTER -->
+  <footer>
+    <div class="wrap">
+      <div class="brand"><span class="logo"></span> Buddy</div>
+      <p>遇到问题，按一下快捷键。</p>
+      <p style="margin-top:10px;">© 2026 Buddy. All rights reserved.</p>
+    </div>
+  </footer>
+
+  <script>
+    // scroll reveal
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
+    }, { threshold: 0.12 });
+    document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+
+    // Show a platform-specific notice until its download URL is configured.
+    document.querySelectorAll('[data-download]').forEach(a => {
+      a.addEventListener('click', (ev) => {
+        const href = a.getAttribute('href');
+        if (!href) {
+          ev.preventDefault();
+          const platform = a.getAttribute('data-platform') || '该平台';
+          alert(`${platform} 版本下载链接即将上线，敬请期待！`);
+        }
+      });
+    });
+  </script>
+</body>
 </html>

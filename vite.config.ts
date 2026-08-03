@@ -13,6 +13,14 @@ export default defineConfig(async () => ({
     },
   },
   clearScreen: false,
+  build: {
+    rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, "index.html"),
+        changelog: path.resolve(__dirname, "changelog.html"),
+      },
+    },
+  },
   server: {
     port: 5173,
     strictPort: true,
