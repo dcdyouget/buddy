@@ -7,9 +7,14 @@ node_modules/
 
 # Build outputs
 dist/
+dist-desktop/
 src-tauri/target/
+.release/
+.ossutil_checkpoint/
+ossutil_output/
 *.dmg
 *.app
+*.key
 .reasonix/
 # Auto-generated icons (Tauri tauri icon command)
 src-tauri/gen/
@@ -52,7 +57,8 @@ src-tauri/icons/**
 *.swp
 *.swo
 
-# Design & Docs (code only in git)
-docs/
+# Design & Docs (code only in git, except the release runbook shared by build machines)
+docs/**
+!docs/release-workflow.md
 README.md
 CLAUDE.md
