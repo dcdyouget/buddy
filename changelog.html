@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>更新日志 · Buddy</title>
+<meta name="description" content="查看 Buddy 的版本更新记录，包括新功能、体验优化与问题修复。" />
+<style>
+  :root {
+    --brand: #2F6BFF;
+    --brand-2: #5A93FF;
+    --brand-3: #38BDF8;
+    --ink: #0B1B3A;
+    --ink-soft: #43526E;
+    --ink-mute: #7A879C;
+    --bg: #F4F8FF;
+    --card: rgba(255, 255, 255, 0.82);
+    --line: rgba(47, 107, 255, 0.14);
+    --radius: 20px;
+    --shadow: 0 24px 60px -20px rgba(47, 107, 255, 0.35);
+    --shadow-sm: 0 8px 24px -8px rgba(11, 27, 58, 0.14);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    min-height: 100vh;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro SC", "PingFang SC",
+      "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    line-height: 1.6;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; }
+  a:focus-visible { outline: 3px solid rgba(47, 107, 255, 0.3); outline-offset: 4px; }
+
+  .aurora {
+    position: fixed;
+    inset: 0;
+    z-index: -2;
+    overflow: hidden;
+    background:
+      radial-gradient(1000px 700px at 15% -5%, rgba(90, 147, 255, 0.28), transparent 60%),
+      radial-gradient(900px 700px at 95% 10%, rgba(56, 189, 248, 0.22), transparent 55%),
+      radial-gradient(800px 600px at 50% 110%, rgba(47, 107, 255, 0.18), transparent 60%),
+      var(--bg);
+  }
+  .blob { position: absolute; border-radius: 50%; filter: blur(60px); opacity: .5; animation: float 18s ease-in-out infinite; }
+  .blob.b1 { width: 420px; height: 420px; left: -80px; top: 4%; background: radial-gradient(circle, var(--brand), transparent 70%); }
+  .blob.b2 { width: 360px; height: 360px; right: -60px; top: 28%; background: radial-gradient(circle, var(--brand-3), transparent 70%); animation-delay: -6s; }
+  .blob.b3 { width: 340px; height: 340px; left: 35%; top: 68%; background: radial-gradient(circle, var(--brand-2), transparent 70%); animation-delay: -11s; }
+  @keyframes float {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    33% { transform: translate(40px, -30px) scale(1.08); }
+    66% { transform: translate(-30px, 25px) scale(.95); }
+  }
+  .grid-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-image:
+      linear-gradient(rgba(47,107,255,.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(47,107,255,.05) 1px, transparent 1px);
+    background-size: 44px 44px;
+    mask-image: radial-gradient(circle at 50% 20%, black, transparent 78%);
+  }
+
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+  nav {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: rgba(244, 248, 255, .66);
+    border-bottom: 1px solid var(--line);
+    backdrop-filter: saturate(180%) blur(16px);
+    -webkit-backdrop-filter: saturate(180%) blur(16px);
+  }
+  .nav-inner { height: 66px; display: flex; align-items: center; justify-content: space-between; }
+  .brand { display: flex; align-items: center; gap: 11px; font-weight: 800; font-size: 19px; text-decoration: none; }
+  .logo { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 9px; color: #fff; background: linear-gradient(135deg, var(--brand), var(--brand-3)); box-shadow: 0 6px 16px -4px rgba(47,107,255,.35); }
+  .back { color: var(--ink-soft); text-decoration: none; font-size: 15px; font-weight: 600; transition: color .2s; }
+  .back:hover { color: var(--brand); }
+
+  .hero { padding: 78px 0 58px; text-align: center; }
+  .badge { display: inline-flex; align-items: center; gap: 8px; padding: 7px 15px; border-radius: 999px; background: rgba(255,255,255,.72); border: 1px solid var(--line); color: var(--brand); font-size: 13.5px; font-weight: 700; box-shadow: var(--shadow-sm); }
+  .badge::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--brand-3); box-shadow: 0 0 0 4px rgba(56,189,248,.22); }
+  h1 { margin: 22px 0 16px; font-size: clamp(40px, 7vw, 68px); line-height: 1.05; letter-spacing: -.04em; font-weight: 850; }
+  h1 span { background: linear-gradient(100deg, var(--brand), var(--brand-2) 48%, var(--brand-3)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .intro { max-width: 620px; margin: 0 auto; color: var(--ink-soft); font-size: clamp(16px, 2vw, 19px); }
+
+  .timeline { position: relative; padding: 8px 0 82px; }
+  .timeline::before { content: ""; position: absolute; top: 24px; bottom: 100px; left: 119px; width: 1px; background: linear-gradient(var(--brand), rgba(47,107,255,.08)); }
+  .release { position: relative; display: grid; grid-template-columns: 96px 1fr; gap: 48px; margin-bottom: 28px; }
+  .release-meta { padding-top: 22px; text-align: right; }
+  .version { display: block; color: var(--brand); font-size: 18px; font-weight: 850; letter-spacing: -.02em; }
+  .date { display: block; margin-top: 3px; color: var(--ink-mute); font-size: 12.5px; }
+  .dot { position: absolute; left: 113px; top: 29px; width: 13px; height: 13px; border: 3px solid var(--bg); border-radius: 50%; background: var(--brand); box-shadow: 0 0 0 1px rgba(47,107,255,.25); }
+  .release-card { padding: 25px 28px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); box-shadow: var(--shadow-sm); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+  .release.latest .release-card { border-color: rgba(47,107,255,.28); box-shadow: var(--shadow); }
+  .release-card h2 { margin-bottom: 16px; font-size: 21px; letter-spacing: -.02em; }
+  .latest-label { display: inline-flex; margin-left: 8px; padding: 3px 9px; border-radius: 999px; color: var(--brand); background: rgba(47,107,255,.09); font-size: 11px; font-weight: 800; vertical-align: 3px; }
+  .changes { display: grid; gap: 11px; list-style: none; }
+  .changes li { position: relative; padding-left: 48px; color: var(--ink-soft); font-size: 15px; }
+  .kind { position: absolute; left: 0; top: 1px; width: 38px; padding: 2px 0; border-radius: 6px; color: var(--brand); background: rgba(47,107,255,.09); text-align: center; font-size: 11px; font-weight: 800; }
+
+  footer { padding: 34px 0 54px; border-top: 1px solid var(--line); color: var(--ink-mute); text-align: center; font-size: 14px; }
+
+  @media (max-width: 680px) {
+    .hero { padding-top: 58px; }
+    .timeline::before { left: 6px; }
+    .release { grid-template-columns: 1fr; gap: 10px; padding-left: 28px; }
+    .release-meta { padding-top: 0; text-align: left; }
+    .version, .date { display: inline; }
+    .date { margin-left: 8px; }
+    .dot { left: 0; top: 8px; }
+    .release-card { padding: 22px 20px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  }
+</style>
+</head>
+<body>
+  <div class="aurora" aria-hidden="true">
+    <div class="blob b1"></div>
+    <div class="blob b2"></div>
+    <div class="blob b3"></div>
+  </div>
+  <div class="grid-overlay" aria-hidden="true"></div>
+
+  <nav>
+    <div class="wrap nav-inner">
+      <a class="brand" href="index.html" aria-label="返回 Buddy 首页"><span class="logo">B</span> Buddy</a>
+      <a class="back" href="index.html">返回首页</a>
+    </div>
+  </nav>
+
+  <main>
+    <header class="hero">
+      <div class="wrap">
+        <span class="badge">持续更新中</span>
+        <h1>Buddy <span>更新日志</span></h1>
+        <p class="intro">记录每一次新功能、体验优化和问题修复。最新版本始终显示在最上方。</p>
+      </div>
+    </header>
+
+    <section class="wrap timeline" aria-label="版本更新记录">
+      <article class="release latest">
+        <div class="release-meta"><span class="version">v1.3.1</span><time class="date" datetime="2026-08-02">2026.08.02</time></div>
+        <span class="dot" aria-hidden="true"></span>
+        <div class="release-card">
+          <h2>联网搜索体验优化<span class="latest-label">最新版本</span></h2>
+          <ul class="changes">
+            <li><span class="kind">优化</span>提升联网搜索流程的稳定性和结果处理体验。</li>
+            <li><span class="kind">优化</span>完善运行日志，问题定位与错误反馈更加清晰。</li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="release">
+        <div class="release-meta"><span class="version">v1.3.0</span><time class="date" datetime="2026-08-01">2026.08.01</time></div>
+        <span class="dot" aria-hidden="true"></span>
+        <div class="release-card">
+          <h2>联网搜索与多模态</h2>
+          <ul class="changes">
+            <li><span class="kind">新增</span>集成联网搜索，可结合实时网页信息回答问题。</li>
+            <li><span class="kind">新增</span>支持图片附件、多模态理解与图片生成。</li>
+            <li><span class="kind">优化</span>完善附件存储、上下文传输、工具调用与流式对话体验。</li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="release">
+        <div class="release-meta"><span class="version">v1.2.1</span><time class="date" datetime="2026-07-28">2026.07.28</time></div>
+        <span class="dot" aria-hidden="true"></span>
+        <div class="release-card">
+          <h2>聊天与记录体验优化</h2>
+          <ul class="changes">
+            <li><span class="kind">新增</span>加入智能滚动和“回到底部”操作。</li>
+            <li><span class="kind">优化</span>提升聊天交互与历史记录持久化性能。</li>
+            <li><span class="kind">修复</span>解决部分消息尾部内容重复的问题。</li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="release">
+        <div class="release-meta"><span class="version">v1.2.0</span><time class="date" datetime="2026-07-08">2026.07.08</time></div>
+        <span class="dot" aria-hidden="true"></span>
+        <div class="release-card">
+          <h2>工具调用与交互确认</h2>
+          <ul class="changes">
+            <li><span class="kind">新增</span>支持工具调用、操作确认和模型向用户提问。</li>
+            <li><span class="kind">新增</span>展示工具执行状态和结构化交互内容。</li>
+            <li><span class="kind">优化</span>改善文字流式呈现与工具调用稳定性。</li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="release">
+        <div class="release-meta"><span class="version">v1.1.0</span><time class="date" datetime="2026-07-06">2026.07.06</time></div>
+        <span class="dot" aria-hidden="true"></span>
+        <div class="release-card">
+          <h2>多模型与 Windows 11 支持</h2>
+          <ul class="changes">
+            <li><span class="kind">新增</span>支持 OpenAI 兼容协议与 Anthropic，多模型自由切换。</li>
+            <li><span class="kind">新增</span>支持思考内容展示、上下文管理和 Windows 11。</li>
+            <li><span class="kind">优化</span>完善设置页、时间戳、复制和中文输入体验。</li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="release">
+        <div class="release-meta"><span class="version">v1.0.1</span><time class="date" datetime="2026-07-01">2026.07.01</time></div>
+        <span class="dot" aria-hidden="true"></span>
+        <div class="release-card">
+          <h2>首轮稳定性更新</h2>
+          <ul class="changes">
+            <li><span class="kind">修复</span>解决流式渲染卡顿、长文本溢出与窗口拖动问题。</li>
+            <li><span class="kind">修复</span>改善多屏定位、跨屏唤起闪烁和窗口尺寸表现。</li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="release">
+        <div class="release-meta"><span class="version">v1.0.0</span><time class="date" datetime="2026-06-29">2026.06.29</time></div>
+        <span class="dot" aria-hidden="true"></span>
+        <div class="release-card">
+          <h2>Buddy 首个版本</h2>
+          <ul class="changes">
+            <li><span class="kind">新增</span>通过全局快捷键呼出轻量无边框 AI 对话窗口。</li>
+            <li><span class="kind">新增</span>支持流式回答、模型配置与本地聊天记录。</li>
+            <li><span class="kind">新增</span>点击别处或按 Esc 快速隐藏，不打断当前工作。</li>
+          </ul>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">Buddy · 遇到问题，按一下快捷键。</div>
+  </footer>
+</body>
+</html>
