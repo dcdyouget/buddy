@@ -72,13 +72,24 @@ describe('UpdateSetting', () => {
   });
 
   it('检查失败时显示错误并允许重新检查', async () => {
-    mocks.check.mockRejectedValue(new Error('网络不可用'));
+    mocks.check.mockRejectedValue(
+      new Error('Could not fetch a valid release JSON from the remote'),
+    );
     const { findByText, getByRole } = render(<UpdateSetting />);
 
     fireEvent.click(getByRole('button', { name: '检查更新' }));
 
-    await findByText('检查更新失败：网络不可用');
+    await findByText('检查更新失败：暂时无法获取有效的版本信息，请稍后重试');
     const retryButton = getByRole('button', { name: '重新检查' }) as HTMLButtonElement;
     expect(retryButton.disabled).toBe(false);
+  });
+
+  it('未知英文错误不直接暴露给用户', async () => {
+    mocks.check.mockRejectedValue(new Error('unexpected updater failure'));
+    const { findByText, getByRole } = render(<UpdateSetting />);
+
+    fireEvent.click(getByRole('button', { name: '检查更新' }));
+
+    await findByText('检查更新失败：更新服务暂时不可用，请稍后重试');
   });
 });
