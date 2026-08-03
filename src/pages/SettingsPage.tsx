@@ -6,6 +6,7 @@ import { GlassPanel } from '@/components/shared/GlassPanel';
 import { SlideInPanel } from '@/components/shared/SlideInPanel';
 import { ThemeSetting } from '@/components/settings/ThemeSetting';
 import { HotkeySetting } from '@/components/settings/HotkeySetting';
+import { UpdateSetting } from '@/components/settings/UpdateSetting';
 import { ModelList } from '@/components/settings/ModelList';
 import { AddProviderPanel } from '@/components/settings/AddProviderPanel';
 import { useDragHandle } from '@/hooks/useDragHandle';
@@ -20,6 +21,7 @@ interface SettingsPageProps {
  * 作为编排层，组合各设置子组件：
  * - ThemeSetting：主题切换
  * - HotkeySetting：快捷键录制（委托 HotkeyRecorder 组件）
+ * - UpdateSetting：手动检查、下载并安装应用更新
  * - ModelList：模型管理（委托 ModelRow 组件）
  * - AddProviderPanel：侧滑添加模型面板
  */
@@ -115,6 +117,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
         >
           <ThemeSetting theme={config.theme} onThemeChange={updateTheme} />
           <HotkeySetting hotkey={config.hotkey} onHotkeyChange={updateHotkey} />
+          <UpdateSetting />
           <ModelList
             models={config.models}
             selectedModelId={config.selected_model_id}

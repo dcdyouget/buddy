@@ -1183,6 +1183,154 @@ html[data-platform="windows"] #root {
   line-height: var(--line-height-base);
 }
 
+.update-setting {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.update-setting-row {
+  align-items: flex-start;
+}
+
+.update-setting-action {
+  min-height: var(--space-8);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+  color: var(--text-muted);
+  background: var(--bg-sunken);
+  cursor: pointer;
+  font: 500 var(--font-size-xs)/1 var(--font-sans);
+  transition:
+    color var(--duration-fast) var(--ease-standard),
+    background var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+
+.update-setting-action:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
+.update-setting-action:disabled {
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+}
+
+.update-setting-action.is-primary {
+  align-self: flex-start;
+  color: var(--text-on-primary);
+  background: var(--buddy-primary);
+  border-color: var(--buddy-primary);
+}
+
+.update-setting-action.is-primary:hover:not(:disabled) {
+  color: var(--text-on-primary);
+  background: var(--buddy-primary-600);
+  border-color: var(--buddy-primary-600);
+}
+
+.update-setting-feedback:empty {
+  display: none;
+}
+
+.update-setting-status,
+.update-release-card,
+.update-progress-card {
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-sunken);
+}
+
+.update-setting-status {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-base);
+}
+
+.update-setting-status svg {
+  flex-shrink: 0;
+  margin-top: var(--space-1);
+}
+
+.update-setting-status.is-success {
+  color: var(--state-success);
+  border-color: color-mix(in srgb, var(--state-success) 22%, transparent);
+  background: color-mix(in srgb, var(--state-success) 8%, transparent);
+}
+
+.update-setting-status.is-error {
+  color: var(--state-error);
+  border-color: color-mix(in srgb, var(--state-error) 22%, transparent);
+  background: color-mix(in srgb, var(--state-error) 8%, transparent);
+}
+
+.update-release-card,
+.update-progress-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.update-release-title {
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+}
+
+.update-release-notes {
+  max-height: calc(var(--space-12) * 2);
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-base);
+}
+
+.update-progress-copy {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+}
+
+.update-progress-track {
+  height: var(--space-1);
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: var(--bg-elevated);
+}
+
+.update-progress-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--buddy-primary);
+  transition: width var(--duration-fast) var(--ease-standard);
+}
+
+.update-progress-track > span.is-indeterminate {
+  animation: update-progress-indeterminate 1.2s var(--ease-standard) infinite alternate;
+}
+
+@keyframes update-progress-indeterminate {
+  from { transform: translateX(0); }
+  to { transform: translateX(450%); }
+}
+
 .segmented-control {
   display: flex;
   gap: var(--space-1);

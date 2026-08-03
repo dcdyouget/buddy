@@ -7,6 +7,32 @@
 
 ## 1. 发布目标
 
+本项目只使用两个流程名称：
+
+| 流程 | 作用 | 是否触发客户端升级 |
+|---|---|---|
+| Build 流程 | 检测环境，构建、签名并上传当前平台制品和 fragment | 否 |
+| 发布流程 | 校验所有平台制品，生成并上传 `buddy/stable/latest.json` | 是 |
+
+对 Agent 使用以下触发语句即可：
+
+```text
+执行 Buddy <版本号> 的 macOS ARM64 build 流程。
+执行 Buddy <版本号> 的 Windows x86_64 build 流程。
+执行 Buddy <版本号> 的发布流程，更新说明：<本次更新内容>。
+```
+
+Build 流程不得修改 `stable/latest.json`。发布流程以成功创建或更新 `stable/latest.json` 为完成标志，客户端随后即可检查并执行升级。
+
+发布流程必须接收非空的中文更新说明，并写入 `latest.json` 的 `notes` 字段。短说明可以直接传入，长说明使用 UTF-8 文本文件：
+
+```bash
+npm run release:publish -- 1.1.0 --notes "新增自动更新，修复窗口唤起问题"
+npm run release:publish -- 1.1.0 --notes-file ./release-notes/1.1.0.txt
+```
+
+应用发现更新后，应在用户确认安装前展示版本号和 `notes`；不得把发布说明仅写入 OSS 而不在客户端显示。
+
 - macOS 只发布 Apple Silicon ARM64，不构建或支持 Intel Mac。
 - Windows 只发布 x86_64，优先使用 NSIS 安装包。
 - 新用户从 OSS 公共 HTTPS 地址下载安装包。
@@ -59,13 +85,13 @@ https://buddy-release.oss-cn-beijing.aliyuncs.com/buddy/releases/1.1.0/windows/x
 | Updater 公钥和 HTTPS endpoint | 已完成 | `src-tauri/tauri.conf.json` |
 | 生成 Updater 制品 | 已完成 | `bundle.createUpdaterArtifacts = true` |
 | macOS ARM64 发布脚本 | 已完成 | `scripts/release-macos.sh` |
-| 应用内检查、下载、安装更新 | **未实现** | 未找到 `check()` / `downloadAndInstall()` 调用 |
+| 应用内手动检查、下载、安装更新 | 已完成 | `src/components/settings/UpdateSetting.tsx` |
 | Windows x86_64 发布脚本 | **未实现** | 计划新增 `scripts/release-windows.ps1` |
 | 合并并发布 `latest.json` | **未实现** | 计划新增 `scripts/publish-release.mjs` |
 | macOS Developer ID 签名和公证 | 未配置 | 当前为 Ad-hoc 签名 `signingIdentity = "-"` |
 | Windows 代码签名 | 未配置 | 安装包可能触发 SmartScreen |
 
-在三个“未实现”项补齐前，不得宣称自动更新链路已经完成。
+在 Windows 发布脚本和 `latest.json` 发布脚本补齐，并完成旧版本真机升级验证前，不得宣称自动更新链路已经完成。
 
 ## 3. Agent 执行约束
 
@@ -222,8 +248,20 @@ rg -n "downloadAndInstall|plugin-updater|检查更新|check\\(" src desktop src-
 - Rust 插件已初始化，Updater 和重启权限已声明。
 - 应用侧真实调用 `check()`、`downloadAndInstall()` 和 `relaunch()`。
 - UI 文案为中文；无更新和网络失败不能导致应用启动失败。
+- 应用启动时不得自动检查更新，只能由用户在设置页点击“检查更新”触发。
 
-推荐交互：应用启动后后台检查；只有发现更新时提示用户；用户确认后下载、安装并重启。Updater 签名校验不可关闭。
+设置页更新状态必须遵循：
+
+```text
+未检查
+  └─ 点击“检查更新” → 检查中
+       ├─ 无更新 → 当前已是最新版本
+       ├─ 有更新 → 显示新版本号、更新说明和“立即更新”按钮
+       │              └─ 点击“立即更新” → 下载/安装中 → 重启应用
+       └─ 失败 → 显示错误和“重新检查”按钮
+```
+
+Updater 签名校验不可关闭。
 
 ## 5. 每次发布的标准流程
 
@@ -398,18 +436,23 @@ npm run release:publish -- 1.1.0
 
 首个包含 Updater 的版本必须先通过正常安装分发；更早且没有更新检查逻辑的客户端无法自动升级。
 
-## 6. 待后续 Agent 实现
+## 6. 剩余实现与验收
 
-### 6.1 应用内更新流程
+### 6.1 应用内更新流程（已实现，待真机验收）
 
-实现并测试：
+当前实现和验收要求：
 
-- 调用 `@tauri-apps/plugin-updater` 的 `check()`。
-- 发现更新后显示中文确认提示。
-- 用户确认后调用 `downloadAndInstall()`。
+- 在设置页新增独立的更新区域，显示当前版本和“检查更新”按钮。
+- 应用启动和打开设置页时都不得自动检查更新。
+- 只有用户点击“检查更新”后，才调用 `@tauri-apps/plugin-updater` 的 `check()`。
+- 检查期间禁用按钮并显示“正在检查…”，防止重复请求。
+- 无更新时显示“当前已是最新版本”。
+- 发现更新后显示新版本号、`latest.json.notes` 更新说明和“立即更新”按钮。
+- 用户点击“立即更新”后调用 `downloadAndInstall()`，显示下载/安装状态并防止重复操作。
 - 安装成功后调用 `@tauri-apps/plugin-process` 的 `relaunch()`。
-- 无更新、用户取消、网络失败和签名失败都有可控行为。
-- 添加单元测试；至少完成一次旧版本到新版本的真实端到端测试。
+- 网络失败、清单错误、下载失败和签名失败时显示中文错误，并允许重新检查。
+- 更新失败不得影响聊天、设置保存或应用下次启动。
+- 添加状态和交互单元测试；至少完成一次旧版本到新版本的真实端到端测试。
 
 参考：[Tauri Updater 官方文档](https://v2.tauri.app/plugin/updater/)。
 
@@ -432,6 +475,8 @@ npm run release:publish -- 1.1.0
 新增 `scripts/publish-release.mjs` 和 `package.json` 的 `release:publish` 命令：
 
 - 只接受合法 SemVer。
+- 要求通过 `--notes` 或 `--notes-file` 提供非空更新说明，两者不得同时使用。
+- 将更新说明写入 `latest.json` 的 `notes` 字段，并保持 UTF-8 和换行内容。
 - 要求目标 tag 指向当前 commit。
 - 从 OSS 获取 `darwin-aarch64.json` 和 `windows-x86_64.json`。
 - 拒绝缺失、重复、空签名、版本不一致或未知平台。
