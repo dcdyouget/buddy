@@ -18,9 +18,26 @@ type UpdateStatus =
   | 'restarting'
   | 'error';
 
-function formatError(prefix: string, error: unknown): string {
-  const detail = error instanceof Error ? error.message : String(error);
-  return `${prefix}：${detail || '未知错误'}`;
+function localizeUpdaterError(error: unknown, fallback: string): string {
+  const detail = (error instanceof Error ? error.message : String(error)).trim();
+  if (!detail) return fallback;
+
+  if (/could not fetch a valid release json from the remote/i.test(detail)) {
+    return '暂时无法获取有效的版本信息，请稍后重试';
+  }
+  if (/(failed to fetch|network|connection|dns|timed?\s*out)/i.test(detail)) {
+    return '无法连接更新服务器，请检查网络连接后重试';
+  }
+  if (/(signature|verification|verify)/i.test(detail)) {
+    return '更新包签名验证失败，请联系开发者';
+  }
+  if (/[\u3400-\u9fff]/u.test(detail)) return detail;
+
+  return fallback;
+}
+
+function formatError(prefix: string, error: unknown, fallback: string): string {
+  return `${prefix}：${localizeUpdaterError(error, fallback)}`;
 }
 
 /** 设置页中的手动更新检查与安装入口。 */
@@ -73,7 +90,7 @@ export function UpdateSetting() {
       setAvailableUpdate(update);
       setStatus('available');
     } catch (checkError) {
-      setError(formatError('检查更新失败', checkError));
+      setError(formatError('检查更新失败', checkError, '更新服务暂时不可用，请稍后重试'));
       setStatus('error');
     }
   };
@@ -103,7 +120,7 @@ export function UpdateSetting() {
       setStatus('restarting');
       await relaunch();
     } catch (installError) {
-      setError(formatError('更新失败', installError));
+      setError(formatError('更新失败', installError, '更新过程中发生错误，请稍后重试'));
       setStatus('error');
     }
   };
