@@ -16,6 +16,8 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon", "macos-private-api", "protocol-asset"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-shell = "2"
+tauri-plugin-process = "=2.3.1"
+tauri-plugin-updater = "=2.10.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "native-tls-vendored", "gzip", "brotli"] }
