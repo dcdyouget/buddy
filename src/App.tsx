@@ -94,19 +94,25 @@ function App() {
     }
   }, [config?.theme]);
 
-  // 根据配置决定入口页面（双向：缺失时提示，具备时回对话页）
+  // 配置变化只处理当前可见的聊天页面；设置页中的分步保存不能打断配置流程。
   useEffect(() => {
     if (!config) return;
     const hasValidConfig = config.providers.length > 0 && !!config.selected_model_id;
+    const cur = useUIStore.getState().currentPage;
+
     if (!hasValidConfig) {
-      // 配置缺失 → 回到空态/提示页
-      setPage('empty');
-    } else {
-      // 配置已具备 → 如果当前正显示「无 Key」页，自动跳回对话页
-      const cur = useUIStore.getState().currentPage;
-      if (cur === 'noapikey' || cur === 'empty') {
-        setPage('empty');
+      // 添加 Provider 会依次保存 provider、模型和默认模型；中间状态尚未完整，
+      // 此时必须留在设置页，否则会提前退回紧凑气泡态。
+      if (cur !== 'settings' && cur !== 'empty' && cur !== 'noapikey') {
+        void setPage('empty');
       }
+      return;
+    }
+
+    // 配置在「无 Key」页被外部补齐时，直接进入展开的对话页。
+    // 设置页内添加完成后的返回由 AddProviderPanel 的 onAdded 统一触发。
+    if (cur === 'noapikey') {
+      void setPage('conversation');
     }
   }, [config?.providers.length, config?.selected_model_id]);
 

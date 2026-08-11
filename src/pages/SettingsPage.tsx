@@ -133,7 +133,10 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       </GlassPanel>
 
       <SlideInPanel from="right" show={showAddProvider}>
-        <AddProviderPanel onBack={() => setShowAddProvider(false)} />
+        <AddProviderPanel
+          onBack={() => setShowAddProvider(false)}
+          onAdded={onBack}
+        />
       </SlideInPanel>
     </motion.div>
   );

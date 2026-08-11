@@ -1,7 +1,5 @@
-import { useEffect } from 'react';
 import { ChevronRight, KeyRound } from 'lucide-react';
 import { useUIStore } from '@/stores/uiStore';
-import { useConfigStore } from '@/stores/configStore';
 import { GlassPanel } from '@/components/shared/GlassPanel';
 import { useDragHandle } from '@/hooks/useDragHandle';
 
@@ -17,14 +15,6 @@ import { useDragHandle } from '@/hooks/useDragHandle';
 export function NoApiKeyPage() {
   const dragRef = useDragHandle();
   const { setPage } = useUIStore();
-  const { config } = useConfigStore();
-
-  // 如果配置已有效（已配 Provider + 已选模型），自动回到对话页
-  useEffect(() => {
-    if (config && config.providers.length > 0 && config.selected_model_id) {
-      setPage('empty');
-    }
-  }, [config?.providers.length, config?.selected_model_id]);
 
   /** 跳转到设置页，并同步调整窗口尺寸以匹配设置页面的布局 */
   const goSettings = () => {

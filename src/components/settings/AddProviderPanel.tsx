@@ -26,6 +26,7 @@ function formatContextWindow(tokens: number): string {
 
 interface AddProviderPanelProps {
   onBack: () => void;
+  onAdded: () => void;
 }
 
 /**
@@ -38,7 +39,7 @@ interface AddProviderPanelProps {
  * 4. 可选地对首个模型进行延迟测速
  * 5. 确认添加后将 provider 和模型写入配置
  */
-export function AddProviderPanel({ onBack }: AddProviderPanelProps) {
+export function AddProviderPanel({ onBack, onAdded }: AddProviderPanelProps) {
   const { addProvider, addModels, setDefaultModel } = useConfigStore();
   const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
   const [baseUrl, setBaseUrl] = useState('');
@@ -104,7 +105,7 @@ export function AddProviderPanel({ onBack }: AddProviderPanelProps) {
     }
   };
 
-  /** 确认添加：写入 provider 配置和选中的模型，自动选中首个模型，然后返回设置页 */
+  /** 确认添加：写入完整配置、自动选中首个模型，然后返回展开的对话页 */
   const handleAdd = async () => {
     if (!selectedPreset || !baseUrl || !apiKey) return;
 
@@ -127,7 +128,7 @@ export function AddProviderPanel({ onBack }: AddProviderPanelProps) {
       // 自动选中第一个模型，避免出现「已配 Key 但仍提示无 Key」的情况
       const firstId = modelsToAdd[0]?.id;
       if (firstId) await setDefaultModel(firstId);
-      onBack();
+      onAdded();
       return;
     }
 
@@ -150,7 +151,7 @@ export function AddProviderPanel({ onBack }: AddProviderPanelProps) {
     // 自动选中第一个模型，避免出现「已配 Key 但仍提示无 Key」的情况
     const firstId = modelsToAdd[0]?.id;
     if (firstId) await setDefaultModel(firstId);
-    onBack();
+    onAdded();
   };
 
   /** 切换单个模型的选中状态 */
