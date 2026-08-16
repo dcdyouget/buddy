@@ -40,7 +40,9 @@ interface AddProviderPanelProps {
  * 5. 确认添加后将 provider 和模型写入配置
  */
 export function AddProviderPanel({ onBack, onAdded }: AddProviderPanelProps) {
-  const { addProvider, addModels, setDefaultModel } = useConfigStore();
+  const addProvider = useConfigStore((state) => state.addProvider);
+  const addModels = useConfigStore((state) => state.addModels);
+  const setDefaultModel = useConfigStore((state) => state.setDefaultModel);
   const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
   const [baseUrl, setBaseUrl] = useState('');
   const [apiKey, setApiKey] = useState('');

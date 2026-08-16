@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { useShallow } from 'zustand/react/shallow';
 import { useConfigStore } from '@/stores/configStore';
 import { GlassPanel } from '@/components/shared/GlassPanel';
 import { SlideInPanel } from '@/components/shared/SlideInPanel';
@@ -34,7 +35,16 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
     setDefaultModel,
     toggleModel,
     updateModel,
-  } = useConfigStore();
+  } = useConfigStore(
+    useShallow((state) => ({
+      config: state.config,
+      updateTheme: state.updateTheme,
+      updateHotkey: state.updateHotkey,
+      setDefaultModel: state.setDefaultModel,
+      toggleModel: state.toggleModel,
+      updateModel: state.updateModel,
+    })),
+  );
   const [showAddProvider, setShowAddProvider] = useState(false);
 
   if (!config) return null;

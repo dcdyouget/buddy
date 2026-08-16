@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import { AlertCircle, ChevronUp, X } from 'lucide-react';
+import { useShallow } from 'zustand/react/shallow';
 import { useUIStore } from '@/stores/uiStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useConfigStore } from '@/stores/configStore';
@@ -23,7 +24,7 @@ import type { ModelInfo } from '@/types';
  */
 export function EmptyPage() {
   const dragRef = useDragHandle();
-  const { setPage } = useUIStore();
+  const setPage = useUIStore((state) => state.setPage);
   const {
     sendMessage,
     draftInput,
@@ -34,9 +35,21 @@ export function EmptyPage() {
     error,
     setError,
     isStreaming,
-  } = useChatStore();
+  } = useChatStore(
+    useShallow((state) => ({
+      sendMessage: state.sendMessage,
+      draftInput: state.draftInput,
+      draftImages: state.draftImages,
+      setDraftInput: state.setDraftInput,
+      addDraftImages: state.addDraftImages,
+      removeDraftImage: state.removeDraftImage,
+      error: state.error,
+      setError: state.setError,
+      isStreaming: state.isStreaming,
+    })),
+  );
   const draftImages = storedDraftImages ?? [];
-  const { config } = useConfigStore();
+  const config = useConfigStore((state) => state.config);
   const [showDropdown, setShowDropdown] = useState(false);
 
   const enabledModels = (config?.models || []).filter((model) =>
@@ -107,6 +120,9 @@ export function EmptyPage() {
           position: 'relative',
         }}
       >
+        <div className="empty-drag-region is-left" aria-hidden="true" />
+        <div className="empty-drag-region is-right" aria-hidden="true" />
+
         <button
           className="empty-expand-trigger"
           type="button"

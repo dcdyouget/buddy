@@ -78,6 +78,8 @@ pub fn run() {
         .manage(hotkey::HotkeyState {
             current: Mutex::new(None),
         })
+        .manage(window::WindowInvocationState::default())
+        .manage(SavedWindowPositions::default())
         .setup(|app| {
             let log_dir = app
                 .path()

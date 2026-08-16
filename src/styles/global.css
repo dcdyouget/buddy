@@ -120,9 +120,11 @@
   --surface-highlight: transparent;
 
   /* ── Typography ── */
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
-    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', 'Menlo', 'Consolas', monospace;
+  --font-sans: 'Fira Code', 'JetBrains Mono', 'Inter', -apple-system,
+    BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', sans-serif;
+  --font-mono: 'Fira Code', 'JetBrains Mono', 'SF Mono', 'Menlo', 'Consolas',
+    monospace;
 
   /* ── Spacing ── */
   --space-1: 4px;
@@ -225,6 +227,9 @@
   --font-size-lg: 16px;
   --font-size-xl: 20px;
   --font-size-2xl: 24px;
+  --font-weight-regular: 650;
+  --font-weight-emphasis: 750;
+  --font-weight-heading: 800;
   --line-height-tight: 1.25;
   --line-height-base: 1.5;
   --line-height-relaxed: 1.65;
@@ -341,10 +346,19 @@ html, body, #root {
   width: 100%;
   overflow: hidden;
   font-family: var(--font-sans);
+  font-weight: var(--font-weight-regular);
   color: var(--text-primary);
   background: transparent;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+button,
+input,
+textarea,
+select {
+  font-family: inherit;
+  font-weight: inherit;
 }
 
 body {
@@ -365,6 +379,264 @@ html[data-platform="windows"] #root {
 }
 
 /* ── App shell ── */
+.window-entrance {
+  --window-entrance-duration: var(--duration-slow);
+  --window-entrance-scale-x: 0.66;
+  --window-entrance-scale-y: 0.8;
+  --window-entrance-radius: var(--radius-full);
+  --window-glow-angle: 104deg;
+  --window-glow-start-transform: translate3d(-58%, 0, 0) skewX(-14deg);
+  --window-glow-end-transform: translate3d(58%, 0, 0) skewX(-14deg);
+  --window-glow-orbit-start: -35deg;
+  --window-glow-orbit-end: 215deg;
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: transparent;
+}
+
+.window-entrance-surface {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  isolation: isolate;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
+  border-radius: var(--window-entrance-radius);
+  transform: scaleX(var(--window-entrance-scale-x))
+    scaleY(var(--window-entrance-scale-y));
+  transform-origin: center;
+  box-shadow: var(--shadow-floating-md);
+  will-change: transform, opacity, border-radius;
+}
+
+.window-entrance-surface.buddy-shell {
+  background: color-mix(in srgb, var(--buddy-primary) 16%, var(--bg-surface));
+}
+
+.window-entrance-surface::before {
+  content: '';
+  position: absolute;
+  inset: -46%;
+  z-index: 0;
+  border-radius: var(--radius-full);
+  background: conic-gradient(
+    from 0deg,
+    transparent 0 16%,
+    color-mix(in srgb, var(--buddy-primary) 34%, transparent) 25%,
+    color-mix(in srgb, var(--buddy-primary) 88%, transparent) 34%,
+    transparent 46% 66%,
+    color-mix(in srgb, var(--buddy-primary) 58%, transparent) 78%,
+    transparent 90% 100%
+  );
+  filter: blur(calc(var(--space-1) / 2));
+  transform: rotate(var(--window-glow-orbit-start)) scale(1.16);
+}
+
+.window-entrance-surface::after {
+  content: '';
+  position: absolute;
+  inset: calc(var(--space-1) / 2);
+  z-index: 1;
+  border-radius: inherit;
+  background:
+    linear-gradient(
+      145deg,
+      color-mix(in srgb, var(--buddy-primary) 18%, transparent),
+      transparent 46%
+    ),
+    color-mix(in srgb, var(--buddy-primary) 7%, var(--bg-surface));
+}
+
+.window-entrance-glow {
+  position: absolute;
+  inset: -24% -42%;
+  z-index: 2;
+  border-radius: var(--radius-full);
+  opacity: 0;
+  background: linear-gradient(
+    var(--window-glow-angle),
+    transparent 28%,
+    color-mix(in srgb, var(--buddy-primary) 22%, transparent) 40%,
+    color-mix(in srgb, var(--buddy-primary) 78%, transparent) 50%,
+    color-mix(in srgb, var(--buddy-primary) 20%, transparent) 60%,
+    transparent 72%
+  );
+  transform: var(--window-glow-start-transform);
+  will-change: transform, opacity;
+}
+
+.window-entrance.glow-right-to-left {
+  --window-glow-angle: 76deg;
+  --window-glow-start-transform: translate3d(58%, 0, 0) skewX(14deg);
+  --window-glow-end-transform: translate3d(-58%, 0, 0) skewX(14deg);
+  --window-glow-orbit-start: 35deg;
+  --window-glow-orbit-end: -215deg;
+}
+
+.window-entrance.glow-top-right-to-bottom-left {
+  --window-glow-angle: 42deg;
+  --window-glow-start-transform: translate3d(48%, -34%, 0) rotate(-8deg);
+  --window-glow-end-transform: translate3d(-48%, 34%, 0) rotate(-8deg);
+  --window-glow-orbit-start: 65deg;
+  --window-glow-orbit-end: -205deg;
+}
+
+.window-entrance.glow-top-left-to-bottom-right {
+  --window-glow-angle: 138deg;
+  --window-glow-start-transform: translate3d(-48%, -34%, 0) rotate(8deg);
+  --window-glow-end-transform: translate3d(48%, 34%, 0) rotate(8deg);
+  --window-glow-orbit-start: -65deg;
+  --window-glow-orbit-end: 205deg;
+}
+
+.window-entrance.glow-center-out {
+  --window-glow-orbit-start: -18deg;
+  --window-glow-orbit-end: 162deg;
+}
+
+.window-entrance.glow-center-out .window-entrance-glow {
+  inset: -18%;
+  background: radial-gradient(
+    ellipse at center,
+    color-mix(in srgb, var(--buddy-primary) 78%, transparent) 0,
+    color-mix(in srgb, var(--buddy-primary) 30%, transparent) 28%,
+    transparent 68%
+  );
+  transform: scale3d(0.14, 0.38, 1);
+}
+
+.window-entrance-content {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transform: scale(0.988);
+  transform-origin: center;
+  will-change: transform, opacity;
+}
+
+.window-entrance.is-entering .window-entrance-surface {
+  animation: window-surface-morph var(--window-entrance-duration) var(--ease-standard) both;
+}
+
+.window-entrance.is-entering .window-entrance-surface::before {
+  animation: window-glow-orbit var(--window-entrance-duration) linear both;
+}
+
+.window-entrance.is-entering .window-entrance-glow {
+  animation: window-glow-sweep var(--window-entrance-duration) var(--ease-standard) both;
+}
+
+.window-entrance.is-entering.glow-center-out .window-entrance-glow {
+  animation-name: window-glow-center-bloom;
+}
+
+.window-entrance.is-entering .window-entrance-content {
+  animation: window-content-reveal var(--window-entrance-duration) var(--ease-standard) both;
+}
+
+.window-entrance.is-settled .window-entrance-content {
+  opacity: 1;
+  transform: scale(1);
+}
+
+@keyframes window-surface-morph {
+  0% {
+    opacity: 0;
+    border-radius: var(--window-entrance-radius);
+    transform: scaleX(var(--window-entrance-scale-x))
+      scaleY(var(--window-entrance-scale-y));
+  }
+
+  14% {
+    opacity: 1;
+  }
+
+  72% {
+    opacity: 1;
+    border-radius: var(--radius-xl);
+    transform: scaleX(1.022) scaleY(1.03);
+  }
+
+  100% {
+    opacity: 0;
+    border-radius: var(--radius-xl);
+    transform: scale(1);
+  }
+}
+
+@keyframes window-content-reveal {
+  0%,
+  22% {
+    opacity: 0;
+    transform: scale(0.988);
+  }
+
+  74% {
+    opacity: 1;
+    transform: scale(1.008);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes window-glow-orbit {
+  from {
+    transform: rotate(var(--window-glow-orbit-start)) scale(1.16);
+  }
+
+  to {
+    transform: rotate(var(--window-glow-orbit-end)) scale(1.16);
+  }
+}
+
+@keyframes window-glow-sweep {
+  0% {
+    opacity: 0;
+    transform: var(--window-glow-start-transform);
+  }
+
+  18% {
+    opacity: 0.9;
+  }
+
+  78% {
+    opacity: 0.68;
+  }
+
+  100% {
+    opacity: 0;
+    transform: var(--window-glow-end-transform);
+  }
+}
+
+@keyframes window-glow-center-bloom {
+  0% {
+    opacity: 0;
+    transform: scale3d(0.14, 0.38, 1);
+  }
+
+  24% {
+    opacity: 0.9;
+  }
+
+  76% {
+    opacity: 0.62;
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale3d(1.18, 1.08, 1);
+  }
+}
+
 .buddy-shell {
   isolation: isolate;
   background:
@@ -406,6 +678,17 @@ html[data-platform="windows"] #root {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .window-entrance-surface {
+    display: none;
+  }
+
+  .window-entrance-content,
+  .window-entrance.is-entering .window-entrance-content {
+    opacity: 1;
+    transform: none;
+    animation: none;
+  }
+
   .conversation-shell,
   .conversation-shell .input-dock {
     animation: none;
@@ -419,6 +702,7 @@ html[data-platform="windows"] #root {
 /* 空态本身就是一枚输入气泡，不再叠加第二层玻璃外壳。 */
 .empty-shell.buddy-shell {
   background: transparent;
+  border: none;
   box-shadow: none;
 }
 
@@ -430,6 +714,34 @@ html[data-platform="windows"] #root {
   box-shadow:
     inset 0 0 0 1px var(--window-inner-highlight),
     var(--shadow-floating-md);
+}
+
+/* 紧凑气泡复用对话输入框的双层炫光，只让圆角跟随更大的气泡外形。 */
+.empty-shell .input-dock.is-standalone::before,
+.empty-shell .input-dock.is-standalone::after {
+  border-radius: inherit;
+}
+
+.empty-drag-region {
+  position: absolute;
+  top: 0;
+  z-index: 3;
+  height: var(--space-3);
+  cursor: grab;
+}
+
+.empty-drag-region:active {
+  cursor: grabbing;
+}
+
+.empty-drag-region.is-left {
+  left: var(--space-2);
+  right: calc(50% + var(--space-5));
+}
+
+.empty-drag-region.is-right {
+  left: calc(50% + var(--space-5));
+  right: var(--space-2);
 }
 
 .empty-expand-trigger {
@@ -1467,9 +1779,9 @@ html[data-platform="windows"] #root {
 /* ── Typography Classes ── */
 .t-title   { font: 600 var(--font-size-xl)/var(--line-height-tight) var(--font-sans); letter-spacing: var(--letter-spacing-tight); }
 .t-h3      { font: 600 var(--font-size-lg)/var(--line-height-tight) var(--font-sans); }
-.t-body    { font: 400 var(--font-size-md)/var(--line-height-base) var(--font-sans); }
-.t-body-sm { font: 400 var(--font-size-base)/var(--line-height-base) var(--font-sans); }
-.t-caption { font: 400 var(--font-size-sm)/var(--line-height-base) var(--font-sans); color: var(--text-muted); }
+.t-body    { font: var(--font-weight-regular) var(--font-size-md)/var(--line-height-base) var(--font-sans); }
+.t-body-sm { font: var(--font-weight-regular) var(--font-size-base)/var(--line-height-base) var(--font-sans); }
+.t-caption { font: var(--font-weight-regular) var(--font-size-sm)/var(--line-height-base) var(--font-sans); color: var(--text-muted); }
 
 /* ── Thinking Block Motion ── */
 .think-section {
@@ -2294,7 +2606,7 @@ html[data-platform="windows"] #root {
   min-width: 0;
   overflow: hidden;
   color: var(--text-muted);
-  font: 400 var(--font-size-xs)/var(--line-height-base) var(--font-mono);
+  font: var(--font-weight-regular) var(--font-size-xs)/var(--line-height-base) var(--font-mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2608,7 +2920,7 @@ html[data-platform="windows"] #root {
   border-radius: var(--radius-md);
   color: var(--text-primary);
   background: var(--bg-surface);
-  font: 400 var(--font-size-sm)/var(--line-height-base) var(--font-sans);
+  font: var(--font-weight-regular) var(--font-size-sm)/var(--line-height-base) var(--font-sans);
   box-sizing: border-box;
   transition:
     border-color var(--duration-fast) var(--ease-standard),
@@ -2847,6 +3159,14 @@ html[data-platform="windows"] #root {
 
 /* ── AI 消息 Markdown 内容样式 ── */
 
+.ai-message-content,
+.ai-message-content p,
+.ai-message-content li,
+.ai-message-content blockquote,
+.ai-message-content td {
+  font-weight: var(--font-weight-regular);
+}
+
 .streaming-char-settle {
   animation-duration: var(--duration-streaming-char-settle);
   animation-timing-function: var(--ease-standard);
@@ -2997,7 +3317,7 @@ html[data-platform="windows"] #root {
 .ai-message-content h5,
 .ai-message-content h6 {
   margin: var(--space-3) 0 var(--space-2) 0;
-  font-weight: 600;
+  font-weight: var(--font-weight-emphasis);
   line-height: var(--line-height-tight);
   letter-spacing: var(--letter-spacing-tight);
 }
@@ -3007,6 +3327,7 @@ html[data-platform="windows"] #root {
 .ai-message-content h3 {
   position: relative;
   padding-left: var(--space-3);
+  font-weight: var(--font-weight-heading);
 }
 
 .ai-message-content h1::before,
@@ -3089,7 +3410,7 @@ html[data-platform="windows"] #root {
   border-radius: var(--radius-full);
   color: var(--markdown-accent-strong);
   background: var(--markdown-accent-soft);
-  font: 600 var(--font-size-xs)/var(--space-4) var(--font-mono);
+  font: var(--font-weight-emphasis) var(--font-size-xs)/var(--space-4) var(--font-mono);
   text-align: center;
 }
 
@@ -3151,7 +3472,7 @@ html[data-platform="windows"] #root {
   border-radius: var(--radius-sm);
   color: var(--markdown-accent-strong);
   background: var(--markdown-accent-soft);
-  font: 500 var(--font-size-base)/inherit var(--font-mono);
+  font: var(--font-weight-regular) var(--font-size-base)/inherit var(--font-mono);
 }
 
 .markdown-table-wrap {
@@ -3190,7 +3511,7 @@ html[data-platform="windows"] #root {
 .ai-message-content th {
   color: var(--markdown-accent-strong);
   background: var(--markdown-accent-soft);
-  font-weight: 600;
+  font-weight: var(--font-weight-emphasis);
 }
 
 .ai-message-content tbody tr {
@@ -3214,7 +3535,7 @@ html[data-platform="windows"] #root {
 }
 
 .ai-message-content strong {
-  font-weight: 600;
+  font-weight: var(--font-weight-emphasis);
 }
 
 .ai-message-content em {

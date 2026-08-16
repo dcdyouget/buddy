@@ -14,7 +14,7 @@ import { useDragHandle } from '@/hooks/useDragHandle';
  */
 export function NoApiKeyPage() {
   const dragRef = useDragHandle();
-  const { setPage } = useUIStore();
+  const setPage = useUIStore((state) => state.setPage);
 
   /** 跳转到设置页，并同步调整窗口尺寸以匹配设置页面的布局 */
   const goSettings = () => {
@@ -34,7 +34,16 @@ export function NoApiKeyPage() {
       }}
     >
       <GlassPanel
+        role="button"
+        tabIndex={0}
+        data-no-window-drag
         onClick={goSettings}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            goSettings();
+          }
+        }}
         style={{
           width: '100%',
           minHeight: 60,

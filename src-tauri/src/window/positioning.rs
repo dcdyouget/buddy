@@ -2,10 +2,17 @@
 
 use log::info;
 use parking_lot::Mutex;
+use std::collections::HashMap;
+use std::sync::atomic::AtomicU64;
 use tauri::Manager;
 
 /// 记录用户拖拽后的窗口位置（物理像素），key 为显示器 (x,y)，value 为窗口 (x,y)
-pub struct SavedWindowPositions(pub Mutex<std::collections::HashMap<(i32, i32), (i32, i32)>>);
+#[derive(Default)]
+pub struct SavedWindowPositions {
+    pub positions: Mutex<HashMap<(i32, i32), (i32, i32)>>,
+    pub pending_move_save: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
+    pub move_generation: AtomicU64,
+}
 
 /// 将窗口重新定位到当前光标所在显示器的中心位置（多屏适配）
 pub fn reposition_to_cursor_monitor(window: &tauri::WebviewWindow) {
@@ -62,8 +69,7 @@ pub fn reposition_to_cursor_monitor(window: &tauri::WebviewWindow) {
         let saved = window
             .app_handle()
             .try_state::<SavedWindowPositions>()
-            .map(|s| s.0.lock().get(&(m_pos.x, m_pos.y)).copied())
-            .flatten();
+            .and_then(|state| state.positions.lock().get(&(m_pos.x, m_pos.y)).copied());
         if let Some((sx, sy)) = saved {
             let sxf = sx as f64 / scale;
             let syf = sy as f64 / scale;

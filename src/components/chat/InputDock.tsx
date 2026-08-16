@@ -14,6 +14,7 @@ import type { ImageAttachment, ModelInfo } from '@/types';
 
 const MAX_IMAGE_COUNT = 4;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const IME_COMPOSITION_GUARD_MS = 50;
 const SUPPORTED_IMAGE_TYPES = new Set([
   'image/jpeg',
   'image/png',
@@ -81,6 +82,7 @@ export function InputDock({
 }: InputDockProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const lastCompositionEndAtRef = useRef(Number.NEGATIVE_INFINITY);
   const [isSavingImages, setIsSavingImages] = useState(false);
   // 保持最新的 isStreaming 值供事件回调使用（避免闭包过期）
   const isStreamingRef = useRef(isStreaming);
@@ -233,10 +235,12 @@ export function InputDock({
    */
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter') {
-      // IME 输入法处理中：keyCode 229 表示按键正被输入法拦截处理
-      // （中文输入法确认英文时 compositionend 在 keydown 之前触发，
-      //   此时 isComposing 已为 false，但 keyCode 仍为 229）
-      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) {
+      // WebKit 有时会在 compositionend 后仍把普通 Enter 报告为 keyCode 229。
+      // 只拦截正在组词或刚结束组词的确认键，避免后续发送键被永久吞掉。
+      const justFinishedComposition =
+        e.nativeEvent.keyCode === 229 &&
+        Date.now() - lastCompositionEndAtRef.current < IME_COMPOSITION_GUARD_MS;
+      if (e.nativeEvent.isComposing || justFinishedComposition) {
         return;
       }
       // Cmd/Ctrl+Enter → 换行，不拦截
@@ -388,7 +392,11 @@ export function InputDock({
               ref={textareaRef}
               value={draftInput}
               onChange={(e) => onDraftChange(e.target.value)}
+              onCompositionEnd={() => {
+                lastCompositionEndAtRef.current = Date.now();
+              }}
               onKeyDown={handleKeyDown}
+              data-window-drag-when-empty={hideBorder ? '' : undefined}
               placeholder="问点什么…"
               rows={1}
               style={{

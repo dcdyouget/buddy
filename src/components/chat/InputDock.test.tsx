@@ -6,7 +6,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ModelInfo } from '@/types';
 import { InputDock } from './InputDock';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 const visionModel: ModelInfo = {
   id: 'vision-model',
@@ -18,7 +21,94 @@ const visionModel: ModelInfo = {
   supports_image_generation: false,
 };
 
-describe('InputDock 图片附件', () => {
+describe('InputDock', () => {
+  it('keyCode 229 但未处于输入法组词时仍可回车发送', () => {
+    const onSend = vi.fn();
+    const { getByRole } = render(
+      <InputDock
+        isStreaming={false}
+        selectedModel={visionModel}
+        draftInput="测试消息"
+        draftImages={[]}
+        onDraftChange={() => {}}
+        onAddImages={() => {}}
+        onRemoveImage={() => {}}
+        onSend={onSend}
+        onStop={() => {}}
+      />,
+    );
+
+    fireEvent.keyDown(getByRole('textbox'), {
+      key: 'Enter',
+      keyCode: 229,
+      isComposing: false,
+    });
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('输入法正在组词时不会把确认键当作发送', () => {
+    const onSend = vi.fn();
+    const { getByRole } = render(
+      <InputDock
+        isStreaming={false}
+        selectedModel={visionModel}
+        draftInput="测试消息"
+        draftImages={[]}
+        onDraftChange={() => {}}
+        onAddImages={() => {}}
+        onRemoveImage={() => {}}
+        onSend={onSend}
+        onStop={() => {}}
+      />,
+    );
+
+    fireEvent.keyDown(getByRole('textbox'), {
+      key: 'Enter',
+      keyCode: 229,
+      isComposing: true,
+    });
+
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('输入法刚结束组词时只忽略对应的确认键', () => {
+    const onSend = vi.fn();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const { getByRole } = render(
+      <InputDock
+        isStreaming={false}
+        selectedModel={visionModel}
+        draftInput="测试消息"
+        draftImages={[]}
+        onDraftChange={() => {}}
+        onAddImages={() => {}}
+        onRemoveImage={() => {}}
+        onSend={onSend}
+        onStop={() => {}}
+      />,
+    );
+    const textarea = getByRole('textbox');
+
+    fireEvent.compositionEnd(textarea);
+    fireEvent.keyDown(textarea, {
+      key: 'Enter',
+      keyCode: 229,
+      isComposing: false,
+    });
+
+    expect(onSend).not.toHaveBeenCalled();
+
+    now.mockReturnValue(1_050);
+    fireEvent.keyDown(textarea, {
+      key: 'Enter',
+      keyCode: 229,
+      isComposing: false,
+    });
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
   it('多模态模型显示图片入口并读取图片为 Data URL', async () => {
     const onAddImages = vi.fn();
     const { getByTitle, container } = render(

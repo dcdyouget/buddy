@@ -24,7 +24,6 @@ use crate::streaming::{StopReason, StreamEventEmitter, StreamOutcome};
 use crate::tools::ToolDefinition;
 use futures_util::StreamExt; // 为 Stream trait 提供 .next() 等适配器
 use log::{error, info, warn}; // 日志门面（log crate）
-use reqwest::Client; // HTTP 客户端
 use serde_json::{json, Value}; // 通用 JSON 值类型
 use std::pin::Pin; // 用于 Pin<Box<...>>
 use std::time::{Duration, Instant}; // 时间段与耗时统计
@@ -293,10 +292,7 @@ impl LlmProvider for AnthropicProvider {
             //       * 若 Result 是 Ok(v)，解包出 v
             //       * 若 Result 是 Err(e)，从当前函数返回 Err(转换后的 e)
             //     ≈ Java 的 throws 机制但写法更紧凑
-            let client = Client::builder()
-                .timeout(Duration::from_secs(120))
-                .build()
-                .map_err(|e| ApiError::NetworkError(e.to_string()))?;
+            let client = super::shared_http_client().map_err(ApiError::NetworkError)?;
 
             // ── 2. 转换消息格式 ──
             let anthropic_messages = Self::convert_messages(messages);
@@ -912,16 +908,13 @@ impl LlmProvider for AnthropicProvider {
             let url = format!("{}/v1/models", base_url.trim_end_matches('/'));
 
             // 超时设置更短（10s 连接，15s 总超时）—— 列表请求不应该阻塞太久
-            let client = Client::builder()
-                .connect_timeout(Duration::from_secs(10))
-                .timeout(Duration::from_secs(15))
-                .build()
-                .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+            let client = super::shared_http_client()?;
 
             let response = client
                 .get(&url)
                 .header("x-api-key", api_key)
                 .header("anthropic-version", ANTHROPIC_VERSION)
+                .timeout(Duration::from_secs(15))
                 .send()
                 .await
                 .map_err(|e| format!("请求模型列表失败: {}", e))?;
@@ -983,10 +976,7 @@ impl LlmProvider for AnthropicProvider {
         model_id: &'a str,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<u32, String>> + Send + 'a>> {
         Box::pin(async move {
-            let client = Client::builder()
-                .timeout(Duration::from_secs(15))
-                .build()
-                .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+            let client = super::shared_http_client()?;
 
             let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
 
@@ -1008,6 +998,7 @@ impl LlmProvider for AnthropicProvider {
                 .header("anthropic-version", ANTHROPIC_VERSION)
                 .header("Content-Type", "application/json")
                 .json(&body)
+                .timeout(Duration::from_secs(15))
                 .send()
                 .await
                 .map_err(|e| format!("测速请求失败: {}", e))?;

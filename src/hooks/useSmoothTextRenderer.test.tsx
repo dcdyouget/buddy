@@ -5,10 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Message } from '@/types';
 import { useChatStore } from '@/stores/chatStore';
-import {
-  useSmoothTextRenderer,
-  WINDOW_WILL_HIDE_EVENT,
-} from './useSmoothTextRenderer';
+import { WINDOW_WILL_HIDE_EVENT } from '@/utils/windowEvents';
+import { useSmoothTextRenderer } from './useSmoothTextRenderer';
 
 function assistantMessage(): Message {
   return {
@@ -67,7 +65,7 @@ afterEach(() => {
 });
 
 describe('useSmoothTextRenderer 后台输出', () => {
-  it('窗口可见时仍按动画帧逐字消费', () => {
+  it('窗口可见时按低频小批量消费', () => {
     render(<RendererHarness />);
 
     act(() => {
@@ -78,8 +76,8 @@ describe('useSmoothTextRenderer 后台输出', () => {
     act(() => {
       frameCallback?.(0);
     });
-    expect(useChatStore.getState().messages[0].content).toBe('正');
-    expect(useChatStore.getState().pendingTextBuffer).toBe('常');
+    expect(useChatStore.getState().messages[0].content).toBe('正常');
+    expect(useChatStore.getState().pendingTextBuffer).toBe('');
   });
 
   it('Esc 隐藏后立即消费后续缓冲，不依赖动画帧', () => {
@@ -142,10 +140,10 @@ describe('useSmoothTextRenderer 后台输出', () => {
     act(() => {
       frameCallback?.(0);
     });
-    expect(useChatStore.getState().messages[0].content).toBe('正');
+    expect(useChatStore.getState().messages[0].content).toBe('正文');
     expect(useChatStore.getState().streamingBlocks).toEqual([
       { type: 'thinking', content: '已经思考完成', is_open: false },
-      { type: 'text', content: '正' },
+      { type: 'text', content: '正文' },
     ]);
   });
 });
