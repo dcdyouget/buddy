@@ -13,7 +13,10 @@ use tauri_plugin_autostart::ManagerExt;
 /// 显示窗口并稳定抢到前台（跨平台）
 ///
 /// 包装各平台的"绕过前台锁定"实现，确保从托盘打开窗口的体验与快捷键一致。
-fn show_window(window: &tauri::WebviewWindow) {
+fn show_window(window: &tauri::WebviewWindow, allow_idle_compact: bool) {
+    // 托盘点击代表一次明确呼出，即使窗口只是失焦也重新播放出现动画。
+    crate::window::notify_window_invoked(window, allow_idle_compact);
+
     #[cfg(target_os = "windows")]
     crate::platform::windows::bring_to_front(window);
 
@@ -90,11 +93,14 @@ pub fn create_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
         .title("Buddy") // 图标右边显示的文字（macOS 状态栏特有）
         .tooltip("Buddy - AI Chat Assistant")
         .menu(&menu)
+        // 默认值为 true，会让左键优先弹出菜单并吞掉窗口显示回调。
+        // 左键直接呼出 Buddy，右键仍按系统默认行为显示托盘菜单。
+        .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| match event.id.as_ref() {
             "settings" => {
                 if let Some(window) = app.get_webview_window("main") {
                     reposition_to_cursor_monitor(&window);
-                    show_window(&window);
+                    show_window(&window, false);
                     if let Err(err) = app.emit("open-settings", ()) {
                         warn!("[tray] 打开设置页事件发送失败: {}", err);
                     }
@@ -140,7 +146,7 @@ pub fn create_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error
                 let app = tray.app_handle();
                 if let Some(window) = app.get_webview_window("main") {
                     reposition_to_cursor_monitor(&window);
-                    show_window(&window);
+                    show_window(&window, true);
                 }
             }
         })

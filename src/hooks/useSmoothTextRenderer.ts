@@ -2,11 +2,12 @@
  * useSmoothTextRenderer.ts —— 平滑文本渲染 Hook
  *
  * 后端 SS E 推送的 text_delta 先入队到 pendingTextBuffer，
- * 本 hook 通过 requestAnimationFrame 轮询，逐字消费到 streamingBlocks，
+ * 本 hook 通过 requestAnimationFrame 轮询，小批量消费到 streamingBlocks，
  * 实现类似 Claude Code 的平滑打字机效果。
  *
  * 速度策略：
- * - 最多显示 50 个 Unicode 字符/秒
+ * - 基础速度约 50 个 Unicode 字符/秒，积压较多时自动追赶
+ * - 每秒最多更新 Store 25 次，减少 Markdown 解析和 React 重渲染
  * - 后端暂时没有新内容时不消费，星标留在原位播放呼吸动画
  * - 窗口隐藏/失焦时立即消费缓冲，避免 requestAnimationFrame 暂停后积压
  * - 窗口重新显示后短暂保持追赶模式，清理 WebView 恢复时补发的事件
@@ -17,14 +18,16 @@
 import { useEffect, useRef } from 'react';
 import { useChatStore } from '@/stores/chatStore';
 import { isBrowser } from '@/utils/mock';
+import { WINDOW_WILL_HIDE_EVENT } from '@/utils/windowEvents';
 
 const STREAMING_CHARACTERS_PER_SECOND = 50;
-const STREAMING_CHARACTER_INTERVAL =
-  1000 / STREAMING_CHARACTERS_PER_SECOND;
+const STREAMING_UPDATES_PER_SECOND = 25;
+const STREAMING_UPDATE_INTERVAL = 1000 / STREAMING_UPDATES_PER_SECOND;
+const BASE_CHARACTERS_PER_UPDATE = Math.ceil(
+  STREAMING_CHARACTERS_PER_SECOND / STREAMING_UPDATES_PER_SECOND,
+);
+const MAX_CHARACTERS_PER_UPDATE = 16;
 const RESUME_CATCH_UP_DURATION = 600;
-
-/** Esc 隐藏前由 App 主动发出，避免等待原生失焦事件。 */
-export const WINDOW_WILL_HIDE_EVENT = 'buddy:window-will-hide';
 
 export function useSmoothTextRenderer() {
   const rafRef = useRef<number>(0);
@@ -123,18 +126,25 @@ export function useSmoothTextRenderer() {
       }
 
       const { pendingTextBuffer, isStreaming } = useChatStore.getState();
-      // 按固定时间间隔逐字消费，避免刷新率变化影响输出速度。
+      // 按固定时间间隔小批量消费，减少 Store 更新和 Markdown 重算。
       if (isStreaming && pendingTextBuffer.length > 0) {
         if (nextRevealAtRef.current === 0) {
           nextRevealAtRef.current = timestamp;
         }
         if (timestamp >= nextRevealAtRef.current) {
-          useChatStore.getState().smoothTextDelta(1);
+          const charactersToReveal = Math.min(
+            MAX_CHARACTERS_PER_UPDATE,
+            Math.max(
+              BASE_CHARACTERS_PER_UPDATE,
+              Math.ceil(pendingTextBuffer.length / STREAMING_UPDATES_PER_SECOND),
+            ),
+          );
+          useChatStore.getState().smoothTextDelta(charactersToReveal);
           const scheduledNext =
-            nextRevealAtRef.current + STREAMING_CHARACTER_INTERVAL;
+            nextRevealAtRef.current + STREAMING_UPDATE_INTERVAL;
           nextRevealAtRef.current =
-            timestamp - scheduledNext > STREAMING_CHARACTER_INTERVAL
-              ? timestamp + STREAMING_CHARACTER_INTERVAL
+            timestamp - scheduledNext > STREAMING_UPDATE_INTERVAL
+              ? timestamp + STREAMING_UPDATE_INTERVAL
               : scheduledNext;
         }
       } else {

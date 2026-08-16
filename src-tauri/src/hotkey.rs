@@ -4,7 +4,7 @@
 // 当用户修改热键配置后，update_hotkey 负责先注销旧热键再注册新热键，保证始终只有一个有效热键。
 
 use log;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 /// 当前注册的全局热键状态
@@ -37,8 +37,13 @@ pub fn register(app: &tauri::AppHandle, shortcut: Shortcut) -> Result<(), String
 
                     if visible && focused {
                         // ── 显示 + 已聚焦 → 隐藏 ──
-                        let _ = window.hide();
-                        log::info!("[hotkey] hidden");
+                        let _ = window.emit(crate::window::WINDOW_WILL_HIDE_EVENT, ());
+                        if let Err(error) = window.hide() {
+                            crate::window::emit_window_will_show(&window, false);
+                            log::warn!("[hotkey] hide failed: {error}");
+                        } else {
+                            log::info!("[hotkey] hidden");
+                        }
                     } else {
                         // ── 隐藏 OR 显示但失焦 → 带到鼠标所在屏幕的前台 ──
                         if !visible {
@@ -48,6 +53,9 @@ pub fn register(app: &tauri::AppHandle, shortcut: Shortcut) -> Result<(), String
                         }
 
                         crate::window::positioning::reposition_to_cursor_monitor(&window);
+
+                        // 先完成跨屏定位，再让前端计算气泡尺寸，避免异步缩放把窗口带回旧屏幕。
+                        crate::window::notify_window_invoked(&window, true);
                         log::info!(
                             "[hotkey] before bring_to_front, pos={:?}",
                             window.outer_position().ok()

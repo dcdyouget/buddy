@@ -31,9 +31,28 @@ describe('shouldStartWindowDrag', () => {
     expect(shouldStartWindowDrag(icon)).toBe(false);
   });
 
+  it('ARIA button 容器不会触发窗口拖动', () => {
+    const button = document.createElement('div');
+    button.setAttribute('role', 'button');
+    const icon = document.createElement('span');
+    button.appendChild(icon);
+
+    expect(shouldStartWindowDrag(icon)).toBe(false);
+  });
+
   it('保留输入框和普通文本元素的原生交互', () => {
     expect(shouldStartWindowDrag(document.createElement('textarea'))).toBe(false);
     expect(shouldStartWindowDrag(document.createElement('span'))).toBe(false);
+  });
+
+  it('气泡输入框仅在没有有效文字时允许拖动', () => {
+    const textarea = document.createElement('textarea');
+    textarea.setAttribute('data-window-drag-when-empty', '');
+
+    expect(shouldStartWindowDrag(textarea)).toBe(true);
+
+    textarea.value = '准备发送的内容';
+    expect(shouldStartWindowDrag(textarea)).toBe(false);
   });
 
   it('标题文字右侧的块级留白可以拖动', () => {

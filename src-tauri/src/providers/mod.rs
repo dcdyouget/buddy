@@ -29,8 +29,29 @@ use crate::models::{CompatConfig, Message, MessageRole, ModelInfo}; // 引用本
 use crate::streaming::{StreamEventEmitter, StreamOutcome}; // 引用本 crate 的 streaming 模块
 use crate::tools::ToolDefinition; // 引用本 crate 的 tools 模块
 use chrono::{DateTime, FixedOffset, Local, Utc}; // 当前本地时间与 UTC 偏移
+use reqwest::Client;
 use std::future::Future; // 标准库的 Future trait
+use std::sync::OnceLock;
+use std::time::Duration;
 use tokio::sync::watch; // tokio 异步运行时的 watch channel
+
+static SHARED_HTTP_CLIENT: OnceLock<Result<Client, String>> = OnceLock::new();
+
+/// Provider 共享连接池，避免每轮工具调用重新建立 TCP/TLS 连接。
+pub(crate) fn shared_http_client() -> Result<Client, String> {
+    SHARED_HTTP_CLIENT
+        .get_or_init(|| {
+            Client::builder()
+                .connect_timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(120))
+                .tcp_keepalive(Duration::from_secs(60))
+                .pool_idle_timeout(Duration::from_secs(90))
+                .pool_max_idle_per_host(4)
+                .build()
+                .map_err(|error| format!("创建 HTTP 客户端失败: {error}"))
+        })
+        .clone()
+}
 
 /// 从 API 错误响应 JSON 中提取人类可读的错误消息
 ///

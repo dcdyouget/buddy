@@ -1,4 +1,4 @@
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, useIsPresent } from 'framer-motion';
 
 /** SlideInPanel 侧滑面板组件的 Props */
 interface SlideInPanelProps {
@@ -8,6 +8,39 @@ interface SlideInPanelProps {
   from?: 'right' | 'left';
   /** 是否显示面板 */
   show: boolean;
+}
+
+interface SlidingLayerProps {
+  children: React.ReactNode;
+  from: 'right' | 'left';
+}
+
+/** 退出动画期间立即释放鼠标事件，避免透明覆层吞掉下一次点击。 */
+function SlidingLayer({ children, from }: SlidingLayerProps) {
+  const isPresent = useIsPresent();
+
+  return (
+    <motion.div
+      initial={{ x: from === 'right' ? '100%' : '-100%', opacity: 0 }}
+      animate={{ x: 0, opacity: 1 }}
+      exit={{ x: from === 'right' ? '100%' : '-100%', opacity: 0 }}
+      transition={{
+        duration: 0.2,
+        ease: [0.2, 0.0, 0, 1],
+      }}
+      style={{
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        zIndex: 100,
+        pointerEvents: isPresent ? 'auto' : 'none',
+      }}
+    >
+      {children}
+    </motion.div>
+  );
 }
 
 /**
@@ -25,29 +58,9 @@ export function SlideInPanel({ children, from = 'right', show }: SlideInPanelPro
   return (
     <AnimatePresence>
       {show && (
-        <motion.div
-          // 进入动画：从侧边滑入 + 淡入
-          initial={{ x: from === 'right' ? '100%' : '-100%', opacity: 0 }}
-          // 动画终点：正常位置 + 完全不透明
-          animate={{ x: 0, opacity: 1 }}
-          // 退出动画：滑回侧边 + 淡出
-          exit={{ x: from === 'right' ? '100%' : '-100%', opacity: 0 }}
-          transition={{
-            duration: 0.2,
-            // 自定义缓动曲线，使滑动更自然
-            ease: [0.2, 0.0, 0, 1],
-          }}
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            zIndex: 100,
-          }}
-        >
+        <SlidingLayer from={from}>
           {children}
-        </motion.div>
+        </SlidingLayer>
       )}
     </AnimatePresence>
   );

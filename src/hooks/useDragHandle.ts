@@ -17,9 +17,12 @@ const INTERACTIVE_SELECTOR = [
   'select',
   'a',
   'label',
+  '[role="button"]',
   '[contenteditable]:not([contenteditable="false"])',
   '[data-no-window-drag]',
 ].join(',');
+
+const DRAG_WHEN_EMPTY_SELECTOR = '[data-window-drag-when-empty]';
 
 /**
  * 文本元素通常是块级元素，会占满一整行。
@@ -101,6 +104,15 @@ export function shouldStartWindowDrag(
   position?: PointerPosition,
 ): boolean {
   if (!(target instanceof Element)) return false;
+
+  const emptyDraggableField = target.closest(DRAG_WHEN_EMPTY_SELECTOR);
+  if (
+    emptyDraggableField instanceof HTMLTextAreaElement &&
+    emptyDraggableField.value.trim().length === 0
+  ) {
+    return true;
+  }
+
   if (target.closest(INTERACTIVE_SELECTOR)) return false;
 
   const textContainer = target.closest(TEXT_CONTAINER_SELECTOR);
@@ -135,6 +147,13 @@ export function useDragHandle() {
         })
       ) {
         return;
+      }
+
+      if (
+        e.target instanceof HTMLTextAreaElement &&
+        e.target.matches(DRAG_WHEN_EMPTY_SELECTOR)
+      ) {
+        e.target.focus({ preventScroll: true });
       }
 
       try {

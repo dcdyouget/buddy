@@ -10,18 +10,21 @@
  * 5. 应用入口动画：frameless 窗口的淡入缩放效果
  */
 
-import { useEffect } from 'react';
-import { motion } from 'framer-motion';
+import { useCallback, useEffect } from 'react';
 import { useConfigStore } from '@/stores/configStore';
 import { useUIStore } from '@/stores/uiStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useStreaming } from '@/hooks/useStreaming';
-import { WINDOW_WILL_HIDE_EVENT } from '@/hooks/useSmoothTextRenderer';
+import {
+  WINDOW_WILL_HIDE_EVENT,
+  WINDOW_WILL_SHOW_EVENT,
+} from '@/utils/windowEvents';
 import { EmptyPage } from '@/pages/EmptyPage';
 import { NoApiKeyPage } from '@/pages/NoApiKeyPage';
 import { ChatPage } from '@/pages/ChatPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { SlideInPanel } from '@/components/shared/SlideInPanel';
+import { WindowEntrance } from '@/components/shared/WindowEntrance';
 import { resizeWindowToPage } from '@/utils/windowResize';
 
 /**
@@ -66,9 +69,25 @@ function PageRenderer() {
  * 负责初始化配置、绑定全局快捷键、注册流式事件监听、渲染页面
  */
 function App() {
-  const { loadConfig, config } = useConfigStore();
-  const { loadMessages } = useChatStore();
-  const { setPage, setThemeReady, currentPage } = useUIStore();
+  const loadConfig = useConfigStore((state) => state.loadConfig);
+  const configTheme = useConfigStore((state) => state.config?.theme);
+  const providerCount = useConfigStore(
+    (state) => state.config?.providers.length,
+  );
+  const selectedModelId = useConfigStore(
+    (state) => state.config?.selected_model_id,
+  );
+  const loadMessages = useChatStore((state) => state.loadMessages);
+  const setPage = useUIStore((state) => state.setPage);
+  const setThemeReady = useUIStore((state) => state.setThemeReady);
+  const currentPage = useUIStore((state) => state.currentPage);
+
+  const openCompactAfterIdle = useCallback(async () => {
+    await resizeWindowToPage('empty');
+    if (useUIStore.getState().currentPage !== 'empty') {
+      await useUIStore.getState().setPage('empty');
+    }
+  }, []);
 
   // 注册流式事件监听
   useStreaming();
@@ -88,16 +107,16 @@ function App() {
 
   // 监听主题变更
   useEffect(() => {
-    if (config?.theme) {
-      const isDark = config.theme === 'dark';
+    if (configTheme) {
+      const isDark = configTheme === 'dark';
       document.documentElement.classList.toggle('dark', isDark);
     }
-  }, [config?.theme]);
+  }, [configTheme]);
 
   // 配置变化只处理当前可见的聊天页面；设置页中的分步保存不能打断配置流程。
   useEffect(() => {
-    if (!config) return;
-    const hasValidConfig = config.providers.length > 0 && !!config.selected_model_id;
+    if (providerCount === undefined) return;
+    const hasValidConfig = providerCount > 0 && !!selectedModelId;
     const cur = useUIStore.getState().currentPage;
 
     if (!hasValidConfig) {
@@ -114,7 +133,7 @@ function App() {
     if (cur === 'noapikey') {
       void setPage('conversation');
     }
-  }, [config?.providers.length, config?.selected_model_id]);
+  }, [providerCount, selectedModelId, setPage]);
 
   // ── Esc = 隐藏窗口（不停止流式生成）──
   useEffect(() => {
@@ -124,9 +143,16 @@ function App() {
         // 切到后台直写模式，保证模型输出和收尾不会等到窗口再次显示。
         window.dispatchEvent(new Event(WINDOW_WILL_HIDE_EVENT));
         // 动态导入 Tauri API，浏览器环境下会 catch 忽略
-        import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
-          getCurrentWindow().hide();
-        }).catch(() => {});
+        import('@tauri-apps/api/window')
+          .then(async ({ getCurrentWindow }) => {
+            try {
+              await getCurrentWindow().hide();
+            } catch {
+              // 隐藏失败时恢复内容，避免窗口停留在透明的预备帧。
+              window.dispatchEvent(new Event(WINDOW_WILL_SHOW_EVENT));
+            }
+          })
+          .catch(() => {});
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -210,21 +236,7 @@ function App() {
   }, []);
 
   return (
-    <motion.div
-      initial={{ opacity: 0, scale: 0.95 }}
-      animate={{ opacity: 1, scale: 1 }}
-      transition={{
-        duration: 0.3,
-        ease: [0.34, 1.56, 0.64, 1],
-      }}
-      style={{
-        width: '100vw',
-        height: '100vh',
-        overflow: 'hidden',
-        background: 'transparent',
-        position: 'relative',
-      }}
-    >
+    <WindowEntrance onCompactRequested={openCompactAfterIdle}>
       {/* 背景页面 */}
       <PageRenderer />
 
@@ -244,7 +256,7 @@ function App() {
           />
         )}
       </SlideInPanel>
-    </motion.div>
+    </WindowEntrance>
   );
 }
 

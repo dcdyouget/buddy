@@ -15,6 +15,7 @@ import { InputDock } from '@/components/chat/InputDock';
 import { MessageBubble } from '@/components/chat/MessageBubble';
 import { ModelDropdown } from '@/components/chat/ModelDropdown';
 import { useDragHandle } from '@/hooks/useDragHandle';
+import { useSmoothWheelScroll } from '@/hooks/useSmoothWheelScroll';
 import { useSmoothTextRenderer } from '@/hooks/useSmoothTextRenderer';
 import { openNativeModelMenu } from '@/utils/modelMenu';
 import type { ModelInfo } from '@/types';
@@ -32,11 +33,10 @@ const BOTTOM_FOLLOW_TOLERANCE = 12;
  */
 export function ChatPage() {
   const dragRef = useDragHandle();
-  const { setPage } = useUIStore();
+  const setPage = useUIStore((state) => state.setPage);
   const [isHistoryVisible, setIsHistoryVisible] = useState(false);
   // 改用 useShallow + 细粒度选择器,避免每次 set 都触发整棵 ChatPage 树重渲染。
-  // 之前 `useChatStore()` 无选择器,流式期间 smoothTextDelta 每 ~16ms set 一次,
-  // 整页 + 所有 MessageBubble 子树被强行 re-render 60Hz/秒。
+  // 之前 `useChatStore()` 无选择器，流式更新会让整页和所有历史消息重复渲染。
   const {
     messages,
     draftInput,
@@ -83,7 +83,7 @@ export function ChatPage() {
     })),
   );
   const draftImages = storedDraftImages ?? [];
-  const { config } = useConfigStore();
+  const config = useConfigStore((state) => state.config);
   const [showDropdown, setShowDropdown] = useState(false);
 
   // 平滑文本渲染器：rAF 循环从缓冲队列逐字消费到 streamingBlocks
@@ -140,6 +140,7 @@ export function ChatPage() {
 
   // ── 智能滚动：仅当用户在底部时才自动跟随，翻看历史时不强拉 ──
   const scrollRef = useRef<HTMLDivElement>(null);
+  useSmoothWheelScroll(scrollRef);
   const [isAtBottom, setIsAtBottom] = useState(true);
   // 用 ref 跟踪上一次的 isAtBottom 和 showScrollButton，避免重复打 log
   const prevIsAtBottomRef = useRef(true);
@@ -257,9 +258,10 @@ export function ChatPage() {
   const scrollToBottom = () => {
     console.log('[Scroll] 用户点击"滚动到底部"按钮');
     if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-      setIsAtBottom(true);
-      prevIsAtBottomRef.current = true;
+      scrollRef.current.scrollTo({
+        top: scrollRef.current.scrollHeight,
+        behavior: 'smooth',
+      });
     }
   };
 

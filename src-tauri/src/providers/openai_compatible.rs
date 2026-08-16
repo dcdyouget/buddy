@@ -19,7 +19,6 @@ use crate::streaming::{StopReason, StreamEventEmitter, StreamOutcome};
 use crate::tools::ToolDefinition;
 use futures_util::StreamExt; // Stream trait 扩展（提供 .next() 等）
 use log::{error, info, warn}; // 日志门面
-use reqwest::Client; // 异步 HTTP 客户端
 use serde_json::{json, Value}; // 通用 JSON 值
 use std::pin::Pin; // 自引用指针固定
 use std::time::{Duration, Instant}; // 时间段与耗时统计
@@ -359,10 +358,7 @@ impl LlmProvider for OpenAICompatibleProvider {
     {
         Box::pin(async move {
             // ── 1. 创建 HTTP 客户端 ──
-            let client = Client::builder()
-                .timeout(Duration::from_secs(120))
-                .build()
-                .map_err(|e| ApiError::NetworkError(e.to_string()))?;
+            let client = super::shared_http_client().map_err(ApiError::NetworkError)?;
 
             // ── 2. 转换消息 ──
             let chat_messages = Self::convert_messages(messages);
@@ -845,12 +841,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                 return Err("Base URL 为空".to_string());
             }
 
-            let client = Client::builder()
-                .connect_timeout(Duration::from_secs(10))
-                .timeout(FETCH_MODELS_TIMEOUT)
-                .tcp_keepalive(Duration::from_secs(60)) // 启用 TCP keepalive
-                .build()
-                .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+            let client = super::shared_http_client()?;
 
             // Option<String>：累积最后一次失败原因
             //   None 表示还没有失败过
@@ -863,6 +854,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                 let response = match client
                     .get(url)
                     .header("Authorization", format!("Bearer {}", api_key))
+                    .timeout(FETCH_MODELS_TIMEOUT)
                     .send()
                     .await
                 {
@@ -974,10 +966,7 @@ impl LlmProvider for OpenAICompatibleProvider {
         model_id: &'a str,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<u32, String>> + Send + 'a>> {
         Box::pin(async move {
-            let client = Client::builder()
-                .timeout(Duration::from_secs(15))
-                .build()
-                .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+            let client = super::shared_http_client()?;
 
             let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
 
@@ -996,6 +985,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                 .header("Authorization", format!("Bearer {}", api_key))
                 .header("Content-Type", "application/json")
                 .json(&body)
+                .timeout(Duration::from_secs(15))
                 .send()
                 .await
                 .map_err(|e| format!("测速请求失败: {}", e))?;

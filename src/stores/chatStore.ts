@@ -153,6 +153,34 @@ function parseThinkFromText(text: string): ContentBlock[] {
 const THINK_OPEN_TAG = '<think>';
 const THINK_CLOSE_TAG = '</think>';
 
+/**
+ * 从字符串头部取指定数量的 Unicode 字符。
+ * 只扫描实际消费的部分，避免每次都复制整个流式缓冲区。
+ */
+function takeUnicodePrefix(
+  input: string,
+  count: number,
+): { prefix: string; rest: string; characterCount: number } {
+  const limit = Math.max(0, Math.floor(count));
+  if (limit === 0 || input.length === 0) {
+    return { prefix: '', rest: input, characterCount: 0 };
+  }
+
+  let end = 0;
+  let characterCount = 0;
+  for (const character of input) {
+    if (characterCount >= limit) break;
+    end += character.length;
+    characterCount += 1;
+  }
+
+  return {
+    prefix: input.slice(0, end),
+    rest: input.slice(end),
+    characterCount,
+  };
+}
+
 /** 判断原始文本当前是否处于尚未闭合的 <think> 标签中。 */
 function hasOpenInlineThink(text: string): boolean {
   const lastOpen = text.lastIndexOf(THINK_OPEN_TAG);
@@ -867,19 +895,22 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   // ── P9: 平滑文本渲染 ────────────────────────────
 
-  /** 将 text_delta 入队到缓冲，等待 rAF 循环逐字消费 */
+  /** 将 text_delta 入队到缓冲，等待 rAF 循环小批量消费 */
   feedTextDelta: (delta: string) => {
     set((s) => ({ pendingTextBuffer: s.pendingTextBuffer + delta }));
   },
 
-  /** rAF 每帧调用：从缓冲区取 count 个字符，追加到 streamingBlocks 和 messages[lastAssistant].content */
+  /** rAF 定时调用：从缓冲区取 count 个字符，追加到 streamingBlocks 和 messages[lastAssistant].content */
   smoothTextDelta: (count: number) => {
     const { pendingTextBuffer, messages, streamingBlocks } = get();
     if (pendingTextBuffer.length === 0) return;
 
-    const bufferedCharacters = Array.from(pendingTextBuffer);
-    const chars = bufferedCharacters.slice(0, count).join('');
-    const rest = bufferedCharacters.slice(count).join('');
+    const {
+      prefix: chars,
+      rest,
+      characterCount,
+    } = takeUnicodePrefix(pendingTextBuffer, count);
+    if (characterCount === 0) return;
 
     // 改用 findLastAssistantIdx: handleToolResult 可能把 tool 消息 push 到末尾
     const updated = [...messages];
@@ -903,7 +934,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       messages: updated,
       streamingBlocks: blocks,
       streamingTokens: get().streamingTokens + 1,
-      streamingRevealCount: Array.from(chars).length,
+      streamingRevealCount: characterCount,
       streamingRevealRevision: get().streamingRevealRevision + 1,
     });
 
