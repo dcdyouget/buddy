@@ -140,13 +140,24 @@ export function ChatPage() {
 
   // ── 智能滚动：仅当用户在底部时才自动跟随，翻看历史时不强拉 ──
   const scrollRef = useRef<HTMLDivElement>(null);
-  useSmoothWheelScroll(scrollRef);
   const [isAtBottom, setIsAtBottom] = useState(true);
   // 用 ref 跟踪上一次的 isAtBottom 和 showScrollButton，避免重复打 log
   const prevIsAtBottomRef = useRef(true);
   const prevShowButtonRef = useRef(false);
   const isLoadingOlderRef = useRef(false);
   const lastSeenMessageCountRef = useRef(messages.length);
+
+  /** 滚轮先于 scroll 事件表达用户意图，立即停止工具卡片高度变化触发的自动跟随。 */
+  const handleUserScrollIntent = useCallback((deltaY: number) => {
+    if (deltaY < 0 && prevIsAtBottomRef.current) {
+      prevIsAtBottomRef.current = false;
+      setIsAtBottom(false);
+    }
+  }, []);
+  const cancelSmoothWheelScroll = useSmoothWheelScroll(
+    scrollRef,
+    handleUserScrollIntent,
+  );
 
   /** 判断滚动容器是否仍在底部附近。容差保持很小，便于用户立即接管滚动。 */
   const checkAtBottom = useCallback((): boolean => {
@@ -160,17 +171,19 @@ export function ChatPage() {
     const el = scrollRef.current;
     if (!el || !hasMoreHistory || isLoadingOlderRef.current) return;
 
+    cancelSmoothWheelScroll();
     isLoadingOlderRef.current = true;
     const previousHeight = el.scrollHeight;
     const previousTop = el.scrollTop;
     await loadOlderMessages();
 
     requestAnimationFrame(() => {
+      cancelSmoothWheelScroll();
       const heightDelta = el.scrollHeight - previousHeight;
       el.scrollTop = previousTop + heightDelta;
       isLoadingOlderRef.current = false;
     });
-  }, [hasMoreHistory, loadOlderMessages]);
+  }, [cancelSmoothWheelScroll, hasMoreHistory, loadOlderMessages]);
 
   const handleScroll = useCallback(() => {
     const atBottom = checkAtBottom();
@@ -193,9 +206,11 @@ export function ChatPage() {
    */
   useEffect(() => {
     if (scrollRef.current && isAtBottom) {
+      cancelSmoothWheelScroll();
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [
+    cancelSmoothWheelScroll,
     messages,
     streamingBlocks,
     pendingQuestionId,
@@ -223,6 +238,7 @@ export function ChatPage() {
       frameId = window.requestAnimationFrame(() => {
         const current = scrollRef.current;
         if (current && prevIsAtBottomRef.current) {
+          cancelSmoothWheelScroll();
           current.scrollTop = current.scrollHeight;
         }
       });
@@ -236,7 +252,7 @@ export function ChatPage() {
       observer.disconnect();
       window.cancelAnimationFrame(frameId);
     };
-  }, [messages.length, isHistoryVisible]);
+  }, [cancelSmoothWheelScroll, messages.length, isHistoryVisible]);
 
   /** 流式开始时重置为跟随模式 */
   useEffect(() => {
@@ -258,6 +274,7 @@ export function ChatPage() {
   const scrollToBottom = () => {
     console.log('[Scroll] 用户点击"滚动到底部"按钮');
     if (scrollRef.current) {
+      cancelSmoothWheelScroll();
       scrollRef.current.scrollTo({
         top: scrollRef.current.scrollHeight,
         behavior: 'smooth',
