@@ -15,7 +15,7 @@ use tauri_plugin_autostart::ManagerExt;
 /// 包装各平台的"绕过前台锁定"实现，确保从托盘打开窗口的体验与快捷键一致。
 fn show_window(window: &tauri::WebviewWindow, allow_idle_compact: bool) {
     // 托盘点击代表一次明确呼出，即使窗口只是失焦也重新播放出现动画。
-    crate::window::notify_window_invoked(window, allow_idle_compact);
+    crate::window::notify_window_invoked(window, allow_idle_compact, None);
 
     #[cfg(target_os = "windows")]
     crate::platform::windows::bring_to_front(window);

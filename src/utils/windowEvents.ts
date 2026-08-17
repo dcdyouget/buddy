@@ -6,4 +6,8 @@ export const WINDOW_WILL_HIDE_EVENT = 'buddy:window-will-hide';
 
 export interface WindowWillShowPayload {
   open_compact: boolean;
+  /** 快捷键呼出链路 ID；托盘呼出时为 null。 */
+  trace_id?: number | null;
+  /** Rust 发出事件的 Unix 毫秒时间，用于计算 WebView 事件排队耗时。 */
+  emitted_at_ms?: number;
 }

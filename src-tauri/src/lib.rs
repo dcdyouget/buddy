@@ -91,6 +91,11 @@ pub fn run() {
                 app.package_info().version,
                 log_dir
             );
+            window::log_diagnostic(&format!(
+                "[window-diag] app-start version={}, log_dir={}",
+                app.package_info().version,
+                log_dir,
+            ));
             match storage::migrate_legacy_image_attachments(app.handle()) {
                 Ok(count) if count > 0 => {
                     log::info!("已将 {} 张旧版 Base64 图片迁移为本地附件", count);
@@ -137,6 +142,8 @@ pub fn run() {
             commands::load_messages,
             commands::get_message_count,
             commands::save_message,
+            commands::resize_window_to_page,
+            commands::log_window_frontend_diagnostic,
             commands::save_chat_image,
             commands::delete_chat_image,
             commands::download_generated_image,

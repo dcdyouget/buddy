@@ -8,13 +8,31 @@ use tauri::Emitter;
 /// 但应用本身仍未激活，导致全局快捷键触发后窗口留在其他应用后面。
 #[cfg(target_os = "macos")]
 pub fn bring_to_front(window: &tauri::WebviewWindow) {
+    bring_to_front_impl(window, None);
+}
+
+/// 带快捷键调用链 ID 的前台激活，便于在发布日志中关联定位与实际显示延迟。
+#[cfg(target_os = "macos")]
+pub fn bring_to_front_traced(window: &tauri::WebviewWindow, trace_id: u64) {
+    bring_to_front_impl(window, Some(trace_id));
+}
+
+#[cfg(target_os = "macos")]
+fn bring_to_front_impl(window: &tauri::WebviewWindow, trace_id: Option<u64>) {
     use log::{info, warn};
     use objc2::MainThreadMarker;
     use objc2_app_kit::{NSApplication, NSNormalWindowLevel, NSWindow};
+    use std::time::Instant;
 
-    let _ = window.show();
+    let started_at = Instant::now();
+    let show_started_at = Instant::now();
+    let show_result = window.show();
+    let show_elapsed = show_started_at.elapsed();
     let task_window = window.clone();
+    let queued_at = Instant::now();
     if let Err(error) = window.run_on_main_thread(move || {
+        let main_queue_elapsed = queued_at.elapsed();
+        let activation_started_at = Instant::now();
         if let Ok(ns_window_ptr) = task_window.ns_window() {
             unsafe {
                 let ns_window = &*(ns_window_ptr as *const NSWindow);
@@ -31,13 +49,48 @@ pub fn bring_to_front(window: &tauri::WebviewWindow) {
             }
         }
         let _ = task_window.set_focus();
+        let activation_elapsed = activation_started_at.elapsed();
+        let total_elapsed = started_at.elapsed();
+        let visible = task_window.is_visible().unwrap_or(false);
+        let focused = task_window.is_focused().unwrap_or(false);
         info!(
             "[macos] bring_to_front completed, visible={}, focused={}",
-            task_window.is_visible().unwrap_or(false),
-            task_window.is_focused().unwrap_or(false)
+            visible, focused
         );
+        let timing = format!(
+            "[window-diag] id={} activate-main total={}ms, show={}ms, show_ok={}, main_queue={}ms, native={}ms, visible={visible}, focused={focused}, pos={:?}",
+            trace_id.map_or_else(|| "tray".to_string(), |id| id.to_string()),
+            total_elapsed.as_millis(),
+            show_elapsed.as_millis(),
+            show_result.is_ok(),
+            main_queue_elapsed.as_millis(),
+            activation_elapsed.as_millis(),
+            task_window.outer_position().ok(),
+        );
+        crate::window::log_diagnostic(&timing);
+
+        // set_focus/makeKeyAndOrderFront 可能在当前主线程回调结束后才真正生效。
+        // 延迟采样能区分“调用已返回”和“窗口实际可见/获得焦点”之间的系统排队。
+        let verification_window = task_window.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+            crate::window::log_diagnostic(&format!(
+                "[window-diag] id={} activate-check elapsed={}ms, visible={}, focused={}, pos={:?}, size={:?}",
+                trace_id.map_or_else(|| "tray".to_string(), |id| id.to_string()),
+                started_at.elapsed().as_millis(),
+                verification_window.is_visible().unwrap_or(false),
+                verification_window.is_focused().unwrap_or(false),
+                verification_window.outer_position().ok(),
+                verification_window.outer_size().ok(),
+            ));
+        });
     }) {
         warn!("[macos] failed to schedule window activation: {error}");
+        crate::window::log_diagnostic(&format!(
+            "[window-diag] id={} activate-schedule-failed elapsed={}ms, error={error}",
+            trace_id.map_or_else(|| "tray".to_string(), |id| id.to_string()),
+            started_at.elapsed().as_millis(),
+        ));
     }
 }
 

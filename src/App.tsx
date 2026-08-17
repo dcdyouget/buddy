@@ -83,7 +83,6 @@ function App() {
   const currentPage = useUIStore((state) => state.currentPage);
 
   const openCompactAfterIdle = useCallback(async () => {
-    await resizeWindowToPage('empty');
     if (useUIStore.getState().currentPage !== 'empty') {
       await useUIStore.getState().setPage('empty');
     }

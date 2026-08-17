@@ -150,9 +150,6 @@ function parseThinkFromText(text: string): ContentBlock[] {
   });
 }
 
-const THINK_OPEN_TAG = '<think>';
-const THINK_CLOSE_TAG = '</think>';
-
 /**
  * 从字符串头部取指定数量的 Unicode 字符。
  * 只扫描实际消费的部分，避免每次都复制整个流式缓冲区。
@@ -181,104 +178,26 @@ function takeUnicodePrefix(
   };
 }
 
-/** 判断原始文本当前是否处于尚未闭合的 <think> 标签中。 */
-function hasOpenInlineThink(text: string): boolean {
-  const lastOpen = text.lastIndexOf(THINK_OPEN_TAG);
-  const lastClose = text.lastIndexOf(THINK_CLOSE_TAG);
-  return lastOpen > lastClose;
-}
-
 /**
- * 把一段 text_delta 增量写入 blocks，并在完整收到 <think> / </think> 标签时
- * 立即切换块类型。标签可以横跨多个 SSE chunk 或多个渲染帧。
+ * 把 Rust 已规范化的正文 delta 写入 blocks。
+ * `<think>` 标签已在后端转换成 thinking_start/delta/end，前端不再扫描原文。
  */
-function appendThinkAwareText(
+function appendStreamingText(
   sourceBlocks: ContentBlock[],
   delta: string,
-  continuesInlineThink: boolean,
 ): ContentBlock[] {
   const blocks = [...sourceBlocks];
-  let remaining = delta;
-  let mode: 'text' | 'thinking' = continuesInlineThink ? 'thinking' : 'text';
-
-  // 结构化 reasoning 事件产生的 thinking 块不属于 text_delta。
-  // 正文开始时先将它闭合，再创建普通文本块。
   const initialLast = blocks[blocks.length - 1];
-  if (
-    mode === 'text' &&
-    initialLast?.type === 'thinking' &&
-    initialLast.is_open
-  ) {
+  if (initialLast?.type === 'thinking' && initialLast.is_open) {
     blocks[blocks.length - 1] = { ...initialLast, is_open: false };
   }
 
-  while (remaining.length > 0) {
-    if (mode === 'text') {
-      const last = blocks[blocks.length - 1];
-      const previousText = last?.type === 'text' ? last.content : '';
-      const combined = previousText + remaining;
-      const openIndex = combined.indexOf(THINK_OPEN_TAG);
-
-      if (openIndex === -1) {
-        if (last?.type === 'text') {
-          blocks[blocks.length - 1] = { ...last, content: combined };
-        } else {
-          blocks.push({ type: 'text', content: combined });
-        }
-        break;
-      }
-
-      const beforeThink = combined.slice(0, openIndex);
-      if (last?.type === 'text') {
-        if (beforeThink) {
-          blocks[blocks.length - 1] = { ...last, content: beforeThink };
-        } else {
-          blocks.pop();
-        }
-      } else if (beforeThink) {
-        blocks.push({ type: 'text', content: beforeThink });
-      }
-
-      blocks.push({ type: 'thinking', content: '', is_open: true });
-      remaining = combined.slice(openIndex + THINK_OPEN_TAG.length);
-      mode = 'thinking';
-      continue;
-    }
-
-    const last = blocks[blocks.length - 1];
-    const previousThinking =
-      last?.type === 'thinking' && last.is_open ? last.content : '';
-    const combined = previousThinking + remaining;
-    const closeIndex = combined.indexOf(THINK_CLOSE_TAG);
-
-    if (closeIndex === -1) {
-      if (last?.type === 'thinking' && last.is_open) {
-        blocks[blocks.length - 1] = { ...last, content: combined };
-      } else {
-        blocks.push({ type: 'thinking', content: combined, is_open: true });
-      }
-      break;
-    }
-
-    const thinkingContent = combined.slice(0, closeIndex);
-    if (last?.type === 'thinking' && last.is_open) {
-      blocks[blocks.length - 1] = {
-        ...last,
-        content: thinkingContent,
-        is_open: false,
-      };
-    } else {
-      blocks.push({
-        type: 'thinking',
-        content: thinkingContent,
-        is_open: false,
-      });
-    }
-
-    remaining = combined.slice(closeIndex + THINK_CLOSE_TAG.length);
-    mode = 'text';
+  const last = blocks[blocks.length - 1];
+  if (last?.type === 'text') {
+    blocks[blocks.length - 1] = { ...last, content: last.content + delta };
+  } else {
+    blocks.push({ type: 'text', content: delta });
   }
-
   return blocks;
 }
 
@@ -646,7 +565,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ streamingBlocks: blocks });
   },
 
-  /** 追加文本 delta，自动检测 <think> 标签并分配正确的块类型 */
+  /** 追加 Rust 已规范化的正文 delta */
   handleTextDelta: (_contentIndex: number, delta: string) => {
     const { messages } = get();
 
@@ -658,8 +577,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     lastMsg.content = (lastMsg.content || '') + delta;
     updated[idx] = lastMsg;
 
-    // 从完整 content 中解析 <think> 标签，重建 blocks
-    const newBlocks = parseThinkFromText(lastMsg.content);
+    const newBlocks = appendStreamingText(get().streamingBlocks, delta);
 
     set({
       messages: updated,
@@ -743,6 +661,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
   /** 思考块开始 —— 追加到 blocks 末尾而非按 content_index 覆盖 */
   handleThinkingStart: (_contentIndex: number) => {
     const blocks = [...get().streamingBlocks];
+    // text_start 可能先创建一个空占位块；内联 <think> 位于正文开头时移除它，
+    // 保持与 Rust 最终持久化的 blocks 结构一致。
+    const placeholder = blocks[blocks.length - 1];
+    if (placeholder?.type === 'text' && placeholder.content === '') {
+      blocks.pop();
+    }
     const lastBlock = blocks[blocks.length - 1];
     // 如果最后一个已经是 open 的 thinking block，重置它
     if (lastBlock && lastBlock.type === 'thinking' && lastBlock.is_open) {
@@ -917,17 +841,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const idx = findLastAssistantIdx(updated);
     if (idx < 0) return;
     const lastMsg = { ...updated[idx] } as Message;
-    const continuesInlineThink = hasOpenInlineThink(lastMsg.content || '');
     lastMsg.content = (lastMsg.content || '') + chars;
     updated[idx] = lastMsg;
 
-    // 增量识别内嵌 think 标签；完整收到开始标签后立即创建思考块，
-    // 不再等待 text_end 或 </think> 到达。
-    const blocks = appendThinkAwareText(
-      streamingBlocks,
-      chars,
-      continuesInlineThink,
-    );
+    const blocks = appendStreamingText(streamingBlocks, chars);
 
     set({
       pendingTextBuffer: rest,

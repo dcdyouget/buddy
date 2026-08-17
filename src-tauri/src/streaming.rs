@@ -14,7 +14,9 @@
 // - stream-done        → 流正常完成，携带完整 assistant message
 // - stream-error       → 流出错，携带错误信息
 
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tauri::Emitter;
 
 use crate::models::ImageAttachment;
@@ -92,6 +94,137 @@ impl ContentBlock {
 
         blocks
     }
+}
+
+const THINK_OPEN_TAG: &str = "<think>";
+const THINK_CLOSE_TAG: &str = "</think>";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InlineThinkMode {
+    Text,
+    Thinking,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum InlineThinkOutput {
+    TextDelta(String),
+    ThinkingStart,
+    ThinkingDelta(String),
+    ThinkingEnd(String),
+}
+
+/// 增量解析文本中的 `<think>` 标签。
+///
+/// 仅保留可能属于标签的短后缀，普通文本 delta 会原样立即输出。这样既能处理
+/// 标签横跨多个 SSE chunk 的情况，也不会把整段回复留给 WebView 反复扫描。
+#[derive(Debug)]
+struct InlineThinkParser {
+    mode: InlineThinkMode,
+    pending: String,
+    thinking_content: String,
+}
+
+impl Default for InlineThinkParser {
+    fn default() -> Self {
+        Self {
+            mode: InlineThinkMode::Text,
+            pending: String::new(),
+            thinking_content: String::new(),
+        }
+    }
+}
+
+impl InlineThinkParser {
+    fn push(&mut self, delta: &str) -> Vec<InlineThinkOutput> {
+        self.pending.push_str(delta);
+        let mut output = Vec::new();
+
+        loop {
+            match self.mode {
+                InlineThinkMode::Text => {
+                    if let Some(open_index) = self.pending.find(THINK_OPEN_TAG) {
+                        let text = self.pending[..open_index].to_string();
+                        self.pending.drain(..open_index + THINK_OPEN_TAG.len());
+                        self.push_text(text, &mut output);
+                        self.mode = InlineThinkMode::Thinking;
+                        self.thinking_content.clear();
+                        output.push(InlineThinkOutput::ThinkingStart);
+                        continue;
+                    }
+
+                    let retained = possible_tag_prefix_len(&self.pending, THINK_OPEN_TAG);
+                    let safe_len = self.pending.len() - retained;
+                    if safe_len > 0 {
+                        let suffix = self.pending.split_off(safe_len);
+                        let text = std::mem::replace(&mut self.pending, suffix);
+                        self.push_text(text, &mut output);
+                    }
+                    break;
+                }
+                InlineThinkMode::Thinking => {
+                    if let Some(close_index) = self.pending.find(THINK_CLOSE_TAG) {
+                        let thinking = self.pending[..close_index].to_string();
+                        self.pending.drain(..close_index + THINK_CLOSE_TAG.len());
+                        self.push_thinking(thinking, &mut output);
+                        output.push(InlineThinkOutput::ThinkingEnd(std::mem::take(
+                            &mut self.thinking_content,
+                        )));
+                        self.mode = InlineThinkMode::Text;
+                        continue;
+                    }
+
+                    let retained = possible_tag_prefix_len(&self.pending, THINK_CLOSE_TAG);
+                    let safe_len = self.pending.len() - retained;
+                    if safe_len > 0 {
+                        let suffix = self.pending.split_off(safe_len);
+                        let thinking = std::mem::replace(&mut self.pending, suffix);
+                        self.push_thinking(thinking, &mut output);
+                    }
+                    break;
+                }
+            }
+        }
+
+        output
+    }
+
+    fn finish(mut self) -> Vec<InlineThinkOutput> {
+        let mut output = Vec::new();
+        let pending = std::mem::take(&mut self.pending);
+        match self.mode {
+            InlineThinkMode::Text => self.push_text(pending, &mut output),
+            InlineThinkMode::Thinking => {
+                self.push_thinking(pending, &mut output);
+                output.push(InlineThinkOutput::ThinkingEnd(std::mem::take(
+                    &mut self.thinking_content,
+                )));
+            }
+        }
+        output
+    }
+
+    fn push_text(&mut self, text: String, output: &mut Vec<InlineThinkOutput>) {
+        if text.is_empty() {
+            return;
+        }
+        output.push(InlineThinkOutput::TextDelta(text));
+    }
+
+    fn push_thinking(&mut self, thinking: String, output: &mut Vec<InlineThinkOutput>) {
+        if thinking.is_empty() {
+            return;
+        }
+        self.thinking_content.push_str(&thinking);
+        output.push(InlineThinkOutput::ThinkingDelta(thinking));
+    }
+}
+
+fn possible_tag_prefix_len(value: &str, tag: &str) -> usize {
+    let max_len = value.len().min(tag.len().saturating_sub(1));
+    (1..=max_len)
+        .rev()
+        .find(|&len| value.ends_with(&tag[..len]))
+        .unwrap_or(0)
 }
 
 /// 停止原因
@@ -176,6 +309,12 @@ pub enum StreamEvent {
         content_index: usize,
         /// 增量思考文本
         delta: String,
+    },
+    /// 思考块结束
+    ThinkingEnd {
+        content_index: usize,
+        /// 完整思考内容
+        content: String,
     },
     /// 流式完成
     Done {
@@ -275,6 +414,7 @@ pub enum StreamEvent {
 pub struct StreamEventEmitter {
     app: tauri::AppHandle,
     event_name: String,
+    inline_think_parsers: Mutex<HashMap<usize, InlineThinkParser>>,
 }
 
 impl StreamEventEmitter {
@@ -283,6 +423,7 @@ impl StreamEventEmitter {
         Self {
             app,
             event_name: "stream-event".to_string(),
+            inline_think_parsers: Mutex::new(HashMap::new()),
         }
     }
 
@@ -293,24 +434,33 @@ impl StreamEventEmitter {
 
     /// 便捷方法：发射 Start 事件
     pub fn start(&self) {
+        self.finish_all_inline_thinking();
         self.emit(&StreamEvent::Start);
     }
 
     /// 便捷方法：发射 TextStart 事件
     pub fn text_start(&self, content_index: usize) {
+        self.finish_inline_thinking(content_index);
+        self.inline_think_parsers
+            .lock()
+            .insert(content_index, InlineThinkParser::default());
         self.emit(&StreamEvent::TextStart { content_index });
     }
 
     /// 便捷方法：发射 TextDelta 事件
     pub fn text_delta(&self, content_index: usize, delta: &str) {
-        self.emit(&StreamEvent::TextDelta {
-            content_index,
-            delta: delta.to_string(),
-        });
+        let output = self
+            .inline_think_parsers
+            .lock()
+            .entry(content_index)
+            .or_default()
+            .push(delta);
+        self.emit_inline_think_output(content_index, output);
     }
 
     /// 便捷方法：发射 TextEnd 事件
     pub fn text_end(&self, content_index: usize, content: &str) {
+        self.finish_inline_thinking(content_index);
         self.emit(&StreamEvent::TextEnd {
             content_index,
             content: content.to_string(),
@@ -330,8 +480,17 @@ impl StreamEventEmitter {
         });
     }
 
+    /// 便捷方法：发射 ThinkingEnd 事件
+    pub fn thinking_end(&self, content_index: usize, content: &str) {
+        self.emit(&StreamEvent::ThinkingEnd {
+            content_index,
+            content: content.to_string(),
+        });
+    }
+
     /// 便捷方法：发射 Done 事件
     pub fn done(&self, reason: StopReason, full_text: &str) {
+        self.finish_all_inline_thinking();
         self.emit(&StreamEvent::Done {
             reason,
             full_text: full_text.to_string(),
@@ -340,6 +499,7 @@ impl StreamEventEmitter {
 
     /// 便捷方法：发射 Error 事件
     pub fn error(&self, reason: StopReason, message: &str, partial_text: &str) {
+        self.finish_all_inline_thinking();
         self.emit(&StreamEvent::Error {
             reason,
             message: message.to_string(),
@@ -426,7 +586,55 @@ impl StreamEventEmitter {
     }
 
     pub fn turn_end(&self, tool_calls_pending: usize) {
+        self.finish_all_inline_thinking();
         self.emit(&StreamEvent::TurnEnd { tool_calls_pending });
+    }
+
+    fn take_inline_thinking(&self, content_index: usize) -> Option<Vec<InlineThinkOutput>> {
+        self.inline_think_parsers
+            .lock()
+            .remove(&content_index)
+            .map(InlineThinkParser::finish)
+    }
+
+    fn finish_inline_thinking(&self, content_index: usize) {
+        if let Some(output) = self.take_inline_thinking(content_index) {
+            self.emit_inline_think_output(content_index, output);
+        }
+    }
+
+    fn finish_all_inline_thinking(&self) {
+        let mut parsers = self.inline_think_parsers.lock();
+        let mut pending: Vec<_> = parsers.drain().collect();
+        drop(parsers);
+        pending.sort_by_key(|(content_index, _)| *content_index);
+        for (content_index, parser) in pending {
+            let output = parser.finish();
+            self.emit_inline_think_output(content_index, output);
+        }
+    }
+
+    fn emit_inline_think_output(&self, content_index: usize, output: Vec<InlineThinkOutput>) {
+        for event in output {
+            match event {
+                InlineThinkOutput::TextDelta(delta) => self.emit(&StreamEvent::TextDelta {
+                    content_index,
+                    delta,
+                }),
+                InlineThinkOutput::ThinkingStart => {
+                    self.emit(&StreamEvent::ThinkingStart { content_index });
+                }
+                InlineThinkOutput::ThinkingDelta(delta) => {
+                    self.emit(&StreamEvent::ThinkingDelta {
+                        content_index,
+                        delta,
+                    });
+                }
+                InlineThinkOutput::ThinkingEnd(content) => {
+                    self.thinking_end(content_index, &content);
+                }
+            }
+        }
     }
 }
 
@@ -454,5 +662,101 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"event\":\"done\""));
         assert!(json.contains("\"reason\":\"stop\""));
+    }
+
+    #[test]
+    fn inline_think_parser_forwards_plain_delta_without_batching() {
+        let mut parser = InlineThinkParser::default();
+
+        assert_eq!(
+            parser.push("普通回复"),
+            vec![InlineThinkOutput::TextDelta("普通回复".to_string())]
+        );
+    }
+
+    #[test]
+    fn inline_think_parser_handles_tags_split_across_deltas() {
+        let mut parser = InlineThinkParser::default();
+
+        assert_eq!(
+            parser.push("前缀<thi"),
+            vec![InlineThinkOutput::TextDelta("前缀".to_string())]
+        );
+        assert_eq!(
+            parser.push("nk>思"),
+            vec![
+                InlineThinkOutput::ThinkingStart,
+                InlineThinkOutput::ThinkingDelta("思".to_string()),
+            ]
+        );
+        assert_eq!(
+            parser.push("考</thi"),
+            vec![InlineThinkOutput::ThinkingDelta("考".to_string())]
+        );
+        assert_eq!(
+            parser.push("nk>结论"),
+            vec![
+                InlineThinkOutput::ThinkingEnd("思考".to_string()),
+                InlineThinkOutput::TextDelta("结论".to_string()),
+            ]
+        );
+
+        let output = parser.finish();
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn inline_think_parser_keeps_nested_open_tag_as_thinking_text() {
+        let mut parser = InlineThinkParser::default();
+
+        assert_eq!(
+            parser.push("<think>A<think>B</think>C"),
+            vec![
+                InlineThinkOutput::ThinkingStart,
+                InlineThinkOutput::ThinkingDelta("A<think>B".to_string()),
+                InlineThinkOutput::ThinkingEnd("A<think>B".to_string()),
+                InlineThinkOutput::TextDelta("C".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn inline_think_parser_closes_unfinished_thinking_on_finish() {
+        let mut parser = InlineThinkParser::default();
+        assert_eq!(
+            parser.push("<think>尚未结束"),
+            vec![
+                InlineThinkOutput::ThinkingStart,
+                InlineThinkOutput::ThinkingDelta("尚未结束".to_string()),
+            ]
+        );
+
+        let output = parser.finish();
+        assert_eq!(
+            output,
+            vec![InlineThinkOutput::ThinkingEnd("尚未结束".to_string())]
+        );
+    }
+
+    #[test]
+    fn inline_think_parser_releases_false_tag_prefix() {
+        let mut parser = InlineThinkParser::default();
+        assert!(parser.push("<thi").is_empty());
+        assert_eq!(
+            parser.push("s is text"),
+            vec![InlineThinkOutput::TextDelta("<this is text".to_string())]
+        );
+    }
+
+    #[test]
+    fn thinking_end_event_serializes_for_frontend_protocol() {
+        let event = StreamEvent::ThinkingEnd {
+            content_index: 2,
+            content: "分析完成".to_string(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"event\":\"thinking_end\""));
+        assert!(json.contains("\"content_index\":2"));
+        assert!(json.contains("\"content\":\"分析完成\""));
     }
 }

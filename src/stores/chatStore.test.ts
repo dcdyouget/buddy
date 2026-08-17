@@ -58,41 +58,40 @@ describe('chatStore think 流式解析', () => {
     ).toBe(0);
   });
 
-  it('完整收到开始标签后立即进入思考块，无需等待闭合标签', () => {
+  it('按 Rust 输出的结构化事件增量展示思考内容', () => {
     const store = useChatStore.getState();
 
-    store.feedTextDelta('<thi');
-    store.smoothTextDelta(4);
-    expect(useChatStore.getState().streamingBlocks).toEqual([
-      { type: 'text', content: '<thi' },
-    ]);
-
-    useChatStore.getState().feedTextDelta('nk>');
-    useChatStore.getState().smoothTextDelta(3);
+    store.handleTextStart(0);
+    store.handleThinkingStart(0);
     expect(useChatStore.getState().streamingBlocks).toEqual([
       { type: 'thinking', content: '', is_open: true },
     ]);
 
-    useChatStore.getState().feedTextDelta('正在分析');
-    useChatStore.getState().smoothTextDelta(4);
+    store.handleThinkingDelta(0, '正在');
+    store.handleThinkingDelta(0, '分析');
     expect(useChatStore.getState().streamingBlocks).toEqual([
       { type: 'thinking', content: '正在分析', is_open: true },
     ]);
   });
 
-  it('闭合标签到达后立即切回正文，并且 text_end 不重复思考块', () => {
-    const raw = '<think>分析过程</think>最终答案';
+  it('思考结束后切回正文，并且 text_end 不重复思考块', () => {
     const store = useChatStore.getState();
 
-    store.feedTextDelta(raw);
-    store.smoothTextDelta(raw.length);
+    store.handleTextStart(0);
+    store.handleThinkingStart(0);
+    store.handleThinkingDelta(0, '分析过程');
+    store.handleThinkingEnd(0, '分析过程');
+    store.feedTextDelta('最终答案');
+    store.smoothTextDelta(4);
 
     expect(useChatStore.getState().streamingBlocks).toEqual([
       { type: 'thinking', content: '分析过程', is_open: false },
       { type: 'text', content: '最终答案' },
     ]);
 
-    useChatStore.getState().handleTextEnd(0, raw);
+    useChatStore
+      .getState()
+      .handleTextEnd(0, '<think>分析过程</think>最终答案');
     expect(useChatStore.getState().streamingBlocks).toEqual([
       { type: 'thinking', content: '分析过程', is_open: false },
       { type: 'text', content: '最终答案' },
