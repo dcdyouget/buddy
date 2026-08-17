@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, render, screen } from '@testing-library/react';
+import { invoke } from '@tauri-apps/api/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   WINDOW_WILL_HIDE_EVENT,
@@ -8,7 +9,12 @@ import {
 } from '@/utils/windowEvents';
 import { WindowEntrance } from './WindowEntrance';
 
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn().mockResolvedValue(undefined),
+}));
+
 beforeEach(() => {
+  vi.mocked(invoke).mockClear();
   vi.useFakeTimers();
   vi.stubGlobal(
     'requestAnimationFrame',
@@ -70,6 +76,20 @@ describe('WindowEntrance', () => {
     expect(centerRoot?.dataset.glowVariant).toBe('center-out');
   });
 
+  it('将边框炫光与真实内容拆成独立图层', () => {
+    const { container } = render(
+      <WindowEntrance>
+        <button type="button">炫光层级</button>
+      </WindowEntrance>,
+    );
+    const root = container.querySelector('.window-entrance');
+    const content = root?.querySelector('.window-entrance-content');
+    const glow = root?.querySelector('.window-entrance-glow');
+
+    expect(glow?.parentElement).toBe(root);
+    expect(content?.nextElementSibling).toBe(glow);
+  });
+
   it('每次窗口显示都重新播放形变动画', () => {
     render(
       <WindowEntrance>
@@ -81,10 +101,10 @@ describe('WindowEntrance', () => {
 
     expect(root?.dataset.entrancePhase).toBe('entering');
     expect(root?.style.getPropertyValue('--window-entrance-scale-x')).toBe(
-      '0.78',
+      '0.97',
     );
     expect(root?.style.getPropertyValue('--window-entrance-scale-y')).toBe(
-      '0.58',
+      '0.96',
     );
     expect(root?.style.getPropertyValue('--window-entrance-radius')).toBe(
       'var(--radius-xl)',
@@ -104,6 +124,58 @@ describe('WindowEntrance', () => {
       window.dispatchEvent(new Event(WINDOW_WILL_SHOW_EVENT));
     });
     expect(root?.dataset.entrancePhase).toBe('entering');
+  });
+
+  it('已预置隐藏帧时不等待 RAF 就进入动画', () => {
+    render(
+      <WindowEntrance>
+        <button type="button">立即呼出</button>
+      </WindowEntrance>,
+    );
+    const root = screen.getByRole('button', { name: '立即呼出' })
+      .parentElement?.parentElement;
+
+    act(() => {
+      vi.advanceTimersByTime(600);
+      window.dispatchEvent(new Event(WINDOW_WILL_HIDE_EVENT));
+    });
+    expect(root?.dataset.entrancePhase).toBe('hidden');
+
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 9));
+    act(() => {
+      window.dispatchEvent(new Event(WINDOW_WILL_SHOW_EVENT));
+    });
+
+    expect(root?.dataset.entrancePhase).toBe('entering');
+  });
+
+  it('将事件接收和首个 RAF 写入同一个诊断 trace', () => {
+    render(
+      <WindowEntrance>
+        <button type="button">诊断内容</button>
+      </WindowEntrance>,
+    );
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(WINDOW_WILL_SHOW_EVENT, {
+          detail: {
+            open_compact: false,
+            trace_id: 42,
+            emitted_at_ms: 1_700_000_000_000,
+          },
+        }),
+      );
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      'log_window_frontend_diagnostic',
+      expect.objectContaining({ traceId: 42, stage: 'event-received' }),
+    );
+    expect(invoke).toHaveBeenCalledWith(
+      'log_window_frontend_diagnostic',
+      expect.objectContaining({ traceId: 42, stage: 'raf-restart' }),
+    );
   });
 
   it('闲置呼出时先恢复气泡页，再播放形变动画', async () => {

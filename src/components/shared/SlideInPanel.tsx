@@ -1,4 +1,9 @@
-import { motion, AnimatePresence, useIsPresent } from 'framer-motion';
+import {
+  motion,
+  AnimatePresence,
+  useIsPresent,
+  useReducedMotion,
+} from 'framer-motion';
 
 /** SlideInPanel 侧滑面板组件的 Props */
 interface SlideInPanelProps {
@@ -18,14 +23,18 @@ interface SlidingLayerProps {
 /** 退出动画期间立即释放鼠标事件，避免透明覆层吞掉下一次点击。 */
 function SlidingLayer({ children, from }: SlidingLayerProps) {
   const isPresent = useIsPresent();
+  const shouldReduceMotion = useReducedMotion();
+  const hiddenState = shouldReduceMotion
+    ? { opacity: 0 }
+    : { x: from === 'right' ? '100%' : '-100%', opacity: 0 };
 
   return (
     <motion.div
-      initial={{ x: from === 'right' ? '100%' : '-100%', opacity: 0 }}
+      initial={hiddenState}
       animate={{ x: 0, opacity: 1 }}
-      exit={{ x: from === 'right' ? '100%' : '-100%', opacity: 0 }}
+      exit={hiddenState}
       transition={{
-        duration: 0.2,
+        duration: shouldReduceMotion ? 0 : 0.2,
         ease: [0.2, 0.0, 0, 1],
       }}
       style={{

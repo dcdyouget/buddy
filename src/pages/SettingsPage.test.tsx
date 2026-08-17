@@ -5,12 +5,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { SettingsPage } from './SettingsPage';
 
-vi.mock('framer-motion', () => ({
-  motion: {
-    div: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  },
-}));
-
 vi.mock('@/hooks/useDragHandle', () => ({
   useDragHandle: () => ({ current: null }),
 }));

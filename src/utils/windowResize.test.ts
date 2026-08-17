@@ -1,30 +1,41 @@
-import { describe, expect, it } from 'vitest';
+import { invoke, isTauri } from '@tauri-apps/api/core';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { calculateBottomAnchoredTargetGeometry } from './windowResize';
+import { resizeWindowForPage, resizeWindowToPage } from './windowResize';
 
-describe('calculateBottomAnchoredTargetGeometry', () => {
-  it('keeps the compact window bottom and horizontal centre while expanding', () => {
-    const result = calculateBottomAnchoredTargetGeometry(
-      { x: 500, y: 400 },
-      { width: 560, height: 60 },
-      { width: 750, height: 500 },
-    );
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(),
+  isTauri: vi.fn(),
+}));
 
-    expect(result).toEqual({
-      position: { x: 405, y: -40 },
-      size: { width: 750, height: 500 },
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(isTauri).mockReturnValue(true);
+  vi.mocked(invoke).mockResolvedValue(undefined);
+});
+
+describe('windowResize', () => {
+  it('把页面尺寸计算收敛为一次 Rust IPC', async () => {
+    await resizeWindowToPage('conversation');
+
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith('resize_window_to_page', {
+      page: 'conversation',
     });
   });
 
-  it('keeps the expanded window inside the monitor work area', () => {
-    const result = calculateBottomAnchoredTargetGeometry(
-      { x: 20, y: 30 },
-      { width: 460, height: 78 },
-      { width: 750, height: 500 },
-      { x: 0, y: 25, width: 1440, height: 875 },
-      12,
-    );
+  it('只有离开紧凑页面时才自动放大窗口', async () => {
+    await resizeWindowForPage('empty', 'conversation');
+    await resizeWindowForPage('conversation', 'streaming');
 
-    expect(result.position).toEqual({ x: 12, y: 37 });
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('浏览器预览不调用原生窗口命令', async () => {
+    vi.mocked(isTauri).mockReturnValue(false);
+
+    await resizeWindowToPage('conversation');
+
+    expect(invoke).not.toHaveBeenCalled();
   });
 });

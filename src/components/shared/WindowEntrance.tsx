@@ -3,9 +3,11 @@ import {
   useEffect,
   useRef,
   useState,
+  type AnimationEvent,
   type CSSProperties,
   type ReactNode,
 } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import {
   WINDOW_WILL_HIDE_EVENT,
   WINDOW_WILL_SHOW_EVENT,
@@ -25,7 +27,23 @@ interface WindowEntranceProps {
   onCompactRequested?: () => void | Promise<void>;
 }
 
-const ENTRANCE_SETTLE_DELAY = 400;
+type EntranceDiagnosticStage =
+  | 'event-received'
+  | 'raf-restart'
+  | 'animation-start'
+  | 'animation-end'
+  | 'glow-start'
+  | 'glow-end'
+  | 'compact-ready';
+
+interface EntranceTrace {
+  traceId: number;
+  emittedAtMs: number;
+  receivedAt: number;
+  loggedStages: Set<EntranceDiagnosticStage>;
+}
+
+const ENTRANCE_SETTLE_DELAY = 340;
 const ENTRANCE_GLOW_VARIANTS: readonly EntranceGlowVariant[] = [
   'left-to-right',
   'right-to-left',
@@ -70,40 +88,93 @@ export function WindowEntrance({
   const [glowVariant, setGlowVariant] = useState<EntranceGlowVariant>(() =>
     pickEntranceGlowVariant(),
   );
+  const phaseRef = useRef<EntrancePhase>(phase);
   const restartFrameRef = useRef(0);
   const showRequestIdRef = useRef(0);
+  const activeTraceRef = useRef<EntranceTrace | null>(null);
+
+  const logEntranceStage = useCallback(
+    (trace: EntranceTrace | null, stage: EntranceDiagnosticStage) => {
+      if (!trace || trace.loggedStages.has(stage)) return;
+      trace.loggedStages.add(stage);
+      void invoke('log_window_frontend_diagnostic', {
+        traceId: trace.traceId,
+        stage,
+        emittedAtMs: trace.emittedAtMs,
+        phaseElapsedMs: performance.now() - trace.receivedAt,
+      }).catch(() => {
+        // 诊断日志不能影响窗口呼出主链路。
+      });
+    },
+    [],
+  );
+
+  const setEntrancePhase = useCallback((nextPhase: EntrancePhase) => {
+    phaseRef.current = nextPhase;
+    setPhase(nextPhase);
+  }, []);
 
   const resetEntrance = useCallback(() => {
+    activeTraceRef.current = null;
     showRequestIdRef.current += 1;
     window.cancelAnimationFrame(restartFrameRef.current);
     restartFrameRef.current = 0;
-    setPhase(prefersReducedMotion() ? 'settled' : 'hidden');
-  }, []);
+    setEntrancePhase(prefersReducedMotion() ? 'settled' : 'hidden');
+  }, [setEntrancePhase]);
 
   const playEntrance = useCallback(() => {
     if (prefersReducedMotion()) {
-      setPhase('settled');
+      setEntrancePhase('settled');
       return;
     }
 
     window.cancelAnimationFrame(restartFrameRef.current);
     setGlowVariant((previous) => pickEntranceGlowVariant(previous));
-    setPhase('hidden');
+
+    // hide 事件已把 WebView 预置在起始帧时，直接进入动画，
+    // 避免发布版在原生窗口显示后再空等一帧。
+    if (phaseRef.current === 'hidden') {
+      setEntrancePhase('entering');
+      restartFrameRef.current = window.requestAnimationFrame(() => {
+        restartFrameRef.current = 0;
+        logEntranceStage(activeTraceRef.current, 'raf-restart');
+      });
+      return;
+    }
+
+    // 窗口只是失焦、没有隐藏时，仍需先落到起始态才能重播动画。
+    setEntrancePhase('hidden');
     restartFrameRef.current = window.requestAnimationFrame(() => {
       restartFrameRef.current = 0;
-      setPhase('entering');
+      logEntranceStage(activeTraceRef.current, 'raf-restart');
+      setEntrancePhase('entering');
     });
-  }, []);
+  }, [logEntranceStage, setEntrancePhase]);
 
   const handleShowRequest = useCallback(
-    (openCompact: boolean) => {
+    (payload?: WindowWillShowPayload) => {
+      const trace =
+        typeof payload?.trace_id === 'number' &&
+        typeof payload.emitted_at_ms === 'number'
+          ? {
+              traceId: payload.trace_id,
+              emittedAtMs: payload.emitted_at_ms,
+              receivedAt: performance.now(),
+              loggedStages: new Set<EntranceDiagnosticStage>(),
+            }
+          : null;
+      logEntranceStage(trace, 'event-received');
+
+      const openCompact = payload?.open_compact === true;
       if (!openCompact || !onCompactRequested) {
+        activeTraceRef.current = trace;
         showRequestIdRef.current += 1;
         playEntrance();
         return;
       }
 
       resetEntrance();
+      activeTraceRef.current = trace;
       const requestId = ++showRequestIdRef.current;
       void Promise.resolve(onCompactRequested())
         .catch((error) => {
@@ -111,26 +182,75 @@ export function WindowEntrance({
         })
         .finally(() => {
           if (showRequestIdRef.current === requestId) {
+            logEntranceStage(trace, 'compact-ready');
             playEntrance();
           }
         });
     },
-    [onCompactRequested, playEntrance, resetEntrance],
+    [logEntranceStage, onCompactRequested, playEntrance, resetEntrance],
+  );
+
+  const handleEntranceAnimationStart = useCallback(
+    (event: AnimationEvent<HTMLDivElement>) => {
+      if (
+        event.target === event.currentTarget &&
+        event.animationName === 'window-content-reveal'
+      ) {
+        logEntranceStage(activeTraceRef.current, 'animation-start');
+      }
+    },
+    [logEntranceStage],
+  );
+
+  const handleEntranceAnimationEnd = useCallback(
+    (event: AnimationEvent<HTMLDivElement>) => {
+      if (
+        event.target === event.currentTarget &&
+        event.animationName === 'window-content-reveal'
+      ) {
+        logEntranceStage(activeTraceRef.current, 'animation-end');
+      }
+    },
+    [logEntranceStage],
+  );
+
+  const handleGlowAnimationStart = useCallback(
+    (event: AnimationEvent<HTMLSpanElement>) => {
+      if (
+        event.target === event.currentTarget &&
+        event.animationName === 'window-border-glow-flow'
+      ) {
+        logEntranceStage(activeTraceRef.current, 'glow-start');
+      }
+    },
+    [logEntranceStage],
+  );
+
+  const handleGlowAnimationEnd = useCallback(
+    (event: AnimationEvent<HTMLSpanElement>) => {
+      if (
+        event.target === event.currentTarget &&
+        event.animationName === 'window-border-glow-flow'
+      ) {
+        logEntranceStage(activeTraceRef.current, 'glow-end');
+      }
+    },
+    [logEntranceStage],
   );
 
   useEffect(() => {
     if (phase !== 'entering') return;
     const timer = window.setTimeout(
-      () => setPhase('settled'),
+      () => setEntrancePhase('settled'),
       ENTRANCE_SETTLE_DELAY,
     );
     return () => window.clearTimeout(timer);
-  }, [phase]);
+  }, [phase, setEntrancePhase]);
 
   useEffect(() => {
     const handleDomShow = (event: Event) => {
       const payload = (event as CustomEvent<WindowWillShowPayload>).detail;
-      handleShowRequest(payload?.open_compact === true);
+      handleShowRequest(payload);
     };
     window.addEventListener(WINDOW_WILL_SHOW_EVENT, handleDomShow);
     window.addEventListener(WINDOW_WILL_HIDE_EVENT, resetEntrance);
@@ -149,7 +269,7 @@ export function WindowEntrance({
       .then(async ({ listen }) => {
         const showUnlisten = await listen<WindowWillShowPayload>(
           WINDOW_WILL_SHOW_EVENT,
-          (event) => handleShowRequest(event.payload?.open_compact === true),
+          (event) => handleShowRequest(event.payload),
         );
         const hideUnlisten = await listen(WINDOW_WILL_HIDE_EVENT, resetEntrance);
         if (disposed) {
@@ -176,8 +296,8 @@ export function WindowEntrance({
     typeof window !== 'undefined' &&
     window.innerHeight > window.innerWidth * 0.25;
   const entranceStyle = {
-    '--window-entrance-scale-x': isExpanded ? 0.78 : 0.66,
-    '--window-entrance-scale-y': isExpanded ? 0.58 : 0.8,
+    '--window-entrance-scale-x': isExpanded ? 0.97 : 0.94,
+    '--window-entrance-scale-y': isExpanded ? 0.96 : 0.88,
     '--window-entrance-radius': isExpanded
       ? 'var(--radius-xl)'
       : 'var(--radius-full)',
@@ -193,10 +313,20 @@ export function WindowEntrance({
       <div
         className="window-entrance-surface surface-glass buddy-shell"
         aria-hidden="true"
+      />
+      <div
+        className="window-entrance-content"
+        onAnimationStart={handleEntranceAnimationStart}
+        onAnimationEnd={handleEntranceAnimationEnd}
       >
-        <span className="window-entrance-glow" />
+        {children}
       </div>
-      <div className="window-entrance-content">{children}</div>
+      <span
+        className="window-entrance-glow"
+        aria-hidden="true"
+        onAnimationStart={handleGlowAnimationStart}
+        onAnimationEnd={handleGlowAnimationEnd}
+      />
     </div>
   );
 }

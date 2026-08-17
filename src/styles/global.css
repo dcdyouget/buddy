@@ -380,15 +380,17 @@ html[data-platform="windows"] #root {
 
 /* ── App shell ── */
 .window-entrance {
-  --window-entrance-duration: var(--duration-slow);
-  --window-entrance-scale-x: 0.66;
-  --window-entrance-scale-y: 0.8;
+  --window-entrance-duration: var(--duration-normal);
+  --window-glow-duration: var(--duration-slow);
+  --window-entrance-scale-x: 0.94;
+  --window-entrance-scale-y: 0.88;
   --window-entrance-radius: var(--radius-full);
   --window-glow-angle: 104deg;
-  --window-glow-start-transform: translate3d(-58%, 0, 0) skewX(-14deg);
-  --window-glow-end-transform: translate3d(58%, 0, 0) skewX(-14deg);
+  --window-glow-start-position: 0% 50%;
+  --window-glow-end-position: 100% 50%;
+  --window-aura-start-transform: translate3d(-42%, -8%, 0) scale(0.72);
+  --window-aura-end-transform: translate3d(42%, 8%, 0) scale(1.06);
   --window-glow-orbit-start: -35deg;
-  --window-glow-orbit-end: 215deg;
   position: relative;
   width: 100vw;
   height: 100vh;
@@ -409,11 +411,15 @@ html[data-platform="windows"] #root {
     scaleY(var(--window-entrance-scale-y));
   transform-origin: center;
   box-shadow: var(--shadow-floating-md);
-  will-change: transform, opacity, border-radius;
 }
 
 .window-entrance-surface.buddy-shell {
-  background: color-mix(in srgb, var(--buddy-primary) 16%, var(--bg-surface));
+  background: color-mix(in srgb, var(--buddy-primary) 4%, var(--bg-surface));
+}
+
+/* 隐藏前预置一层很淡的外壳，避免原生 show 后出现纯透明空帧。 */
+.window-entrance.is-hidden .window-entrance-surface {
+  opacity: 0.18;
 }
 
 .window-entrance-surface::before {
@@ -431,7 +437,8 @@ html[data-platform="windows"] #root {
     color-mix(in srgb, var(--buddy-primary) 58%, transparent) 78%,
     transparent 90% 100%
   );
-  filter: blur(calc(var(--space-1) / 2));
+  opacity: 0.28;
+  filter: blur(var(--space-2));
   transform: rotate(var(--window-glow-orbit-start)) scale(1.16);
 }
 
@@ -444,99 +451,145 @@ html[data-platform="windows"] #root {
   background:
     linear-gradient(
       145deg,
-      color-mix(in srgb, var(--buddy-primary) 18%, transparent),
+      color-mix(in srgb, var(--buddy-primary) 7%, transparent),
       transparent 46%
     ),
-    color-mix(in srgb, var(--buddy-primary) 7%, var(--bg-surface));
+    color-mix(in srgb, var(--buddy-primary) 3%, var(--bg-surface));
 }
 
 .window-entrance-glow {
   position: absolute;
-  inset: -24% -42%;
-  z-index: 2;
-  border-radius: var(--radius-full);
+  inset: 0;
+  z-index: 1;
+  border-radius: var(--window-entrance-radius);
   opacity: 0;
+  overflow: hidden;
+  background: transparent;
+  box-shadow: inset 0 0 var(--space-3)
+    color-mix(in srgb, var(--composer-glow) 18%, transparent);
+  transform: scaleX(var(--window-entrance-scale-x))
+    scaleY(var(--window-entrance-scale-y));
+  transform-origin: center;
+  pointer-events: none;
+}
+
+/* 柔光只负责轻微提亮外壳，真实内容始终位于它的上层。 */
+.window-entrance-glow::before {
+  content: '';
+  position: absolute;
+  inset: -32%;
+  border-radius: var(--radius-full);
+  background: radial-gradient(
+    ellipse at center,
+    color-mix(in srgb, var(--composer-glow) 34%, var(--neutral-0)) 0,
+    color-mix(in srgb, var(--composer-glow) 28%, transparent) 28%,
+    color-mix(in srgb, var(--buddy-primary) 14%, transparent) 52%,
+    transparent 74%
+  );
+  filter: blur(var(--space-3));
+  opacity: 0;
+  transform: var(--window-aura-start-transform);
+}
+
+/* 与对话输入框一致的流动渐变边框。 */
+.window-entrance-glow::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  padding: calc(var(--space-1) / 4);
+  border-radius: inherit;
   background: linear-gradient(
     var(--window-glow-angle),
-    transparent 28%,
-    color-mix(in srgb, var(--buddy-primary) 22%, transparent) 40%,
-    color-mix(in srgb, var(--buddy-primary) 78%, transparent) 50%,
-    color-mix(in srgb, var(--buddy-primary) 20%, transparent) 60%,
-    transparent 72%
+    transparent,
+    color-mix(in srgb, var(--composer-glow) 64%, transparent),
+    color-mix(in srgb, var(--buddy-primary) 70%, var(--neutral-0)),
+    color-mix(in srgb, var(--composer-glow) 64%, transparent),
+    transparent
   );
-  transform: var(--window-glow-start-transform);
-  will-change: transform, opacity;
+  background-size: 280% 280%;
+  background-position: var(--window-glow-start-position);
+  -webkit-mask:
+    linear-gradient(var(--neutral-1000) 0 0) content-box,
+    linear-gradient(var(--neutral-1000) 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(var(--neutral-1000) 0 0) content-box,
+    linear-gradient(var(--neutral-1000) 0 0);
+  mask-composite: exclude;
 }
 
 .window-entrance.glow-right-to-left {
   --window-glow-angle: 76deg;
-  --window-glow-start-transform: translate3d(58%, 0, 0) skewX(14deg);
-  --window-glow-end-transform: translate3d(-58%, 0, 0) skewX(14deg);
+  --window-glow-start-position: 100% 50%;
+  --window-glow-end-position: 0% 50%;
+  --window-aura-start-transform: translate3d(42%, 8%, 0) scale(0.72);
+  --window-aura-end-transform: translate3d(-42%, -8%, 0) scale(1.06);
   --window-glow-orbit-start: 35deg;
-  --window-glow-orbit-end: -215deg;
 }
 
 .window-entrance.glow-top-right-to-bottom-left {
   --window-glow-angle: 42deg;
-  --window-glow-start-transform: translate3d(48%, -34%, 0) rotate(-8deg);
-  --window-glow-end-transform: translate3d(-48%, 34%, 0) rotate(-8deg);
+  --window-glow-start-position: 100% 0%;
+  --window-glow-end-position: 0% 100%;
+  --window-aura-start-transform: translate3d(34%, -36%, 0) scale(0.68);
+  --window-aura-end-transform: translate3d(-34%, 36%, 0) scale(1.08);
   --window-glow-orbit-start: 65deg;
-  --window-glow-orbit-end: -205deg;
 }
 
 .window-entrance.glow-top-left-to-bottom-right {
   --window-glow-angle: 138deg;
-  --window-glow-start-transform: translate3d(-48%, -34%, 0) rotate(8deg);
-  --window-glow-end-transform: translate3d(48%, 34%, 0) rotate(8deg);
+  --window-glow-start-position: 0% 0%;
+  --window-glow-end-position: 100% 100%;
+  --window-aura-start-transform: translate3d(-34%, -36%, 0) scale(0.68);
+  --window-aura-end-transform: translate3d(34%, 36%, 0) scale(1.08);
   --window-glow-orbit-start: -65deg;
-  --window-glow-orbit-end: 205deg;
 }
 
 .window-entrance.glow-center-out {
   --window-glow-orbit-start: -18deg;
-  --window-glow-orbit-end: 162deg;
 }
 
 .window-entrance.glow-center-out .window-entrance-glow {
-  inset: -18%;
-  background: radial-gradient(
-    ellipse at center,
-    color-mix(in srgb, var(--buddy-primary) 78%, transparent) 0,
-    color-mix(in srgb, var(--buddy-primary) 30%, transparent) 28%,
-    transparent 68%
-  );
-  transform: scale3d(0.14, 0.38, 1);
+  --window-aura-start-transform: scale3d(0.14, 0.38, 1);
+  --window-aura-end-transform: scale3d(1.18, 1.08, 1);
 }
 
 .window-entrance-content {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   width: 100%;
   height: 100%;
   opacity: 0;
-  transform: scale(0.988);
+  transform: scale(0.985);
   transform-origin: center;
-  will-change: transform, opacity;
 }
 
 .window-entrance.is-entering .window-entrance-surface {
   animation: window-surface-morph var(--window-entrance-duration) var(--ease-standard) both;
-}
-
-.window-entrance.is-entering .window-entrance-surface::before {
-  animation: window-glow-orbit var(--window-entrance-duration) linear both;
+  will-change: transform, opacity, border-radius;
 }
 
 .window-entrance.is-entering .window-entrance-glow {
-  animation: window-glow-sweep var(--window-entrance-duration) var(--ease-standard) both;
+  animation: window-border-glow-flow var(--window-glow-duration) var(--ease-standard) both;
+  will-change: transform, opacity, border-radius;
 }
 
-.window-entrance.is-entering.glow-center-out .window-entrance-glow {
-  animation-name: window-glow-center-bloom;
+.window-entrance.is-entering .window-entrance-glow::before {
+  animation: window-glow-aura-sweep var(--window-glow-duration) var(--ease-standard) both;
+  will-change: transform, opacity;
+}
+
+.window-entrance.is-entering .window-entrance-glow::after {
+  animation: window-glow-edge-flow var(--window-glow-duration) linear both;
+}
+
+.window-entrance.is-entering.glow-center-out .window-entrance-glow::before {
+  animation-name: window-glow-aura-bloom;
 }
 
 .window-entrance.is-entering .window-entrance-content {
   animation: window-content-reveal var(--window-entrance-duration) var(--ease-standard) both;
+  will-change: transform, opacity;
 }
 
 .window-entrance.is-settled .window-entrance-content {
@@ -546,20 +599,20 @@ html[data-platform="windows"] #root {
 
 @keyframes window-surface-morph {
   0% {
-    opacity: 0;
+    opacity: 0.18;
     border-radius: var(--window-entrance-radius);
     transform: scaleX(var(--window-entrance-scale-x))
       scaleY(var(--window-entrance-scale-y));
   }
 
-  14% {
-    opacity: 1;
+  48% {
+    opacity: 0.58;
   }
 
-  72% {
-    opacity: 1;
+  76% {
+    opacity: 0.34;
     border-radius: var(--radius-xl);
-    transform: scaleX(1.022) scaleY(1.03);
+    transform: scaleX(1.006) scaleY(1.008);
   }
 
   100% {
@@ -570,15 +623,14 @@ html[data-platform="windows"] #root {
 }
 
 @keyframes window-content-reveal {
-  0%,
-  22% {
+  0% {
     opacity: 0;
-    transform: scale(0.988);
+    transform: scale(0.985);
   }
 
-  74% {
+  58% {
     opacity: 1;
-    transform: scale(1.008);
+    transform: scale(1);
   }
 
   100% {
@@ -587,53 +639,78 @@ html[data-platform="windows"] #root {
   }
 }
 
-@keyframes window-glow-orbit {
-  from {
-    transform: rotate(var(--window-glow-orbit-start)) scale(1.16);
-  }
-
-  to {
-    transform: rotate(var(--window-glow-orbit-end)) scale(1.16);
-  }
-}
-
-@keyframes window-glow-sweep {
+@keyframes window-border-glow-flow {
   0% {
     opacity: 0;
-    transform: var(--window-glow-start-transform);
+    border-radius: var(--window-entrance-radius);
+    transform: scaleX(var(--window-entrance-scale-x))
+      scaleY(var(--window-entrance-scale-y));
   }
 
-  18% {
-    opacity: 0.9;
-  }
-
-  78% {
+  28% {
     opacity: 0.68;
   }
 
+  68% {
+    opacity: 0.42;
+    border-radius: var(--radius-xl);
+    transform: scaleX(1.008) scaleY(1.01);
+  }
+
   100% {
     opacity: 0;
-    transform: var(--window-glow-end-transform);
+    border-radius: var(--radius-xl);
+    transform: scale(1);
   }
 }
 
-@keyframes window-glow-center-bloom {
+@keyframes window-glow-edge-flow {
+  from {
+    background-position: var(--window-glow-start-position);
+  }
+
+  to {
+    background-position: var(--window-glow-end-position);
+  }
+}
+
+@keyframes window-glow-aura-sweep {
   0% {
     opacity: 0;
-    transform: scale3d(0.14, 0.38, 1);
+    transform: var(--window-aura-start-transform);
   }
 
-  24% {
-    opacity: 0.9;
+  32% {
+    opacity: 0.22;
   }
 
-  76% {
-    opacity: 0.62;
+  68% {
+    opacity: 0.12;
   }
 
   100% {
     opacity: 0;
-    transform: scale3d(1.18, 1.08, 1);
+    transform: var(--window-aura-end-transform);
+  }
+}
+
+@keyframes window-glow-aura-bloom {
+  0% {
+    opacity: 0;
+    transform: var(--window-aura-start-transform);
+  }
+
+  34% {
+    opacity: 0.2;
+  }
+
+  70% {
+    opacity: 0.1;
+  }
+
+  100% {
+    opacity: 0;
+    transform: var(--window-aura-end-transform);
   }
 }
 
@@ -648,37 +725,31 @@ html[data-platform="windows"] #root {
 
 .conversation-shell {
   transform-origin: bottom center;
-  will-change: transform;
-  animation: conversation-shell-expand 240ms var(--ease-standard);
+  animation: conversation-shell-enter var(--duration-normal) var(--ease-standard);
 }
 
-@keyframes conversation-shell-expand {
+@keyframes conversation-shell-enter {
   from {
-    transform: scaleX(0.7467) scaleY(0.12);
+    opacity: 0;
+    transform: translateY(var(--space-2)) scale(0.99);
   }
 
   to {
+    opacity: 1;
     transform: scale(1);
   }
 }
 
 .conversation-shell .input-dock {
-  opacity: 0;
-  animation: conversation-composer-reveal 100ms var(--ease-standard) 160ms forwards;
-}
-
-@keyframes conversation-composer-reveal {
-  from {
-    opacity: 0;
-  }
-
-  to {
-    opacity: 1;
-  }
+  opacity: 1;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .window-entrance-surface {
+    display: none;
+  }
+
+  .window-entrance-glow {
     display: none;
   }
 

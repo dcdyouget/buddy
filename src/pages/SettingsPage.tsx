@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
-import { motion } from 'framer-motion';
 import { useShallow } from 'zustand/react/shallow';
 import { useConfigStore } from '@/stores/configStore';
 import { GlassPanel } from '@/components/shared/GlassPanel';
@@ -50,11 +49,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
   if (!config) return null;
 
   return (
-    <motion.div
-      initial={{ x: '100%' }}
-      animate={{ x: 0 }}
-      exit={{ x: '100%' }}
-      transition={{ type: 'tween', duration: 0.25, ease: [0.2, 0, 0, 1] }}
+    <div
       ref={dragRef}
       style={{
         position: 'absolute',
@@ -148,6 +143,6 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
           onAdded={onBack}
         />
       </SlideInPanel>
-    </motion.div>
+    </div>
   );
 }

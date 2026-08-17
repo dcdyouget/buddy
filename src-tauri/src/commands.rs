@@ -1394,11 +1394,64 @@ pub async fn save_message(app: tauri::AppHandle, message: Message) -> Result<(),
     storage::append_message(&app, &message).map_err(|e| format!("保存消息失败: {}", e))
 }
 
+/// 在后端完成窗口尺寸、底边锚点和工作区裁剪计算，前端只需一次 IPC。
+#[tauri::command]
+pub fn resize_window_to_page(window: tauri::WebviewWindow, page: String) -> Result<(), String> {
+    crate::window::positioning::resize_window_to_page(&window, &page)
+}
+
+fn window_frontend_diagnostic_stage(stage: &str) -> Option<&'static str> {
+    match stage {
+        "event-received" => Some("event-received"),
+        "raf-restart" => Some("raf-restart"),
+        "animation-start" => Some("animation-start"),
+        "animation-end" => Some("animation-end"),
+        "glow-start" => Some("glow-start"),
+        "glow-end" => Some("glow-end"),
+        "compact-ready" => Some("compact-ready"),
+        _ => None,
+    }
+}
+
+/// 将 WebView 呼出动画的关键时间点写入发布日志，与 Rust trace ID 对齐。
+#[tauri::command]
+pub fn log_window_frontend_diagnostic(
+    trace_id: u64,
+    stage: String,
+    emitted_at_ms: i64,
+    phase_elapsed_ms: f64,
+) {
+    let Some(stage) = window_frontend_diagnostic_stage(&stage) else {
+        return;
+    };
+    if !phase_elapsed_ms.is_finite() {
+        return;
+    }
+
+    let event_age_ms = chrono::Utc::now()
+        .timestamp_millis()
+        .saturating_sub(emitted_at_ms)
+        .clamp(0, 60_000);
+    let phase_elapsed_ms = phase_elapsed_ms.clamp(0.0, 60_000.0).round() as u64;
+    crate::window::log_diagnostic(&format!(
+        "[window-diag] id={trace_id} frontend stage={stage}, event_age={event_age_ms}ms, phase_elapsed={phase_elapsed_ms}ms"
+    ));
+}
+
 // ── 测试 ──
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frontend_diagnostic_accepts_only_known_stages() {
+        assert_eq!(
+            window_frontend_diagnostic_stage("animation-start"),
+            Some("animation-start")
+        );
+        assert_eq!(window_frontend_diagnostic_stage("forged\nline"), None);
+    }
 
     fn make_msg(content: &str) -> Message {
         Message {

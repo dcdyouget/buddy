@@ -3,9 +3,12 @@
 // 提供 HotkeyState 状态管理以及 register / unregister / update_hotkey 三个核心函数。
 // 当用户修改热键配置后，update_hotkey 负责先注销旧热键再注册新热键，保证始终只有一个有效热键。
 
-use log;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+
+static HOTKEY_TRACE_ID: AtomicU64 = AtomicU64::new(1);
 
 /// 当前注册的全局热键状态
 ///
@@ -18,7 +21,7 @@ pub struct HotkeyState {
 /// 注册全局热键并绑定窗口 toggle 行为
 ///
 /// 三态切换（参考 Bob 等 macOS 工具型应用的标准行为）：
-/// - **隐藏状态** → 获取选中文本、定位到鼠标所在屏幕、显示、聚焦
+/// - **隐藏状态** → 获取选中文本、定位到焦点窗口所在屏幕、显示、聚焦
 /// - **显示但失焦**（用户点到了别的窗口，窗口在 z 序后面）→ 定位并唤回到最前
 /// - **显示且已聚焦**（在最前）→ 隐藏
 ///
@@ -31,52 +34,87 @@ pub fn register(app: &tauri::AppHandle, shortcut: Shortcut) -> Result<(), String
         .on_shortcut(shortcut, move |app, _sc, event| {
             if event.state == ShortcutState::Pressed {
                 if let Some(window) = app.get_webview_window("main") {
+                    let trace_id = HOTKEY_TRACE_ID.fetch_add(1, Ordering::Relaxed);
+                    let invocation_started_at = Instant::now();
                     let visible = window.is_visible().unwrap_or(false);
                     let focused = window.is_focused().unwrap_or(false);
                     log::info!("[hotkey] pressed, visible={}, focused={}", visible, focused);
+                    crate::window::log_diagnostic(&format!(
+                        "[hotkey-diag] id={trace_id} pressed visible={visible}, focused={focused}, pos={:?}, size={:?}",
+                        window.outer_position().ok(),
+                        window.outer_size().ok(),
+                    ));
 
                     if visible && focused {
                         // ── 显示 + 已聚焦 → 隐藏 ──
                         let _ = window.emit(crate::window::WINDOW_WILL_HIDE_EVENT, ());
                         if let Err(error) = window.hide() {
-                            crate::window::emit_window_will_show(&window, false);
+                            crate::window::emit_window_will_show(&window, false, Some(trace_id));
                             log::warn!("[hotkey] hide failed: {error}");
                         } else {
                             log::info!("[hotkey] hidden");
+                            crate::window::log_diagnostic(&format!(
+                                "[hotkey-diag] id={trace_id} hidden total={}ms",
+                                invocation_started_at.elapsed().as_millis(),
+                            ));
                         }
                     } else {
-                        // ── 隐藏 OR 显示但失焦 → 带到鼠标所在屏幕的前台 ──
+                        // ── 隐藏 OR 显示但失焦 → 带到当前焦点窗口所在屏幕的前台 ──
+                        let selection_started_at = Instant::now();
                         if !visible {
                             crate::platform::macos::get_selected_text(app);
                         } else {
                             log::info!("[hotkey] shown+unfocused → bring_to_front");
                         }
+                        let selection_elapsed = selection_started_at.elapsed();
 
-                        crate::window::positioning::reposition_to_cursor_monitor(&window);
+                        let reposition_started_at = Instant::now();
+                        crate::window::positioning::reposition_to_focused_monitor(
+                            &window, trace_id,
+                        );
+                        let reposition_elapsed = reposition_started_at.elapsed();
 
-                        // 先完成跨屏定位，再让前端计算气泡尺寸，避免异步缩放把窗口带回旧屏幕。
-                        crate::window::notify_window_invoked(&window, true);
+                        // 跨屏定位与闲置气泡缩放都在 Rust 完成，前端收到事件后只切页面并播放动画。
+                        let notify_started_at = Instant::now();
+                        let open_compact =
+                            crate::window::notify_window_invoked(&window, true, Some(trace_id));
+                        let notify_elapsed = notify_started_at.elapsed();
                         log::info!(
                             "[hotkey] before bring_to_front, pos={:?}",
                             window.outer_position().ok()
                         );
 
                         // Windows/macOS 都需要平台专用的前台激活逻辑。
+                        let activation_started_at = Instant::now();
                         #[cfg(target_os = "windows")]
                         crate::platform::windows::bring_to_front(&window);
                         #[cfg(target_os = "macos")]
-                        crate::platform::macos::bring_to_front(&window);
+                        crate::platform::macos::bring_to_front_traced(&window, trace_id);
                         #[cfg(not(any(target_os = "windows", target_os = "macos")))]
                         {
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
+                        let activation_elapsed = activation_started_at.elapsed();
 
                         log::info!(
                             "[hotkey] after bring_to_front, visible={}, focused={}",
                             window.is_visible().unwrap_or(false),
                             window.is_focused().unwrap_or(false)
                         );
+                        let total_elapsed = invocation_started_at.elapsed();
+                        let timing = format!(
+                            "[hotkey-diag] id={trace_id} dispatched total={}ms, clipboard={}ms, reposition={}ms, compact={}ms, activation_dispatch={}ms, open_compact={open_compact}, visible_now={}, focused_now={}, pos_now={:?}",
+                            total_elapsed.as_millis(),
+                            selection_elapsed.as_millis(),
+                            reposition_elapsed.as_millis(),
+                            notify_elapsed.as_millis(),
+                            activation_elapsed.as_millis(),
+                            window.is_visible().unwrap_or(false),
+                            window.is_focused().unwrap_or(false),
+                            window.outer_position().ok(),
+                        );
+                        crate::window::log_diagnostic(&timing);
                     }
                 }
             }
