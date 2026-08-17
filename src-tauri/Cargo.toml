@@ -35,6 +35,9 @@ thiserror = "1"
 base64 = "0.22"
 parking_lot = "0.12"
 window-vibrancy = "0.6"
+
+# 仅 macOS 平台才编译的依赖（代码均在 #[cfg(target_os = "macos")] 保护下）
+[target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = "0.3"
 objc2-foundation = "0.3"
