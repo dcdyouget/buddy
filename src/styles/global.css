@@ -380,16 +380,9 @@ body {
 /* ── App shell ── */
 .window-entrance {
   --window-entrance-duration: var(--duration-normal);
-  --window-glow-duration: var(--duration-slow);
   --window-entrance-scale-x: 0.94;
   --window-entrance-scale-y: 0.88;
   --window-entrance-radius: var(--radius-full);
-  --window-glow-angle: 104deg;
-  --window-glow-start-position: 0% 50%;
-  --window-glow-end-position: 100% 50%;
-  --window-aura-start-transform: translate3d(-42%, -8%, 0) scale(0.72);
-  --window-aura-end-transform: translate3d(42%, 8%, 0) scale(1.06);
-  --window-glow-orbit-start: -35deg;
   position: relative;
   width: 100vw;
   height: 100vh;
@@ -421,136 +414,9 @@ body {
   opacity: 0.18;
 }
 
-.window-entrance-surface::before {
-  content: '';
-  position: absolute;
-  inset: -46%;
-  z-index: 0;
-  border-radius: var(--radius-full);
-  background: conic-gradient(
-    from 0deg,
-    transparent 0 16%,
-    color-mix(in srgb, var(--buddy-primary) 34%, transparent) 25%,
-    color-mix(in srgb, var(--buddy-primary) 88%, transparent) 34%,
-    transparent 46% 66%,
-    color-mix(in srgb, var(--buddy-primary) 58%, transparent) 78%,
-    transparent 90% 100%
-  );
-  opacity: 0.28;
-  filter: blur(var(--space-2));
-  transform: rotate(var(--window-glow-orbit-start)) scale(1.16);
-}
-
-.window-entrance-surface::after {
-  content: '';
-  position: absolute;
-  inset: calc(var(--space-1) / 2);
-  z-index: 1;
-  border-radius: inherit;
-  background:
-    linear-gradient(
-      145deg,
-      color-mix(in srgb, var(--buddy-primary) 7%, transparent),
-      transparent 46%
-    ),
-    color-mix(in srgb, var(--buddy-primary) 3%, var(--bg-surface));
-}
-
-.window-entrance-glow {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  border-radius: var(--window-entrance-radius);
-  opacity: 0;
-  overflow: hidden;
-  background: transparent;
-  box-shadow: inset 0 0 var(--space-3)
-    color-mix(in srgb, var(--composer-glow) 18%, transparent);
-  transform: scaleX(var(--window-entrance-scale-x))
-    scaleY(var(--window-entrance-scale-y));
-  transform-origin: center;
-  pointer-events: none;
-}
-
-/* 柔光只负责轻微提亮外壳，真实内容始终位于它的上层。 */
-.window-entrance-glow::before {
-  content: '';
-  position: absolute;
-  inset: -32%;
-  border-radius: var(--radius-full);
-  background: radial-gradient(
-    ellipse at center,
-    color-mix(in srgb, var(--composer-glow) 34%, var(--neutral-0)) 0,
-    color-mix(in srgb, var(--composer-glow) 28%, transparent) 28%,
-    color-mix(in srgb, var(--buddy-primary) 14%, transparent) 52%,
-    transparent 74%
-  );
-  filter: blur(var(--space-3));
-  opacity: 0;
-  transform: var(--window-aura-start-transform);
-}
-
-/* 与对话输入框一致的流动渐变边框。 */
-.window-entrance-glow::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  padding: calc(var(--space-1) / 4);
-  border-radius: inherit;
-  background: linear-gradient(
-    var(--window-glow-angle),
-    transparent,
-    color-mix(in srgb, var(--composer-glow) 64%, transparent),
-    color-mix(in srgb, var(--buddy-primary) 70%, var(--neutral-0)),
-    color-mix(in srgb, var(--composer-glow) 64%, transparent),
-    transparent
-  );
-  background-size: 280% 280%;
-  background-position: var(--window-glow-start-position);
-  -webkit-mask:
-    linear-gradient(var(--neutral-1000) 0 0) content-box,
-    linear-gradient(var(--neutral-1000) 0 0);
-  -webkit-mask-composite: xor;
-  mask:
-    linear-gradient(var(--neutral-1000) 0 0) content-box,
-    linear-gradient(var(--neutral-1000) 0 0);
-  mask-composite: exclude;
-}
-
-.window-entrance.glow-right-to-left {
-  --window-glow-angle: 76deg;
-  --window-glow-start-position: 100% 50%;
-  --window-glow-end-position: 0% 50%;
-  --window-aura-start-transform: translate3d(42%, 8%, 0) scale(0.72);
-  --window-aura-end-transform: translate3d(-42%, -8%, 0) scale(1.06);
-  --window-glow-orbit-start: 35deg;
-}
-
-.window-entrance.glow-top-right-to-bottom-left {
-  --window-glow-angle: 42deg;
-  --window-glow-start-position: 100% 0%;
-  --window-glow-end-position: 0% 100%;
-  --window-aura-start-transform: translate3d(34%, -36%, 0) scale(0.68);
-  --window-aura-end-transform: translate3d(-34%, 36%, 0) scale(1.08);
-  --window-glow-orbit-start: 65deg;
-}
-
-.window-entrance.glow-top-left-to-bottom-right {
-  --window-glow-angle: 138deg;
-  --window-glow-start-position: 0% 0%;
-  --window-glow-end-position: 100% 100%;
-  --window-aura-start-transform: translate3d(-34%, -36%, 0) scale(0.68);
-  --window-aura-end-transform: translate3d(34%, 36%, 0) scale(1.08);
-  --window-glow-orbit-start: -65deg;
-}
-
-.window-entrance.glow-center-out {
-  --window-glow-orbit-start: -18deg;
-}
-
-.window-entrance.glow-center-out .window-entrance-glow {
-  --window-aura-start-transform: scale3d(0.14, 0.38, 1);
-  --window-aura-end-transform: scale3d(1.18, 1.08, 1);
+/* 对话框不变形，避免不同 WebKit/GPU 对大图层缩放产生透明首帧或纹理重采样。 */
+.window-entrance.is-expanded .window-entrance-surface {
+  display: none;
 }
 
 .window-entrance-content {
@@ -558,42 +424,13 @@ body {
   z-index: 2;
   width: 100%;
   height: 100%;
-  opacity: 0;
-  transform: scale(0.985);
-  transform-origin: center;
+  opacity: 1;
+  transform: none;
 }
 
 .window-entrance.is-entering .window-entrance-surface {
   animation: window-surface-morph var(--window-entrance-duration) var(--ease-standard) both;
   will-change: transform, opacity, border-radius;
-}
-
-.window-entrance.is-entering .window-entrance-glow {
-  animation: window-border-glow-flow var(--window-glow-duration) var(--ease-standard) both;
-  will-change: transform, opacity, border-radius;
-}
-
-.window-entrance.is-entering .window-entrance-glow::before {
-  animation: window-glow-aura-sweep var(--window-glow-duration) var(--ease-standard) both;
-  will-change: transform, opacity;
-}
-
-.window-entrance.is-entering .window-entrance-glow::after {
-  animation: window-glow-edge-flow var(--window-glow-duration) linear both;
-}
-
-.window-entrance.is-entering.glow-center-out .window-entrance-glow::before {
-  animation-name: window-glow-aura-bloom;
-}
-
-.window-entrance.is-entering .window-entrance-content {
-  animation: window-content-reveal var(--window-entrance-duration) var(--ease-standard) both;
-  will-change: transform, opacity;
-}
-
-.window-entrance.is-settled .window-entrance-content {
-  opacity: 1;
-  transform: scale(1);
 }
 
 @keyframes window-surface-morph {
@@ -621,216 +458,6 @@ body {
   }
 }
 
-@keyframes window-content-reveal {
-  0% {
-    opacity: 0;
-    transform: scale(0.985);
-  }
-
-  58% {
-    opacity: 1;
-    transform: scale(1);
-  }
-
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-@keyframes window-border-glow-flow {
-  0% {
-    opacity: 0;
-    border-radius: var(--window-entrance-radius);
-    transform: scaleX(var(--window-entrance-scale-x))
-      scaleY(var(--window-entrance-scale-y));
-  }
-
-  28% {
-    opacity: 0.68;
-  }
-
-  68% {
-    opacity: 0.42;
-    border-radius: var(--radius-xl);
-    transform: scaleX(1.008) scaleY(1.01);
-  }
-
-  100% {
-    opacity: 0;
-    border-radius: var(--radius-xl);
-    transform: scale(1);
-  }
-}
-
-@keyframes window-glow-edge-flow {
-  from {
-    background-position: var(--window-glow-start-position);
-  }
-
-  to {
-    background-position: var(--window-glow-end-position);
-  }
-}
-
-@keyframes window-glow-aura-sweep {
-  0% {
-    opacity: 0;
-    transform: var(--window-aura-start-transform);
-  }
-
-  32% {
-    opacity: 0.22;
-  }
-
-  68% {
-    opacity: 0.12;
-  }
-
-  100% {
-    opacity: 0;
-    transform: var(--window-aura-end-transform);
-  }
-}
-
-@keyframes window-glow-aura-bloom {
-  0% {
-    opacity: 0;
-    transform: var(--window-aura-start-transform);
-  }
-
-  34% {
-    opacity: 0.2;
-  }
-
-  70% {
-    opacity: 0.1;
-  }
-
-  100% {
-    opacity: 0;
-    transform: var(--window-aura-end-transform);
-  }
-}
-
-/* ── Windows：入场炫光/流光增强 ──
-   同一套 CSS 在 macOS 上观感正常，但在 Windows 上炫光层被内容层（z2）盖住、
-   峰值透明度又低，白底上几乎不可见。
-   炫光在内容下方就必须透过半透明内容才能看见，会伴随明显的内容透明闪烁；
-   因此这里把炫光层在入场期间提到内容之上（z3），作为一道光扫过界面，
-   内容则快速浮现、全程不透明。抬高光晕/流光的峰值强度并加粗流光环。
-   macOS 不受影响。 */
-html[data-platform="windows"] .window-entrance-glow {
-  box-shadow: inset 0 0 var(--space-3)
-    color-mix(in srgb, var(--composer-glow) 42%, transparent);
-}
-
-html[data-platform="windows"] .window-entrance.is-entering .window-entrance-glow {
-  z-index: 3;
-  animation-name: window-border-glow-flow-win;
-}
-
-html[data-platform="windows"] .window-entrance-glow::before {
-  background: radial-gradient(
-    ellipse at center,
-    color-mix(in srgb, var(--composer-glow) 75%, var(--neutral-0)) 0,
-    color-mix(in srgb, var(--composer-glow) 58%, transparent) 28%,
-    color-mix(in srgb, var(--buddy-primary) 32%, transparent) 52%,
-    transparent 74%
-  );
-}
-
-html[data-platform="windows"] .window-entrance.is-entering .window-entrance-glow::before {
-  animation-name: window-glow-aura-sweep-win;
-}
-
-html[data-platform="windows"]
-  .window-entrance.is-entering.glow-center-out
-  .window-entrance-glow::before {
-  animation-name: window-glow-aura-bloom-win;
-}
-
-html[data-platform="windows"] .window-entrance-glow::after {
-  /* 原设计流光环只有 1px 粗，Windows 上几乎不可见；加粗到 4px 让流光清晰可辨 */
-  padding: 4px;
-  background: linear-gradient(
-    var(--window-glow-angle),
-    transparent,
-    color-mix(in srgb, var(--composer-glow) 85%, transparent),
-    color-mix(in srgb, var(--buddy-primary) 90%, var(--neutral-0)),
-    color-mix(in srgb, var(--composer-glow) 85%, transparent),
-    transparent
-  );
-  /* 覆盖 background 简写时显式保留这两项，否则流光渐变不会铺开、也不会流动 */
-  background-size: 280% 280%;
-  background-position: var(--window-glow-start-position);
-}
-
-@keyframes window-border-glow-flow-win {
-  0% {
-    opacity: 0;
-    border-radius: var(--window-entrance-radius);
-    transform: scaleX(var(--window-entrance-scale-x))
-      scaleY(var(--window-entrance-scale-y));
-  }
-
-  28% {
-    opacity: 0.92;
-  }
-
-  68% {
-    opacity: 0.5;
-    border-radius: var(--radius-xl);
-    transform: scaleX(1.008) scaleY(1.01);
-  }
-
-  100% {
-    opacity: 0;
-    border-radius: var(--radius-xl);
-    transform: scale(1);
-  }
-}
-
-@keyframes window-glow-aura-sweep-win {
-  0% {
-    opacity: 0;
-    transform: var(--window-aura-start-transform);
-  }
-
-  32% {
-    opacity: 0.6;
-  }
-
-  68% {
-    opacity: 0.26;
-  }
-
-  100% {
-    opacity: 0;
-    transform: var(--window-aura-end-transform);
-  }
-}
-
-@keyframes window-glow-aura-bloom-win {
-  0% {
-    opacity: 0;
-    transform: var(--window-aura-start-transform);
-  }
-
-  34% {
-    opacity: 0.55;
-  }
-
-  70% {
-    opacity: 0.24;
-  }
-
-  100% {
-    opacity: 0;
-    transform: var(--window-aura-end-transform);
-  }
-}
-
 .buddy-shell {
   isolation: isolate;
   background:
@@ -840,33 +467,12 @@ html[data-platform="windows"] .window-entrance-glow::after {
   box-shadow: inset 0 0 0 1px var(--window-inner-highlight);
 }
 
-.conversation-shell {
-  transform-origin: bottom center;
-  animation: conversation-shell-enter var(--duration-normal) var(--ease-standard);
-}
-
-@keyframes conversation-shell-enter {
-  from {
-    opacity: 0;
-    transform: translateY(var(--space-2)) scale(0.99);
-  }
-
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
 .conversation-shell .input-dock {
   opacity: 1;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .window-entrance-surface {
-    display: none;
-  }
-
-  .window-entrance-glow {
     display: none;
   }
 

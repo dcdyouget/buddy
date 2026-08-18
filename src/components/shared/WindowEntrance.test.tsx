@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 
 import { act, render, screen } from '@testing-library/react';
-import { invoke } from '@tauri-apps/api/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   WINDOW_WILL_HIDE_EVENT,
@@ -9,12 +8,13 @@ import {
 } from '@/utils/windowEvents';
 import { WindowEntrance } from './WindowEntrance';
 
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue(undefined),
-}));
+function emitWillShow(detail?: Record<string, unknown>) {
+  window.dispatchEvent(
+    new CustomEvent(WINDOW_WILL_SHOW_EVENT, { detail }),
+  );
+}
 
 beforeEach(() => {
-  vi.mocked(invoke).mockClear();
   vi.useFakeTimers();
   vi.stubGlobal(
     'requestAnimationFrame',
@@ -29,156 +29,67 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
-  vi.restoreAllMocks();
 });
 
 describe('WindowEntrance', () => {
-  it('每次呼出随机切换炫光轨迹且不连续重复', () => {
-    vi.spyOn(Math, 'random').mockReturnValue(0);
+  it('对话框使用完整尺寸，真实内容不缩放', () => {
     render(
-      <WindowEntrance>
-        <button type="button">随机炫光</button>
+      <WindowEntrance mode="expanded">
+        <button type="button">完整尺寸</button>
       </WindowEntrance>,
     );
-    const root = screen.getByRole('button', { name: '随机炫光' }).parentElement
+    const root = screen.getByRole('button', { name: '完整尺寸' }).parentElement
       ?.parentElement;
-    const firstVariant = root?.dataset.glowVariant;
 
-    act(() => {
-      window.dispatchEvent(new Event(WINDOW_WILL_SHOW_EVENT));
-    });
-
-    expect(root?.dataset.glowVariant).not.toBe(firstVariant);
+    expect(root?.classList.contains('is-expanded')).toBe(true);
+    expect(root?.style.getPropertyValue('--window-entrance-scale-x')).toBe('1');
+    expect(root?.style.getPropertyValue('--window-entrance-scale-y')).toBe('1');
   });
 
-  it('随机轨迹包含右上到左下和中心扩散', () => {
-    const random = vi.spyOn(Math, 'random').mockReturnValue(0.45);
-    const diagonal = render(
-      <WindowEntrance>
-        <button type="button">对角线炫光</button>
-      </WindowEntrance>,
-    );
-    const diagonalRoot = screen.getByRole('button', { name: '对角线炫光' })
-      .parentElement?.parentElement;
-    expect(diagonalRoot?.dataset.glowVariant).toBe(
-      'top-right-to-bottom-left',
-    );
-    diagonal.unmount();
-
-    random.mockReturnValue(0.99);
+  it('紧凑气泡只保留装饰外壳形变', () => {
     render(
-      <WindowEntrance>
-        <button type="button">中心炫光</button>
+      <WindowEntrance mode="compact">
+        <button type="button">紧凑气泡</button>
       </WindowEntrance>,
     );
-    const centerRoot = screen.getByRole('button', { name: '中心炫光' })
-      .parentElement?.parentElement;
-    expect(centerRoot?.dataset.glowVariant).toBe('center-out');
+    const root = screen.getByRole('button', { name: '紧凑气泡' }).parentElement
+      ?.parentElement;
+
+    expect(root?.classList.contains('is-compact')).toBe(true);
+    expect(root?.style.getPropertyValue('--window-entrance-scale-x')).toBe('0.94');
+    expect(root?.style.getPropertyValue('--window-entrance-scale-y')).toBe('0.88');
   });
 
-  it('将边框炫光与真实内容拆成独立图层', () => {
+  it('不渲染炫光图层', () => {
     const { container } = render(
-      <WindowEntrance>
-        <button type="button">炫光层级</button>
+      <WindowEntrance mode="expanded">
+        <button type="button">无炫光</button>
       </WindowEntrance>,
     );
-    const root = container.querySelector('.window-entrance');
-    const content = root?.querySelector('.window-entrance-content');
-    const glow = root?.querySelector('.window-entrance-glow');
 
-    expect(glow?.parentElement).toBe(root);
-    expect(content?.nextElementSibling).toBe(glow);
+    expect(container.querySelector('.window-entrance-glow')).toBeNull();
   });
 
-  it('每次窗口显示都重新播放形变动画', () => {
+  it('隐藏后重新显示时只播放紧凑外壳过渡', () => {
     render(
-      <WindowEntrance>
-        <button type="button">内容</button>
+      <WindowEntrance mode="compact">
+        <button type="button">再次呼出</button>
       </WindowEntrance>,
     );
-    const root = screen.getByRole('button', { name: '内容' }).parentElement
+    const root = screen.getByRole('button', { name: '再次呼出' }).parentElement
       ?.parentElement;
 
-    expect(root?.dataset.entrancePhase).toBe('entering');
-    expect(root?.style.getPropertyValue('--window-entrance-scale-x')).toBe(
-      '0.97',
-    );
-    expect(root?.style.getPropertyValue('--window-entrance-scale-y')).toBe(
-      '0.96',
-    );
-    expect(root?.style.getPropertyValue('--window-entrance-radius')).toBe(
-      'var(--radius-xl)',
-    );
+    act(() => window.dispatchEvent(new Event(WINDOW_WILL_HIDE_EVENT)));
+    expect(root?.dataset.entrancePhase).toBe('hidden');
 
-    act(() => {
-      vi.advanceTimersByTime(600);
-    });
+    act(() => emitWillShow());
+    expect(root?.dataset.entrancePhase).toBe('entering');
+
+    act(() => vi.advanceTimersByTime(260));
     expect(root?.dataset.entrancePhase).toBe('settled');
-
-    act(() => {
-      window.dispatchEvent(new Event(WINDOW_WILL_HIDE_EVENT));
-    });
-    expect(root?.dataset.entrancePhase).toBe('hidden');
-
-    act(() => {
-      window.dispatchEvent(new Event(WINDOW_WILL_SHOW_EVENT));
-    });
-    expect(root?.dataset.entrancePhase).toBe('entering');
   });
 
-  it('已预置隐藏帧时不等待 RAF 就进入动画', () => {
-    render(
-      <WindowEntrance>
-        <button type="button">立即呼出</button>
-      </WindowEntrance>,
-    );
-    const root = screen.getByRole('button', { name: '立即呼出' })
-      .parentElement?.parentElement;
-
-    act(() => {
-      vi.advanceTimersByTime(600);
-      window.dispatchEvent(new Event(WINDOW_WILL_HIDE_EVENT));
-    });
-    expect(root?.dataset.entrancePhase).toBe('hidden');
-
-    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 9));
-    act(() => {
-      window.dispatchEvent(new Event(WINDOW_WILL_SHOW_EVENT));
-    });
-
-    expect(root?.dataset.entrancePhase).toBe('entering');
-  });
-
-  it('将事件接收和首个 RAF 写入同一个诊断 trace', () => {
-    render(
-      <WindowEntrance>
-        <button type="button">诊断内容</button>
-      </WindowEntrance>,
-    );
-
-    act(() => {
-      window.dispatchEvent(
-        new CustomEvent(WINDOW_WILL_SHOW_EVENT, {
-          detail: {
-            open_compact: false,
-            trace_id: 42,
-            emitted_at_ms: 1_700_000_000_000,
-          },
-        }),
-      );
-    });
-
-    expect(invoke).toHaveBeenCalledWith(
-      'log_window_frontend_diagnostic',
-      expect.objectContaining({ traceId: 42, stage: 'event-received' }),
-    );
-    expect(invoke).toHaveBeenCalledWith(
-      'log_window_frontend_diagnostic',
-      expect.objectContaining({ traceId: 42, stage: 'raf-restart' }),
-    );
-  });
-
-  it('闲置呼出时先恢复气泡页，再播放形变动画', async () => {
+  it('闲置呼出时先恢复气泡页，再播放外壳过渡', async () => {
     let completeCompactSwitch!: () => void;
     const onCompactRequested = vi.fn(
       () =>
@@ -187,23 +98,14 @@ describe('WindowEntrance', () => {
         }),
     );
     render(
-      <WindowEntrance onCompactRequested={onCompactRequested}>
+      <WindowEntrance mode="expanded" onCompactRequested={onCompactRequested}>
         <button type="button">气泡内容</button>
       </WindowEntrance>,
     );
     const root = screen.getByRole('button', { name: '气泡内容' }).parentElement
       ?.parentElement;
 
-    act(() => {
-      vi.advanceTimersByTime(600);
-      window.dispatchEvent(new Event(WINDOW_WILL_HIDE_EVENT));
-      window.dispatchEvent(
-        new CustomEvent(WINDOW_WILL_SHOW_EVENT, {
-          detail: { open_compact: true },
-        }),
-      );
-    });
-
+    act(() => emitWillShow({ open_compact: true }));
     expect(onCompactRequested).toHaveBeenCalledTimes(1);
     expect(root?.dataset.entrancePhase).toBe('hidden');
 
@@ -211,7 +113,6 @@ describe('WindowEntrance', () => {
       completeCompactSwitch();
       await Promise.resolve();
     });
-
     expect(root?.dataset.entrancePhase).toBe('entering');
   });
 });
