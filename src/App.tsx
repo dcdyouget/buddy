@@ -81,6 +81,10 @@ function App() {
   const setPage = useUIStore((state) => state.setPage);
   const setThemeReady = useUIStore((state) => state.setThemeReady);
   const currentPage = useUIStore((state) => state.currentPage);
+  const entranceMode =
+    currentPage === 'empty' || currentPage === 'noapikey'
+      ? 'compact'
+      : 'expanded';
 
   const openCompactAfterIdle = useCallback(async () => {
     if (useUIStore.getState().currentPage !== 'empty') {
@@ -235,7 +239,10 @@ function App() {
   }, []);
 
   return (
-    <WindowEntrance onCompactRequested={openCompactAfterIdle}>
+    <WindowEntrance
+      mode={entranceMode}
+      onCompactRequested={openCompactAfterIdle}
+    >
       {/* 背景页面 */}
       <PageRenderer />
 
