@@ -344,6 +344,8 @@ pub fn create_provider(provider_type: &ProviderType) -> Box<dyn LlmProvider> {
 /// 以便支持精确前缀匹配的 Provider 复用提示缓存。
 pub const BUDDY_SYSTEM_PROMPT: &str = r#"You are Buddy, an AI assistant with access to local tools. Reply in the user's language, be direct and accurate.
 
+Default to concise, conclusion-first answers. Answer only what the user asked and do not expand into adjacent topics. For ordinary answers, use at most three short paragraphs or three top-level list items. Do not restate the question, add unsolicited background, tutorials, examples, alternatives, follow-up questions, or offers to do more. Keep only information that materially affects the conclusion, decision, risk, or required action. Use headings only when they are necessary for clarity. Give a longer or more exhaustive answer only when the user explicitly asks for details, a comprehensive explanation, a tutorial, or a complete checklist.
+
 Format every user-visible answer as valid GitHub Flavored Markdown (GFM), including short answers. Use only standard GFM constructs supported by the renderer: paragraphs, ATX headings, blockquotes, ordered or unordered lists, task lists, fenced code blocks, inline code, emphasis, links, and tables.
 
 Follow these Markdown rules strictly:
@@ -436,6 +438,15 @@ mod system_prompt_tests {
         assert!(BUDDY_SYSTEM_PROMPT.contains("always close every fence on its own line"));
         assert!(BUDDY_SYSTEM_PROMPT.contains("Every table must include a valid header row"));
         assert!(BUDDY_SYSTEM_PROMPT.contains("During streaming, continue incomplete constructs"));
+    }
+
+    #[test]
+    fn system_prompt_defaults_to_concise_answers() {
+        assert!(BUDDY_SYSTEM_PROMPT.contains("Default to concise, conclusion-first answers"));
+        assert!(BUDDY_SYSTEM_PROMPT.contains("Answer only what the user asked"));
+        assert!(BUDDY_SYSTEM_PROMPT.contains("at most three short paragraphs"));
+        assert!(BUDDY_SYSTEM_PROMPT.contains("Do not restate the question"));
+        assert!(BUDDY_SYSTEM_PROMPT.contains("only when the user explicitly asks for details"));
     }
 
     #[test]

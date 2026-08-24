@@ -92,14 +92,49 @@ describe('StreamingMarkdown', () => {
       '.markdown-code-block.is-plain-text',
     );
     expect(block).not.toBeNull();
-    expect(block?.querySelector('.markdown-code-language')?.textContent).toBe(
-      '文本结构',
-    );
+    expect(block?.querySelector('.markdown-code-language')).toBeNull();
     expect(block?.querySelector('pre')?.textContent).toContain(
       '顾问/显职 ── 光禄大夫',
     );
     expect(block?.querySelector('.markdown-inline-code')).toBeNull();
     expect(container.querySelector('pre > .markdown-code-block')).toBeNull();
+  });
+
+  it('repairs an attached plain-text closing fence before parsing headings', () => {
+    const source = [
+      '### 复用 ISA 的好处',
+      '',
+      '```',
+      '✅ 编译器天然支持',
+      '✅ 程序员直接能写汇编```',
+      '',
+      '### 自研 ISA 的代价',
+      '',
+      '```',
+      '❌ 软件生态需要从头建',
+      '❌ 时间长、成本高',
+      '```',
+    ].join('\n');
+    const { container } = render(
+      <StreamingMarkdown content={source} isStreaming={false} />,
+    );
+
+    expect(
+      Array.from(container.querySelectorAll('h3')).map(
+        (heading) => heading.textContent,
+      ),
+    ).toEqual(['复用 ISA 的好处', '自研 ISA 的代价']);
+
+    const blocks = Array.from(
+      container.querySelectorAll('.markdown-code-block.is-plain-text'),
+    );
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]?.querySelector('pre')?.textContent).toContain(
+      '✅ 程序员直接能写汇编',
+    );
+    expect(blocks[0]?.querySelector('pre')?.textContent).not.toContain(
+      '自研 ISA 的代价',
+    );
   });
 
   it('keeps regular inline code separate from fenced blocks', () => {

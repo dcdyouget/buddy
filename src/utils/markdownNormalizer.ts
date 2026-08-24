@@ -115,15 +115,25 @@ function normalizeLineOutsideInlineCode(value: string): string {
 interface Fence {
   marker: '`' | '~';
   length: number;
+  canRepairAttachedClose: boolean;
 }
 
 function getOpeningFence(line: string): Fence | null {
   const match = line.match(/^ {0,3}(`{3,}|~{3,})/);
   if (!match) return null;
 
+  const language = line
+    .slice(match[0].length)
+    .trim()
+    .split(/[\t ]/, 1)[0]
+    .toLowerCase();
+
   return {
     marker: match[1][0] as Fence['marker'],
     length: match[1].length,
+    canRepairAttachedClose:
+      language === '' ||
+      ['plain', 'plaintext', 'text', 'txt'].includes(language),
   };
 }
 
@@ -134,6 +144,59 @@ function isClosingFence(line: string, fence: Fence): boolean {
       match[1][0] === fence.marker &&
       match[1].length >= fence.length,
   );
+}
+
+function splitAttachedClosingFence(
+  line: string,
+  fence: Fence,
+): [content: string, closingFence: string] | null {
+  if (!fence.canRepairAttachedClose) return null;
+
+  const trimmedLine = line.trimEnd();
+  let markerStart = trimmedLine.length;
+  while (trimmedLine[markerStart - 1] === fence.marker) markerStart -= 1;
+
+  const markerLength = trimmedLine.length - markerStart;
+  if (markerLength < fence.length) return null;
+
+  const content = trimmedLine.slice(0, markerStart).trimEnd();
+  if (!content.trim()) return null;
+
+  return [content, fence.marker.repeat(markerLength)];
+}
+
+/**
+ * 修复 AI 偶尔把纯文本代码块的结束围栏粘在正文末尾的情况。
+ * 仅处理无语言或纯文本围栏，避免改写真实源码中的反引号字符串。
+ */
+export function repairMarkdownFences(markdown: string): string {
+  let fence: Fence | null = null;
+  const normalizedLines: string[] = [];
+
+  for (const line of markdown.split('\n')) {
+    if (fence) {
+      if (isClosingFence(line, fence)) {
+        normalizedLines.push(line);
+        fence = null;
+        continue;
+      }
+
+      const attachedClosingFence = splitAttachedClosingFence(line, fence);
+      if (attachedClosingFence) {
+        normalizedLines.push(...attachedClosingFence);
+        fence = null;
+        continue;
+      }
+
+      normalizedLines.push(line);
+      continue;
+    }
+
+    normalizedLines.push(line);
+    fence = getOpeningFence(line);
+  }
+
+  return normalizedLines.join('\n');
 }
 
 /**
@@ -159,4 +222,9 @@ export function normalizeMarkdownEmphasis(markdown: string): string {
       return normalizeLineOutsideInlineCode(line);
     })
     .join('\n');
+}
+
+/** 统一执行 Markdown 结构修复和正文语法规范化。 */
+export function normalizeMarkdown(markdown: string): string {
+  return normalizeMarkdownEmphasis(repairMarkdownFences(markdown));
 }

@@ -11,7 +11,7 @@ import { isTauri } from '@tauri-apps/api/core';
 import { open as openExternal } from '@tauri-apps/plugin-shell';
 import {
   MARKDOWN_EMPHASIS_GUARD,
-  normalizeMarkdownEmphasis,
+  normalizeMarkdown,
 } from '@/utils/markdownNormalizer';
 import { CodeBlock } from './CodeBlock';
 
@@ -350,7 +350,7 @@ export function StreamingMarkdown({
   revealKey = 0,
 }: StreamingMarkdownProps) {
   const normalizedContent = useMemo(
-    () => normalizeMarkdownEmphasis(content),
+    () => normalizeMarkdown(content),
     [content],
   );
 

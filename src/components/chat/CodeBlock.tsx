@@ -97,7 +97,7 @@ export const CodeBlock = memo(function CodeBlock({ language, source }: CodeBlock
   const isPlainText = ['plain', 'plaintext', 'text', 'txt'].includes(
     normalizedLanguage,
   );
-  const languageLabel = isPlainText ? '文本结构' : language;
+  const languageLabel = isPlainText ? null : language;
 
   /**
    * 复制代码到剪贴板
@@ -132,25 +132,27 @@ export const CodeBlock = memo(function CodeBlock({ language, source }: CodeBlock
         border: '1px solid var(--border-subtle)',
       }}
     >
-      {/* 头部栏：显示语言标签 + 复制按钮 */}
+      {/* 头部栏：代码显示语言标签，纯文本仅显示复制按钮 */}
       <div
         className="markdown-code-header"
         style={{
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'space-between',
+          justifyContent: languageLabel ? 'space-between' : 'flex-end',
           padding: 'var(--space-1) var(--space-3)',
         }}
       >
-        <span
-          className="t-caption markdown-code-language"
-          style={{
-            fontFamily: 'var(--font-mono)',
-            textTransform: 'lowercase',
-          }}
-        >
-          {languageLabel}
-        </span>
+        {languageLabel && (
+          <span
+            className="t-caption markdown-code-language"
+            style={{
+              fontFamily: 'var(--font-mono)',
+              textTransform: 'lowercase',
+            }}
+          >
+            {languageLabel}
+          </span>
+        )}
         <button
           onClick={handleCopy}
           title={copied ? '已复制' : '复制代码'}
