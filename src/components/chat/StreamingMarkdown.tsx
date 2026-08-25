@@ -1,8 +1,11 @@
 import {
   Children,
+  Suspense,
   isValidElement,
+  lazy,
   memo,
   useMemo,
+  useRef,
   type ReactNode,
 } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -13,7 +16,15 @@ import {
   MARKDOWN_EMPHASIS_GUARD,
   normalizeMarkdown,
 } from '@/utils/markdownNormalizer';
-import { CodeBlock } from './CodeBlock';
+import {
+  partitionStreamingMarkdown,
+  type StreamingMarkdownPartitionCache,
+} from '@/utils/streamingMarkdownPartition';
+import { PlainCodeBlock } from './PlainCodeBlock';
+
+const LazyCodeBlock = lazy(() =>
+  import('./CodeBlock').then(({ CodeBlock }) => ({ default: CodeBlock })),
+);
 
 interface MarkdownAstNode {
   type: string;
@@ -232,10 +243,19 @@ const COMPONENTS = {
       const source = String(codeChild.props.children ?? '').replace(/\n$/, '');
 
       return (
-        <CodeBlock
-          language={languageMatch?.[1] || 'text'}
-          source={source}
-        />
+        <Suspense
+          fallback={
+            <PlainCodeBlock
+              language={languageMatch?.[1] || 'text'}
+              source={source}
+            />
+          }
+        >
+          <LazyCodeBlock
+            language={languageMatch?.[1] || 'text'}
+            source={source}
+          />
+        </Suspense>
       );
     }
 
@@ -335,13 +355,12 @@ interface StreamingMarkdownProps {
  * │ 正在输入的当前段落...         │  ← 不稳定部分：跟随 token 更新，
  * └─────────────────────────────┘     每次只解析少量文字，代价极小
  *
- * 特殊处理：代码围栏（```...```）内部可能包含 \n\n，
- * 通过计数围栏符号的奇偶性判断是否处于未闭合的围栏内部，
- * 若是则回退到围栏起始位置作为稳定边界。
+ * 特殊处理：只增量扫描新到达的完整行以维护安全边界。代码围栏未闭合时
+ * 直接显示纯文本，闭合后再按需加载 Prism，避免每批字符全量高亮。
  *
  * 效果：500 token 的回复，稳定部分约在每 ~50-100 token（段落边界）
  * 处更新一次，不稳定部分始终保持很短。相比每个 token 全量解析，
- * 复杂度从 O(n²) 降低到 O(n)。
+ * 稳定前缀只在段落边界变化时重新规范化，普通字符批次只处理短尾部。
  */
 export function StreamingMarkdown({
   content,
@@ -349,49 +368,27 @@ export function StreamingMarkdown({
   revealCount = 0,
   revealKey = 0,
 }: StreamingMarkdownProps) {
-  const normalizedContent = useMemo(
-    () => normalizeMarkdown(content),
-    [content],
-  );
-
-  // 将内容切分为稳定块和不稳定尾部
-  const { stablePart, unstablePart } = useMemo(() => {
-    // 未在流式输出中，或内容为空 → 全部当作稳定内容
-    if (!isStreaming || !normalizedContent) {
-      return { stablePart: normalizedContent, unstablePart: '' };
+  const partitionCacheRef = useRef<StreamingMarkdownPartitionCache>();
+  const partition = useMemo(() => {
+    if (!isStreaming) {
+      partitionCacheRef.current = undefined;
+      return { stablePart: content, unstablePart: '', openCode: null };
     }
-
-    // 查找最后一个段落分隔符 \n\n
-    const lastDoubleNewline = normalizedContent.lastIndexOf('\n\n');
-    if (lastDoubleNewline === -1) {
-      // 没有段落分隔 → 全部内容都还不稳定
-      return { stablePart: '', unstablePart: normalizedContent };
-    }
-
-    // 检查是否在代码围栏内部（围栏中的空行不应作为段落边界）
-    const stableCandidate = normalizedContent.substring(
-      0,
-      lastDoubleNewline + 2,
+    const next = partitionStreamingMarkdown(
+      content,
+      partitionCacheRef.current,
     );
-    const fenceCount = (stableCandidate.match(/```/g) || []).length;
-    if (fenceCount % 2 !== 0) {
-      // 处于未闭合的代码围栏中 → 回退到围栏开始位置
-      const openingFence = stableCandidate.lastIndexOf('```');
-      if (openingFence > 0) {
-        return {
-          stablePart: normalizedContent.substring(0, openingFence),
-          unstablePart: normalizedContent.substring(openingFence),
-        };
-      }
-      // 开围栏在开头 → 全部不稳定
-      return { stablePart: '', unstablePart: content };
-    }
-
-    return {
-      stablePart: stableCandidate,
-      unstablePart: normalizedContent.substring(lastDoubleNewline + 2),
-    };
-  }, [normalizedContent, isStreaming]);
+    partitionCacheRef.current = next.cache;
+    return next.partition;
+  }, [content, isStreaming]);
+  const stablePart = useMemo(
+    () => normalizeMarkdown(partition.stablePart),
+    [partition.stablePart],
+  );
+  const unstablePart = useMemo(
+    () => normalizeMarkdown(partition.unstablePart),
+    [partition.unstablePart],
+  );
 
   const effectPlugin = useMemo(
     () =>
@@ -422,7 +419,14 @@ export function StreamingMarkdown({
           {unstablePart}
         </ReactMarkdown>
       )}
-      {isStreaming && !unstablePart && (
+      {partition.openCode && (
+        <PlainCodeBlock
+          language={partition.openCode.language}
+          source={partition.openCode.source}
+          isStreaming
+        />
+      )}
+      {isStreaming && !unstablePart && !partition.openCode && (
         <StreamingNextStar revealKey={revealKey} />
       )}
     </div>

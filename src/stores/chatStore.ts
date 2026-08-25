@@ -201,6 +201,29 @@ function appendStreamingText(
   return blocks;
 }
 
+/** 从结构化内容块恢复发送给 Provider / 持久化所需的纯正文。 */
+function textContentFromBlocks(blocks: ContentBlock[]): string {
+  return blocks
+    .filter((block): block is Extract<ContentBlock, { type: 'text' }> =>
+      block.type === 'text',
+    )
+    .map((block) => block.content)
+    .join('');
+}
+
+/** 关闭思考块并移除流式轮次留下的空文本分隔块。 */
+function finalizeStreamingBlocks(blocks: ContentBlock[]): ContentBlock[] {
+  const finalized = blocks.map((block) =>
+    block.type === 'thinking' ? { ...block, is_open: false } : block,
+  );
+  let last = finalized[finalized.length - 1];
+  while (last?.type === 'text' && last.content === '') {
+    finalized.pop();
+    last = finalized[finalized.length - 1];
+  }
+  return finalized;
+}
+
 /** text_end 到达时，避免把已经增量解析好的块再次插入一遍。 */
 function endsWithBlocks(
   blocks: ContentBlock[],
@@ -612,10 +635,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         // 缓冲延迟,当缓冲最终排空时,消息里已经累积了后续轮次的文本,本 turn 的
         // content 只是累积文本的严格前缀。若用该过期快照去 splice,会覆盖掉后续轮次
         // 的文本(数据丢失)—— 这是本方法的核心防御。
-        const { messages } = get();
-        const lastAssistantIdx = findLastAssistantIdx(messages);
-        const accumulated =
-          lastAssistantIdx >= 0 ? (messages[lastAssistantIdx].content || '') : '';
+        const accumulated = textContentFromBlocks(blocks);
         const staleSnapshot =
           accumulated.length > content.length && accumulated.startsWith(content);
 
@@ -735,19 +755,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const lastAssistantIdx = findLastAssistantIdx(updated);
     if (lastAssistantIdx >= 0) {
       const lastAssistant = { ...updated[lastAssistantIdx] } as Message;
-      // 闭合所有 thinking block,并去掉尾部由 text_end 推入的空文本分隔块
-      const closedBlocks = streamingBlocks.map((b: ContentBlock) =>
-        b.type === 'thinking' ? { ...b, is_open: false } : b,
-      );
-      while (closedBlocks.length > 0) {
-        const last = closedBlocks[closedBlocks.length - 1];
-        if (last.type === 'text' && last.content === '') {
-          closedBlocks.pop();
-        } else {
-          break;
-        }
-      }
+      const closedBlocks = finalizeStreamingBlocks(streamingBlocks);
       lastAssistant.blocks = closedBlocks;
+      lastAssistant.content = textContentFromBlocks(closedBlocks);
       // 仅保留已完成且参数完整的 tool_calls。
       // 主动停止时，calling/executing 调用仍可能只有半截 JSON，不能进入下一轮。
       const toolCallsList = getPersistableToolCalls(activeToolCalls);
@@ -778,11 +788,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
   handleStreamError: (_reason: string, message: string) => {
     get().flushTextBuffer();
     // 错误时仅保留此前已经完成的调用，不能把半截调用伪装成 error 后写入历史。
-    const { messages, activeToolCalls } = get();
+    const { messages, streamingBlocks, activeToolCalls } = get();
     let updated = [...messages];
     const lastAssistantIdx = findLastAssistantIdx(updated);
     if (lastAssistantIdx >= 0) {
-      const lastAssistant = updated[lastAssistantIdx];
+      const lastAssistant = { ...updated[lastAssistantIdx] } as Message;
+      const closedBlocks = finalizeStreamingBlocks(streamingBlocks);
+      if (closedBlocks.length > 0) {
+        lastAssistant.blocks = closedBlocks;
+        lastAssistant.content = textContentFromBlocks(closedBlocks);
+      }
       const isEmpty =
         !lastAssistant.content &&
         !(lastAssistant.blocks && lastAssistant.blocks.length > 0);
@@ -792,13 +807,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         updated.splice(lastAssistantIdx, 1);
       } else {
         const toolCallsList = getPersistableToolCalls(activeToolCalls);
-        const updatedAssistant = { ...lastAssistant } as Message;
         if (toolCallsList.length > 0) {
-          updatedAssistant.tool_calls = toolCallsList;
+          lastAssistant.tool_calls = toolCallsList;
         } else {
-          delete updatedAssistant.tool_calls;
+          delete lastAssistant.tool_calls;
         }
-        updated[lastAssistantIdx] = updatedAssistant;
+        updated[lastAssistantIdx] = lastAssistant;
       }
     }
     set({
@@ -824,9 +838,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((s) => ({ pendingTextBuffer: s.pendingTextBuffer + delta }));
   },
 
-  /** rAF 定时调用：从缓冲区取 count 个字符，追加到 streamingBlocks 和 messages[lastAssistant].content */
+  /** rAF 定时调用：从缓冲区取 count 个字符，仅追加到轻量实时内容块。 */
   smoothTextDelta: (count: number) => {
-    const { pendingTextBuffer, messages, streamingBlocks } = get();
+    const { pendingTextBuffer, streamingBlocks } = get();
     if (pendingTextBuffer.length === 0) return;
 
     const {
@@ -836,19 +850,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     } = takeUnicodePrefix(pendingTextBuffer, count);
     if (characterCount === 0) return;
 
-    // 改用 findLastAssistantIdx: handleToolResult 可能把 tool 消息 push 到末尾
-    const updated = [...messages];
-    const idx = findLastAssistantIdx(updated);
-    if (idx < 0) return;
-    const lastMsg = { ...updated[idx] } as Message;
-    lastMsg.content = (lastMsg.content || '') + chars;
-    updated[idx] = lastMsg;
-
     const blocks = appendStreamingText(streamingBlocks, chars);
 
     set({
       pendingTextBuffer: rest,
-      messages: updated,
       streamingBlocks: blocks,
       streamingTokens: get().streamingTokens + 1,
       streamingRevealCount: characterCount,

@@ -22,6 +22,18 @@ use tokio::sync::{oneshot, watch};
 static MESSAGE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const MAX_TOOL_LOG_ARGUMENT_CHARS: usize = 2_000;
 
+/// 将同步文件 I/O 与 JSON/Base64 处理移到 blocking 线程池，
+/// 避免占用 Tokio 工作线程而延迟流式事件和取消命令。
+async fn run_blocking<T, F>(operation: &'static str, task: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tokio::task::spawn_blocking(task)
+        .await
+        .map_err(|error| format!("{operation}任务失败: {error}"))?
+}
+
 /// 生成带全局序列号的消息 ID，保证同毫秒内也不重复。
 fn unique_message_id(prefix: &str, turn: usize) -> String {
     format!(
@@ -230,16 +242,19 @@ fn image_extension(media_type: &str) -> Option<&'static str> {
     }
 }
 
-fn unique_download_path(download_dir: &Path, extension: &str) -> PathBuf {
+async fn unique_download_path(download_dir: &Path, extension: &str) -> Result<PathBuf, String> {
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
     let base_name = format!("Buddy-生成图片-{timestamp}");
     let mut path = download_dir.join(format!("{base_name}.{extension}"));
     let mut suffix = 2_u16;
-    while path.exists() {
+    while tokio::fs::try_exists(&path)
+        .await
+        .map_err(|error| format!("检查下载文件失败：{error}"))?
+    {
         path = download_dir.join(format!("{base_name}-{suffix}.{extension}"));
         suffix += 1;
     }
-    path
+    Ok(path)
 }
 
 async fn generated_image_bytes(data_url: &str, media_type: &str) -> Result<Vec<u8>, String> {
@@ -377,19 +392,28 @@ async fn persist_tool_images(
             continue;
         }
         match generated_image_bytes(&image.data_url, &image.media_type).await {
-            Ok(bytes) if !bytes.is_empty() => match storage::store_image_bytes(
-                app,
-                &image.name,
-                &image.media_type,
-                &bytes,
-                "generated",
-            ) {
-                Ok(attachment) => stored.push(attachment),
-                Err(error) => {
-                    failed += 1;
-                    warn!("保存生成图片失败：{}", error);
+            Ok(bytes) if !bytes.is_empty() => {
+                let storage_app = app.clone();
+                let name = image.name.clone();
+                let media_type = image.media_type.clone();
+                match run_blocking("保存生成图片", move || {
+                    storage::store_image_bytes(
+                        &storage_app,
+                        &name,
+                        &media_type,
+                        &bytes,
+                        "generated",
+                    )
+                })
+                .await
+                {
+                    Ok(attachment) => stored.push(attachment),
+                    Err(error) => {
+                        failed += 1;
+                        warn!("保存生成图片失败：{}", error);
+                    }
                 }
-            },
+            }
             Ok(_) => {
                 failed += 1;
                 warn!("生成图片内容为空：{}", image.name);
@@ -416,21 +440,27 @@ pub async fn save_chat_image(
     media_type: String,
     data_url: String,
 ) -> Result<crate::models::ImageAttachment, String> {
-    storage::store_image_data_url(
-        &app,
-        &name,
-        &media_type,
-        &data_url,
-        5 * 1024 * 1024,
-        "upload",
-    )
+    run_blocking("保存聊天图片", move || {
+        storage::store_image_data_url(
+            &app,
+            &name,
+            &media_type,
+            &data_url,
+            5 * 1024 * 1024,
+            "upload",
+        )
+    })
+    .await
 }
 
 /// 删除已保存的聊天图片附件（用户从输入框移除未发送的图片时调用，
 /// 清理已写盘的孤儿文件；仅限应用数据目录内的附件文件）。
 #[tauri::command]
 pub async fn delete_chat_image(app: tauri::AppHandle, path: String) -> Result<bool, String> {
-    storage::delete_attachment_file(&app, &path)
+    run_blocking("删除聊天图片", move || {
+        storage::delete_attachment_file(&app, &path)
+    })
+    .await
 }
 
 /// 将生图工具的结果保存到系统下载目录。
@@ -444,7 +474,11 @@ pub async fn download_generated_image(
     let bytes = if image.path.is_empty() {
         generated_image_bytes(&image.data_url, &image.media_type).await?
     } else {
-        stored_image_bytes(&app, &image, MAX_GENERATED_IMAGE_BYTES)?
+        let storage_app = app.clone();
+        run_blocking("读取生成图片", move || {
+            stored_image_bytes(&storage_app, &image, MAX_GENERATED_IMAGE_BYTES)
+        })
+        .await?
     };
     if bytes.is_empty() {
         return Err("生成图片内容为空".to_string());
@@ -457,7 +491,7 @@ pub async fn download_generated_image(
     tokio::fs::create_dir_all(&download_dir)
         .await
         .map_err(|error| format!("无法创建下载目录：{error}"))?;
-    let target = unique_download_path(&download_dir, extension);
+    let target = unique_download_path(&download_dir, extension).await?;
     tokio::fs::write(&target, bytes)
         .await
         .map_err(|error| format!("保存图片失败：{error}"))?;
@@ -568,7 +602,8 @@ pub async fn send_message(
         .unwrap_or_else(|| unique_message_id("q", 0));
 
     // 从配置中查找模型对应的 Provider
-    let config = storage::get_config(&app)?;
+    let config_app = app.clone();
+    let config = run_blocking("读取配置", move || storage::get_config(&config_app)).await?;
     let model = config
         .models
         .iter()
@@ -680,13 +715,22 @@ pub async fn send_message(
     } else {
         // 图片预处理失败：不要用 `?` 直接退出——那样会泄漏取消通道、
         // 丢失用户消息，且前端收不到任何流事件提示。
-        if let Err(error) = prepare_images_for_provider(&app, &mut conv_messages) {
-            warn!("[send_message] 图片预处理失败: {}", error);
-            state.sender.lock().take();
-            flush_pending_messages(app.clone(), pending_persistence).await;
-            emitter.error(StopReason::Error, &error, "");
-            return Ok(());
-        }
+        let storage_app = app.clone();
+        conv_messages = match run_blocking("读取聊天图片", move || {
+            prepare_images_for_provider(&storage_app, &mut conv_messages)?;
+            Ok(conv_messages)
+        })
+        .await
+        {
+            Ok(messages) => messages,
+            Err(error) => {
+                warn!("[send_message] 图片预处理失败: {}", error);
+                state.sender.lock().take();
+                flush_pending_messages(app.clone(), pending_persistence).await;
+                emitter.error(StopReason::Error, &error, "");
+                return Ok(());
+            }
+        };
     }
 
     // 每次 send_message 开始时重置"本次都允许"标志，防止上次被中断时残留
@@ -1305,7 +1349,7 @@ pub async fn answer_tool_question(
 /// 从磁盘读取完整的 AppConfig 返回给前端。
 #[tauri::command]
 pub async fn get_config(app: tauri::AppHandle) -> Result<AppConfig, String> {
-    storage::get_config(&app)
+    run_blocking("读取配置", move || storage::get_config(&app)).await
 }
 
 /// 保存应用配置命令
@@ -1330,7 +1374,7 @@ pub async fn save_config(app: tauri::AppHandle, config: AppConfig) -> Result<(),
     // 也避免旧快捷键被注销后新快捷键注册失败（静默失能）。
     crate::hotkey::update_hotkey(&app, &config.hotkey)?;
 
-    storage::save_config(&app, &config)?;
+    run_blocking("保存配置", move || storage::save_config(&app, &config)).await?;
 
     Ok(())
 }
@@ -1376,13 +1420,16 @@ pub async fn load_messages(
     offset: u64,
     limit: u64,
 ) -> Result<Vec<Message>, String> {
-    storage::load_messages(&app, offset, limit)
+    run_blocking("加载历史消息", move || {
+        storage::load_messages(&app, offset, limit)
+    })
+    .await
 }
 
 /// 返回本地历史消息总数，供前端计算分页起点。
 #[tauri::command]
 pub async fn get_message_count(app: tauri::AppHandle) -> Result<u64, String> {
-    storage::message_count(&app)
+    run_blocking("读取消息数量", move || storage::message_count(&app)).await
 }
 
 /// 保存消息命令
@@ -1391,7 +1438,11 @@ pub async fn get_message_count(app: tauri::AppHandle) -> Result<u64, String> {
 /// 若当前分块已满则自动创建新分块，并更新 manifest 计数。
 #[tauri::command]
 pub async fn save_message(app: tauri::AppHandle, message: Message) -> Result<(), String> {
-    storage::append_message(&app, &message).map_err(|e| format!("保存消息失败: {}", e))
+    run_blocking("保存消息", move || {
+        storage::append_message(&app, &message)
+    })
+    .await
+    .map_err(|error| format!("保存消息失败: {error}"))
 }
 
 /// 在后端完成窗口尺寸、底边锚点和工作区裁剪计算，前端只需一次 IPC。
@@ -1590,12 +1641,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn generated_image_download_path_avoids_overwriting_existing_file() {
+    #[tokio::test]
+    async fn generated_image_download_path_avoids_overwriting_existing_file() {
         let directory = tempfile::tempdir().unwrap();
-        let first = unique_download_path(directory.path(), "png");
+        let first = unique_download_path(directory.path(), "png").await.unwrap();
         std::fs::write(&first, b"existing").unwrap();
-        let second = unique_download_path(directory.path(), "png");
+        let second = unique_download_path(directory.path(), "png").await.unwrap();
 
         assert_ne!(first, second);
         assert_eq!(

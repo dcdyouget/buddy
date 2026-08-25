@@ -96,13 +96,6 @@ pub fn run() {
                 app.package_info().version,
                 log_dir,
             ));
-            match storage::migrate_legacy_image_attachments(app.handle()) {
-                Ok(count) if count > 0 => {
-                    log::info!("已将 {} 张旧版 Base64 图片迁移为本地附件", count);
-                }
-                Ok(_) => {}
-                Err(error) => log::warn!("迁移旧版图片附件失败：{}", error),
-            }
             // 加载配置
             let config =
                 storage::get_config(app.handle()).unwrap_or_else(|_| models::AppConfig::default());

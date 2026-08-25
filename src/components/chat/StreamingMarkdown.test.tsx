@@ -241,4 +241,30 @@ describe('StreamingMarkdown', () => {
       container.querySelector('pre .streaming-char-settle'),
     ).toBeNull();
   });
+
+  it('keeps an open streaming fence plain until the fence closes', () => {
+    const { container, rerender } = render(
+      <StreamingMarkdown
+        content={'正文\n\n```ts\nconst value = 1;'}
+        isStreaming
+        revealCount={1}
+        revealKey={1}
+      />,
+    );
+
+    expect(container.querySelector('.is-streaming-code')).not.toBeNull();
+    expect(container.querySelector('.is-streaming-code')?.textContent).toContain(
+      'const value = 1;',
+    );
+
+    rerender(
+      <StreamingMarkdown
+        content={'正文\n\n```ts\nconst value = 1;\n```\n'}
+        isStreaming
+        revealCount={1}
+        revealKey={2}
+      />,
+    );
+    expect(container.querySelector('.is-streaming-code')).toBeNull();
+  });
 });

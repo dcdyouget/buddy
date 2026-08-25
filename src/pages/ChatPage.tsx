@@ -12,6 +12,7 @@ import { GlassPanel } from '@/components/shared/GlassPanel';
 import { IconButton } from '@/components/shared/IconButton';
 import { ApprovalModal } from '@/components/shared/ApprovalModal';
 import { InputDock } from '@/components/chat/InputDock';
+import { LiveMessageBubble } from '@/components/chat/LiveMessageBubble';
 import { MessageBubble } from '@/components/chat/MessageBubble';
 import { ModelDropdown } from '@/components/chat/ModelDropdown';
 import { useDragHandle } from '@/hooks/useDragHandle';
@@ -48,10 +49,6 @@ export function ChatPage() {
     stopGeneration,
     isStreaming,
     streamingModelId,
-    streamingBlocks,
-    streamingRevealCount,
-    streamingRevealRevision,
-    activeToolCalls,
     pendingQuestionId,
     error,
     setError,
@@ -70,10 +67,6 @@ export function ChatPage() {
       stopGeneration: s.stopGeneration,
       isStreaming: s.isStreaming,
       streamingModelId: s.streamingModelId,
-      streamingBlocks: s.streamingBlocks,
-      streamingRevealCount: s.streamingRevealCount,
-      streamingRevealRevision: s.streamingRevealRevision,
-      activeToolCalls: s.activeToolCalls,
       pendingQuestionId: s.pendingQuestion?.id ?? null,
       error: s.error,
       setError: s.setError,
@@ -212,7 +205,6 @@ export function ChatPage() {
   }, [
     cancelSmoothWheelScroll,
     messages,
-    streamingBlocks,
     pendingQuestionId,
     isAtBottom,
     isHistoryVisible,
@@ -321,16 +313,6 @@ export function ChatPage() {
     return map;
   }, [visible]);
 
-  // liveToolCalls 引用稳定: 仅当 activeToolCalls 真的变化时,Object.values 重新计算。
-  // 之前每帧 `Object.values(activeToolCalls)` 分配新数组,让 MessageBubble memo 永远失效。
-  const liveToolCallsForLast = useMemo(
-    () =>
-      isStreaming && Object.keys(activeToolCalls).length > 0
-        ? Object.values(activeToolCalls)
-        : undefined,
-    [isStreaming, activeToolCalls],
-  );
-
   return (
     <div
       ref={dragRef}
@@ -392,8 +374,6 @@ export function ChatPage() {
             const previousUserId = msg.role === 'assistant' ? previousUserIds.get(msg.id) : undefined;
             const questionId = previousUserId ? `msg-${previousUserId}` : undefined;
             const isLast = isStreaming && msg.role === 'assistant' && i === arr.length - 1;
-            const isLatestAssistant =
-              msg.role === 'assistant' && i === arr.length - 1;
             // 工具循环会连续产生多个 assistant 消息；视觉上应作为同一条回答紧凑衔接。
             const isContinuation =
               msg.role === 'assistant' && i > 0 && arr[i - 1].role === 'assistant';
@@ -401,28 +381,24 @@ export function ChatPage() {
               msg.role === 'assistant' &&
               i < arr.length - 1 &&
               arr[i + 1].role === 'assistant';
-            // 流式过程中将 live blocks 注入最后一条 assistant 消息
-            const displayMsg =
-              isLast && streamingBlocks.length > 0
-                ? { ...msg, blocks: streamingBlocks }
-                : msg;
-            // 流式最后一条:把 chatStore 累积的 live tool_calls 注入显示
-            // (liveToolCallsForLast 引用稳定,只有 activeToolCalls 真变时才更新)
+            if (isLast) {
+              return (
+                <LiveMessageBubble
+                  key={msg.id}
+                  message={msg}
+                  questionId={questionId}
+                  isContinuation={isContinuation}
+                  continuesToNext={continuesToNext}
+                />
+              );
+            }
             return (
               <MessageBubble
                 key={msg.id}
-                message={displayMsg}
-                isStreaming={isLast}
+                message={msg}
                 questionId={questionId}
                 isContinuation={isContinuation}
                 continuesToNext={continuesToNext}
-                liveToolCalls={isLast ? liveToolCallsForLast : undefined}
-                streamingRevealCount={
-                  isLatestAssistant ? streamingRevealCount : 0
-                }
-                streamingRevealRevision={
-                  isLatestAssistant ? streamingRevealRevision : 0
-                }
               />
             );
           })}

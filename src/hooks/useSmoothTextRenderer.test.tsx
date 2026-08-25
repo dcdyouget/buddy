@@ -24,6 +24,14 @@ function RendererHarness() {
   return null;
 }
 
+function liveText(): string {
+  return useChatStore
+    .getState()
+    .streamingBlocks.filter((block) => block.type === 'text')
+    .map((block) => block.content)
+    .join('');
+}
+
 let visibilityState: DocumentVisibilityState = 'visible';
 let frameCallback: FrameRequestCallback | undefined;
 
@@ -76,7 +84,7 @@ describe('useSmoothTextRenderer 后台输出', () => {
     act(() => {
       frameCallback?.(0);
     });
-    expect(useChatStore.getState().messages[0].content).toBe('正常');
+    expect(liveText()).toBe('正常');
     expect(useChatStore.getState().pendingTextBuffer).toBe('');
   });
 
@@ -89,7 +97,7 @@ describe('useSmoothTextRenderer 后台输出', () => {
     });
 
     expect(useChatStore.getState().pendingTextBuffer).toBe('');
-    expect(useChatStore.getState().messages[0].content).toBe('后台继续😀');
+    expect(liveText()).toBe('后台继续😀');
   });
 
   it('重新显示时清理补发事件，随后恢复逐字速度', async () => {
@@ -104,7 +112,7 @@ describe('useSmoothTextRenderer 后台输出', () => {
     });
 
     expect(useChatStore.getState().pendingTextBuffer).toBe('');
-    expect(useChatStore.getState().messages[0].content).toBe('积压');
+    expect(liveText()).toBe('积压');
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(600);
@@ -140,7 +148,7 @@ describe('useSmoothTextRenderer 后台输出', () => {
     act(() => {
       frameCallback?.(0);
     });
-    expect(useChatStore.getState().messages[0].content).toBe('正文');
+    expect(liveText()).toBe('正文');
     expect(useChatStore.getState().streamingBlocks).toEqual([
       { type: 'thinking', content: '已经思考完成', is_open: false },
       { type: 'text', content: '正文' },

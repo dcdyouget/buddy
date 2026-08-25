@@ -69,8 +69,8 @@ pub struct ToolCall {
 
 /// 消息携带的图片附件：用户消息用于模型输入，tool 消息用于展示生成结果。
 ///
-/// 新消息只持久化 `path`。`data_url` 仅用于 IPC 导入、Provider 请求及兼容迁移
-/// 旧聊天记录，写盘前必须清空，避免 Base64 膨胀消息分块。
+/// 消息只持久化 `path`。`data_url` 仅用于 IPC 导入和 Provider 请求，
+/// 写盘前必须清空，避免 Base64 膨胀消息分块。
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ImageAttachment {
     pub id: String,

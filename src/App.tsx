@@ -10,7 +10,7 @@
  * 5. 应用入口动画：frameless 窗口的淡入缩放效果
  */
 
-import { useCallback, useEffect } from 'react';
+import { Suspense, lazy, useCallback, useEffect } from 'react';
 import { useConfigStore } from '@/stores/configStore';
 import { useUIStore } from '@/stores/uiStore';
 import { useChatStore } from '@/stores/chatStore';
@@ -21,11 +21,18 @@ import {
 } from '@/utils/windowEvents';
 import { EmptyPage } from '@/pages/EmptyPage';
 import { NoApiKeyPage } from '@/pages/NoApiKeyPage';
-import { ChatPage } from '@/pages/ChatPage';
-import { SettingsPage } from '@/pages/SettingsPage';
 import { SlideInPanel } from '@/components/shared/SlideInPanel';
 import { WindowEntrance } from '@/components/shared/WindowEntrance';
 import { resizeWindowToPage } from '@/utils/windowResize';
+
+const ChatPage = lazy(() =>
+  import('@/pages/ChatPage').then(({ ChatPage }) => ({ default: ChatPage })),
+);
+const SettingsPage = lazy(() =>
+  import('@/pages/SettingsPage').then(({ SettingsPage }) => ({
+    default: SettingsPage,
+  })),
+);
 
 /**
  * 这是一个轻量级的页面路由器，避免引入 react-router 增加包体积
@@ -244,22 +251,26 @@ function App() {
       onCompactRequested={openCompactAfterIdle}
     >
       {/* 背景页面 */}
-      <PageRenderer />
+      <Suspense fallback={null}>
+        <PageRenderer />
+      </Suspense>
 
       {/* 设置页覆层：从右滑入（在 ChatPage 之上，不卸载背景） */}
       <SlideInPanel from="right" show={currentPage === 'settings'}>
         {currentPage === 'settings' && (
-          <SettingsPage
-            onBack={async () => {
-              const prev = useUIStore.getState().previousPage ?? 'empty';
-              if (prev === 'empty' || prev === 'noapikey') {
-                await resizeWindowToPage('conversation');
-                await setPage('conversation');
-                return;
-              }
-              await setPage(prev);
-            }}
-          />
+          <Suspense fallback={null}>
+            <SettingsPage
+              onBack={async () => {
+                const prev = useUIStore.getState().previousPage ?? 'empty';
+                if (prev === 'empty' || prev === 'noapikey') {
+                  await resizeWindowToPage('conversation');
+                  await setPage('conversation');
+                  return;
+                }
+                await setPage(prev);
+              }}
+            />
+          </Suspense>
         )}
       </SlideInPanel>
     </WindowEntrance>

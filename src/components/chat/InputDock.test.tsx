@@ -9,6 +9,7 @@ import { InputDock } from './InputDock';
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 const visionModel: ModelInfo = {
@@ -163,5 +164,39 @@ describe('InputDock', () => {
     );
 
     expect(queryByTitle('添加图片')).toBeNull();
+  });
+
+  it('指针炫光每帧最多更新一次并复用元素边界', () => {
+    const requestFrame = vi.fn((_callback: FrameRequestCallback) => 1);
+    vi.stubGlobal('requestAnimationFrame', requestFrame);
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    const getBounds = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockReturnValue({ left: 10, top: 20 } as DOMRect);
+    const { container } = render(
+      <InputDock
+        isStreaming={false}
+        selectedModel={visionModel}
+        draftInput=""
+        draftImages={[]}
+        onDraftChange={() => {}}
+        onAddImages={() => {}}
+        onRemoveImage={() => {}}
+        onSend={() => {}}
+        onStop={() => {}}
+      />,
+    );
+    const dock = container.querySelector<HTMLElement>('.input-dock')!;
+    requestFrame.mockClear();
+
+    fireEvent.pointerEnter(dock, { clientX: 20, clientY: 30 });
+    fireEvent.pointerMove(dock, { clientX: 30, clientY: 40 });
+    fireEvent.pointerMove(dock, { clientX: 50, clientY: 60 });
+
+    expect(getBounds).toHaveBeenCalledTimes(1);
+    expect(requestFrame).toHaveBeenCalledTimes(1);
+    requestFrame.mock.calls[0][0](0);
+    expect(dock.style.getPropertyValue('--composer-pointer-x')).toBe('40px');
+    expect(dock.style.getPropertyValue('--composer-pointer-y')).toBe('40px');
   });
 });

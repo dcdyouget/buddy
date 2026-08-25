@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render } from '@testing-library/react';
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { Message, ToolCall } from '@/types';
@@ -38,7 +38,7 @@ const liveToolCalls: ToolCall[] = [
 ];
 
 describe('MessageBubble 工具调用位置', () => {
-  it('流式无内容时每个工具只渲染一次', () => {
+  it('流式无内容时每个工具只渲染一次', async () => {
     const { container } = render(
       <MessageBubble
         message={assistantMessage([])}
@@ -47,7 +47,9 @@ describe('MessageBubble 工具调用位置', () => {
       />,
     );
 
-    expect(container.querySelectorAll('.websearch-section')).toHaveLength(2);
+    await waitFor(() => {
+      expect(container.querySelectorAll('.websearch-section')).toHaveLength(2);
+    });
     expect(
       Array.from(
         container.querySelectorAll('.websearch-section-query'),
@@ -56,7 +58,7 @@ describe('MessageBubble 工具调用位置', () => {
     ).toEqual(['Google Alphabet 最新业务', 'Alphabet GOOGL 股价']);
   });
 
-  it('思考内容后到达时仍把工具保持在思考过程之前', () => {
+  it('思考内容后到达时仍把工具保持在思考过程之前', async () => {
     const { container } = render(
       <MessageBubble
         message={assistantMessage([
@@ -71,6 +73,9 @@ describe('MessageBubble 工具调用位置', () => {
       />,
     );
 
+    await waitFor(() => {
+      expect(container.querySelectorAll('.websearch-section')).toHaveLength(2);
+    });
     const flow = container.querySelector('.assistant-content-flow');
     expect(flow?.children).toHaveLength(3);
     expect(flow?.children[0].classList.contains('websearch-section')).toBe(true);

@@ -134,8 +134,13 @@ describe('chatStore 流式中断收尾', () => {
       }),
     );
 
+    const messagesBeforeReveal = useChatStore.getState().messages;
     useChatStore.getState().smoothTextDelta(1);
-    expect(useChatStore.getState().messages[0].content).toBe('答');
+    expect(useChatStore.getState().messages).toBe(messagesBeforeReveal);
+    expect(useChatStore.getState().messages[0].content).toBe('');
+    expect(useChatStore.getState().streamingBlocks).toEqual([
+      { type: 'text', content: '答' },
+    ]);
     expect(useChatStore.getState().isStreaming).toBe(true);
 
     useChatStore.getState().smoothTextDelta(1);
@@ -154,11 +159,32 @@ describe('chatStore 流式中断收尾', () => {
 
     store.feedTextDelta('A😀');
     store.smoothTextDelta(1);
-    expect(useChatStore.getState().messages[0].content).toBe('A');
+    expect(useChatStore.getState().messages[0].content).toBe('');
+    expect(useChatStore.getState().streamingBlocks).toEqual([
+      { type: 'text', content: 'A' },
+    ]);
 
     useChatStore.getState().smoothTextDelta(1);
-    expect(useChatStore.getState().messages[0].content).toBe('A😀');
+    expect(useChatStore.getState().streamingBlocks).toEqual([
+      { type: 'text', content: 'A😀' },
+    ]);
     expect(useChatStore.getState().pendingTextBuffer).toBe('');
+  });
+
+  it('流式错误时将已显示正文一次性提交到消息', () => {
+    const store = useChatStore.getState();
+    store.feedTextDelta('已生成内容');
+    store.flushTextBuffer();
+
+    expect(useChatStore.getState().messages[0].content).toBe('');
+    store.handleStreamError('network', '网络错误');
+
+    expect(useChatStore.getState().messages[0]).toEqual(
+      expect.objectContaining({
+        content: '已生成内容',
+        blocks: [{ type: 'text', content: '已生成内容' }],
+      }),
+    );
   });
 
   it('丢弃尚未完成且参数只有半截 JSON 的工具调用', () => {

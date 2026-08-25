@@ -203,51 +203,6 @@ pub fn delete_attachment_file(app: &tauri::AppHandle, path: &str) -> Result<bool
     }
 }
 
-/// 将旧版聊天记录中的 Base64 图片迁移为本地附件文件并重写分块。
-pub fn migrate_legacy_image_attachments(app: &tauri::AppHandle) -> Result<usize, String> {
-    let _guard = APPEND_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    let dir = ensure_data_dir(app)?;
-    let manifest = read_manifest(&dir);
-    let mut migrated = 0;
-
-    for meta in &manifest.chunks {
-        let mut chunk = read_chunk(&dir, &meta.file)?;
-        let mut changed = false;
-        for message in &mut chunk.messages {
-            for image in &mut message.images {
-                if !image.path.is_empty() || !image.data_url.starts_with("data:") {
-                    continue;
-                }
-                match store_image_data_url(
-                    app,
-                    &image.name,
-                    &image.media_type,
-                    &image.data_url,
-                    25 * 1024 * 1024,
-                    "migrated",
-                ) {
-                    Ok(stored) => {
-                        image.id = stored.id;
-                        image.path = stored.path;
-                        image.data_url.clear();
-                        migrated += 1;
-                        changed = true;
-                    }
-                    Err(error) => warn!(
-                        "[storage::migrate_legacy_image_attachments] 跳过 {}: {}",
-                        image.name, error
-                    ),
-                }
-            }
-        }
-        if changed {
-            write_chunk(&dir, &meta.file, &chunk)?;
-        }
-    }
-
-    Ok(migrated)
-}
-
 /// 追加一条新消息到分块存储
 ///
 /// 分块逻辑：

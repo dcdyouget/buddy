@@ -4,7 +4,7 @@ import { parseThinkBlocks } from '@/utils/thinkParser';
 import { MessageActions } from './MessageActions';
 import { StreamingMarkdown } from './StreamingMarkdown';
 import { ThinkSection } from './ThinkSection';
-import { ToolSection } from './ToolSection';
+import { DeferredToolSection } from './DeferredToolSection';
 import { AttachmentImage } from './AttachmentImage';
 
 /**
@@ -125,7 +125,11 @@ function AssistantContent({
     <div className="assistant-content-flow">
       {/* 工具在任何内容出现前被调用时，固定渲染在第一个 block 前。 */}
       {(toolCallsByIndex.get(-1) || []).map((tc) => (
-        <ToolSection key={tc.id} toolCall={tc} isStreaming={isStreaming} />
+        <DeferredToolSection
+          key={tc.id}
+          toolCall={tc}
+          isStreaming={isStreaming}
+        />
       ))}
       {blocks.map((block, i) => {
         const isLast = i === blocks.length - 1;
@@ -134,7 +138,7 @@ function AssistantContent({
           <Fragment key={`frag-${i}`}>
             {renderBlock(block, i, isLast)}
             {tcs.map((tc) => (
-              <ToolSection
+              <DeferredToolSection
                 key={tc.id}
                 toolCall={tc}
                 isStreaming={isStreaming}
@@ -145,7 +149,11 @@ function AssistantContent({
       })}
       {/* 所有 block 之后的兜底工具调用。 */}
       {(toolCallsByIndex.get(blocks.length) || []).map((tc) => (
-        <ToolSection key={tc.id} toolCall={tc} isStreaming={isStreaming} />
+        <DeferredToolSection
+          key={tc.id}
+          toolCall={tc}
+          isStreaming={isStreaming}
+        />
       ))}
     </div>
   );
@@ -186,6 +194,7 @@ export const MessageBubble = memo(function MessageBubble({
       className={[
         'message-row',
         isUser ? 'is-user' : 'is-assistant',
+        isStreaming ? 'is-streaming' : '',
         isContinuation ? 'is-continuation' : '',
         continuesToNext ? 'has-continuation' : '',
       ].filter(Boolean).join(' ')}

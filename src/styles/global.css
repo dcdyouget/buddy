@@ -633,7 +633,7 @@ body {
   mask-composite: exclude;
   opacity: 0.68;
   pointer-events: none;
-  animation: composer-ambient-glow 8s ease-in-out infinite alternate;
+  background-position: 50% 50%;
   transition:
     opacity var(--duration-normal) var(--ease-standard),
     padding var(--duration-normal) var(--ease-standard);
@@ -669,7 +669,7 @@ body {
 .input-dock:focus-within::before {
   padding: 2px;
   opacity: 1;
-  animation-duration: 4.5s;
+  animation: composer-ambient-glow 4.5s ease-in-out infinite alternate;
 }
 
 .input-dock:hover::after,
@@ -2952,6 +2952,16 @@ body {
 }
 
 /* ── AI 消息 Markdown 内容样式 ── */
+
+.message-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto calc(var(--space-10) * 2);
+}
+
+.message-row.is-streaming {
+  content-visibility: visible;
+  contain-intrinsic-size: none;
+}
 
 .ai-message-content,
 .ai-message-content p,

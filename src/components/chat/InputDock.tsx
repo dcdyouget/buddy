@@ -83,10 +83,18 @@ export function InputDock({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const lastCompositionEndAtRef = useRef(Number.NEGATIVE_INFINITY);
+  const glowFrameRef = useRef(0);
+  const glowBoundsRef = useRef<DOMRect | null>(null);
+  const glowPointRef = useRef({ x: 0, y: 0 });
   const [isSavingImages, setIsSavingImages] = useState(false);
   // 保持最新的 isStreaming 值供事件回调使用（避免闭包过期）
   const isStreamingRef = useRef(isStreaming);
   isStreamingRef.current = isStreaming;
+
+  useEffect(
+    () => () => window.cancelAnimationFrame(glowFrameRef.current),
+    [],
+  );
 
   // 输入内容变化时，自动调整 textarea 高度（最高 120px）
   // 紧凑窗口（如 EmptyPage）禁用自动撑高，使用固定高度 + 滚动条
@@ -255,19 +263,36 @@ export function InputDock({
     }
   };
 
+  const handlePointerEnter = (e: PointerEvent<HTMLDivElement>) => {
+    glowBoundsRef.current = e.currentTarget.getBoundingClientRect();
+  };
+
   const handlePointerMove = (e: PointerEvent<HTMLDivElement>) => {
-    const bounds = e.currentTarget.getBoundingClientRect();
-    e.currentTarget.style.setProperty(
-      '--composer-pointer-x',
-      `${e.clientX - bounds.left}px`,
-    );
-    e.currentTarget.style.setProperty(
-      '--composer-pointer-y',
-      `${e.clientY - bounds.top}px`,
-    );
+    const element = e.currentTarget;
+    const bounds = glowBoundsRef.current;
+    if (!bounds) return;
+    glowPointRef.current = {
+      x: e.clientX - bounds.left,
+      y: e.clientY - bounds.top,
+    };
+    if (glowFrameRef.current !== 0) return;
+    glowFrameRef.current = window.requestAnimationFrame(() => {
+      glowFrameRef.current = 0;
+      element.style.setProperty(
+        '--composer-pointer-x',
+        `${glowPointRef.current.x}px`,
+      );
+      element.style.setProperty(
+        '--composer-pointer-y',
+        `${glowPointRef.current.y}px`,
+      );
+    });
   };
 
   const handlePointerLeave = (e: PointerEvent<HTMLDivElement>) => {
+    window.cancelAnimationFrame(glowFrameRef.current);
+    glowFrameRef.current = 0;
+    glowBoundsRef.current = null;
     e.currentTarget.style.setProperty('--composer-pointer-x', '50%');
     e.currentTarget.style.setProperty('--composer-pointer-y', '0px');
   };
@@ -275,6 +300,7 @@ export function InputDock({
   return (
     <div
       className={`input-dock ${hideBorder ? 'is-standalone' : ''}`}
+      onPointerEnter={handlePointerEnter}
       onPointerMove={handlePointerMove}
       onPointerLeave={handlePointerLeave}
       style={{
