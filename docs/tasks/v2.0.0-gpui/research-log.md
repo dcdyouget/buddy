@@ -1234,3 +1234,55 @@ Phase 00 反复暴露**同一类问题**：**「文档里的意图被当成了�
 | 「`ThemeSettings` 闭包 12 个」 | 实为 30 个（S00-01） |
 
 **规则已立于 `RULES.md` §11。Phase 01+ 首次接触任何文档结论时，应先验证再采用。**
+
+---
+
+## 19. 引擎层移植实测（由 Phase 02 得出）
+
+> 完整证据：`docs/specs/phase-02/S02-0*.md`。产物：`crates/engine/src/{models,streaming,tools,providers,storage,chat}`、`crates/ui/src/chat_bridge.rs`。
+
+### 19.1 移植量
+
+| 模块 | 与 v1（tag `v1-final`）的差异 |
+|------|---------------------------|
+| `models/` `mcp/` `tools/` `storage/*` | **逐字节一致** |
+| `providers/` | 1 行（edition 2024 模式修正，与 S00-08 预测吻合） |
+| `streaming.rs` | emitter `AppHandle` → channel（25 行） |
+| `storage.rs` | 9 处 `AppHandle` → `data_dir: &Path`；默认目录与 Tauri 同算法（`dirs::data_dir()/com.buddy.chat`） |
+| `commands.rs` → `chat.rs` | 只替换 Tauri 部分；16 个命令中 14 个成为 `ChatEngine` 方法，2 个窗口类归 Phase 07 |
+
+测试：v1 174 个 → engine 165 个（差 9 个全为窗口类）+ 新增集成测试 20 个。
+
+### 19.2 ⚠️ 终态事件不是 provider 发的
+
+provider 事件流以 `TurnEnd` 结束；`Done` / `Error` 由编排层（v1 `commands.rs` 的 `TerminalStreamEvent`，现 `chat.rs`）在**持久化与释放生成占用之后**发射。只迁 provider 不迁编排，UI 永远收不到 `Done`。
+
+### 19.3 ⚠️ 两个 tokio ↔ GPUI 陷阱（S02-06）
+
+| # | 陷阱 | 后果 | 做法 |
+|---|------|------|------|
+| 1 | `gpui_tokio::Tokio::spawn` 返回的 `Task` **被 drop 即 abort** tokio 任务 | 视图销毁 / 关窗即中止生成（违反硬约束 7），且 `send_message` 来不及释放占用 → 之后每次发送都报「已有生成任务正在进行中」 | `Tokio::handle(cx).spawn`（分离式）；反证实测场景 2/3/4 全 FAIL |
+| 2 | `ChatEngine` 的 async 方法内部 `spawn_blocking` | 在 GPUI 前台直接 `await` → panic `no reactor running` | 一律经 `chat_bridge::spawn_engine` |
+
+> S00-08 的集成骨架（`docs/evidence/s00-08/engine-integration.md` §4）用的正是 `Tokio::spawn(..).detach()`；`detach` 时无害，但一旦把 Task 交给视图持有就会触发陷阱 1。
+
+### 19.4 测试环境的两个干扰源
+
+| 干扰 | 现象 | 处理 |
+|------|------|------|
+| 本机 `HTTP(S)_PROXY`（Clash） | reqwest 让回环地址也走代理 → mock 收到 502 | `.cargo/config.toml` `[env] NO_PROXY=127.0.0.1,localhost` |
+| 本机有进程探测本地监听端口 | mock 收到 `HEAD / HTTP/1.1`，占掉应答位 → 测试 10 次失败 3 次 | mock 只接受 POST；全量 30 次 0 失败 |
+
+### 19.5 又一批「文档 ≠ 代码」（延续 §18.4）
+
+| 文档 | 写的 | 代码实际 |
+|------|------|---------|
+| `ipc-contract.md` | 「Rust 当前没有发射 `thinking_end`」 | `streaming.rs` `thinking_end()` 会发 |
+| `ipc-contract.md` | 12 个命令 | 实际 16 个 |
+| `sse-and-api.md` | 「当前无 system prompt」 | `BUDDY_SYSTEM_PROMPT` 每次注入 |
+| `02-engine.md` D10 | 「usage/token 计数不得丢失」 | v1 的 usage 只写日志，从未进入事件或 UI |
+
+### 19.6 v1 既有问题（非迁移引入）
+
+联网搜索的 live 测试在本机网络下 v1 与 engine 同样失败（bing：「不受信任或 query 不一致的搜索重定向」；so360 无相关结果）。
+
