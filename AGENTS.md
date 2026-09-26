@@ -112,7 +112,6 @@ Buddy is a cross-platform (macOS / Windows) AI chat tool. Press a global hotkey 
 | `docs/design/pages-and-states.md` | 7 page specs + state machine | When building pages |
 | `docs/design/component-mapping.md` | Design → React component map | When building components |
 | `docs/design/rust-architecture.md` | Rust module layout & responsibilities | When writing Rust |
-| `docs/design/ipc-contract.md` | invoke/listen contract | When connecting frontend ↔ backend |
 | `docs/design/sse-and-api.md` | Streaming, fetch models, speed test | When writing API code |
 | `docs/release-workflow.md` | macOS ARM64 / Windows release, environment checks, OSS updater flow | When implementing or executing releases |
 | `docs/CONVENTIONS.md` | Coding rules for ALL agents | **Always** — read once, follow always |
