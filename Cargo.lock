@@ -754,6 +754,7 @@ dependencies = [
  "async-trait",
  "base64",
  "chrono",
+ "dirs",
  "dom_query",
  "futures-util",
  "gpui",

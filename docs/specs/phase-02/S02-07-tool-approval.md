@@ -23,6 +23,7 @@
 | S02-07-2 | 配对机制 | `oneshot` 按请求 id 配对；UI 未响应时的超时/取消语义与 v1 一致 |
 | S02-07-3 | 安全等级 | `ToolSafety` 决定是否需要审批，规则原样保留 |
 | S02-07-4 | 测试 | 用 mock provider 返回 tool_call → 审批通过 / 拒绝 两条路径各一测试（可复用 `crates/engine/tests/common/`） |
+| S02-07-6 | 持久化归属 | v1 `send_message` 由后端保存新 user 消息、每轮 assistant 消息与 tool result（用 `storage::append_messages` 批量写一轮）；`save_message` 仅供 UI 显式追加单条。迁入 engine 时保持同一归属（原 `storage-design.md`，S02-04 移交） |
 | S02-07-5 | **终态事件由编排层发射** | S02-01 实测：provider 事件流以 `TurnEnd` 结束，`Done` / `Error` 由 v1 `commands.rs:642-660` 的 `TerminalStreamEvent` 依 `StreamOutcome` 发射。**必须随工具循环一并迁入 engine**，否则 v2 UI 永远收不到 `Done` |
 
 ## 验收标准
