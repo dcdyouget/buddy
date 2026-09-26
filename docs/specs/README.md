@@ -11,7 +11,7 @@
 | Phase | 名称 | spec 数 | done | 准入条件 |
 |-------|------|--------|------|---------|
 | 00 | 可行性 Spike | **9** | **9** | — |
-| 01 | 工程骨架与分层 | 6 | 4 | **Phase 00 Go ✅ 已满足** |
+| 01 | 工程骨架与分层 | 6 | 5 | **Phase 00 Go ✅ 已满足** |
 | 02 | 引擎层移植 | 9 | 5 | S01-01 |
 | 03 | 主题与设计令牌 | 7 | 0 | S01-01 |
 | 04 | Markdown 栈 | 9 | 0 | S01-01 |
@@ -21,7 +21,7 @@
 | 08 | 更新与发布 | 11 | 0 | S07-* |
 | 09 | 平台对齐（Windows） | 9 | 0 | macOS 全链路验收 |
 | 10 | 测试与验收 | 7 | 0 | 与 02-09 并行 |
-| | **合计** | **104** | **18** | |
+| | **合计** | **104** | **19** | |
 
 > **准入条件是必要条件而非充分条件**：具体以各 spec 自身的「依赖」列为准（`RULES.md` §9.2）。
 > 规范强制 **Phase 单调性**：Phase `NN` 的 spec 只能依赖 Phase ≤ `NN` 的 spec（`RULES.md` §9.1）。
@@ -59,7 +59,7 @@
 | S01-02 | GPUI 依赖来源与 rev 锁定 | S01-01 | `done` | `phase-01/S01-02-gpui-source.md` |
 | S01-03 | 许可证分层声明与 NOTICE | S01-01 | `done` | `phase-01/S01-03-licensing.md` |
 | S01-04 | 防 GPL 污染 CI 断言 | S01-03 | `done` | `phase-01/S01-04-license-guard.md` |
-| S01-05 | 迁移期目录与退路分支 | S01-01 | `doing` | `phase-01/S01-05-fallback.md` |
+| S01-05 | 迁移期目录与退路分支 | S01-01 | `done` | `phase-01/S01-05-fallback.md` |
 | S01-06 | 建立 v1 视觉与行为基线 | S01-01 | `todo` | `phase-01/S01-06-v1-baseline.md` |
 
 ---
@@ -277,3 +277,4 @@
 | 2026-09-26 | S02-01 | `todo` → `doing` → `done` | providers 26 测试与 v1 一致；源码仅 1 处 edition 2024 修正。mock SSE 两个 provider 通过。**发现**：终态 `Done`/`Error` 由编排层发射（→ S02-07-5）；本机代理使回环 502（→ `.cargo/config.toml`）。首次退役设计文档 `rust-data-models.md`，并修正纪律脚本 3 处缺陷（S01-04 事后修正）。commit `89f92b8` |
 | 2026-09-26 | S02-04 | `todo` → `doing` → `done` | storage 11 测试与 v1 一致；`AppHandle` → `data_dir: &Path`；默认目录与 Tauri 同算法（实测 `~/Library/Application Support/com.buddy.chat`）；往返测试 4 个。退役 `storage-design.md`。**风险**：v1/v2 同时写无跨进程锁。commit `66a6314` |
 | 2026-09-26 | S02-05 | `todo` → `doing` → `done` | 取消语义首次实测：两 provider × 读流中 / 等响应头，取消→返回 15–85 µs，连接随之断开。usage 在 v1 仅记日志（验收项不适用）。`sse-and-api.md` 编排段落改归 S02-07。commit `596b441` |
+| 2026-09-26 | S01-05 | `doing` → `done` | 用户实机运行 tag 版本确认可用。用户决策：先只提交不推送 → 远端推送与分支保护暂缓（已在 spec 完成记录注明）。演练工作树与宣传视频成品按用户要求删除 |

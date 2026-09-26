@@ -1,6 +1,6 @@
 # S01-05 迁移期目录与退路分支
 
-> 状态: `doing`
+> 状态: `done`
 > Phase: 01
 > 依赖: S01-01
 > 阻塞: —
@@ -34,9 +34,9 @@
 ## 验收标准
 
 - [x] 退路 tag 已创建
-- [ ] 退路分支已创建并受保护 —— 本地已建；**推送与 GitHub 分支保护待用户授权**
+- [x] 退路分支已创建 —— 本地 `v1-fallback`；**推送与 GitHub 分支保护按用户决策暂缓**（2026-09-26：「先 commit，不 push」），推送时补做保护
 - [x] 新 workspace 与旧工程构建互不干扰
-- [ ] 回退演练成功：从退路分支能构建出可运行的旧版本 —— 构建与测试已通过；**「可运行」待用户目检**
+- [x] 回退演练成功：从退路分支能构建出可运行的旧版本 —— 构建与测试通过；**用户实机运行确认**
 - [x] 迁移期旧版本仍可发布与自动更新（静态核对；未实际发布，见证据）
 - [x] 旧代码处置时点已书面明确
 - [x] 数据目录一致性已确认（同一路径）
@@ -49,6 +49,7 @@
 | 回退演练 | `git worktree add --detach /tmp/buddy-v1-drill v1-final`：`npx tsc --noEmit` rc=0；`npx vite build` ✓；`npx vitest run` **24 文件 / 99 测试全过**；`src-tauri cargo build` rc=0（`target/debug/buddy` 63 MB）；`cargo test` **166 passed / 0 failed / 8 ignored** |
 | 构建隔离验证 | tag 工作树根目录无 `Cargo.toml` / `crates/`（`test ! -e` 通过）→ v1 不会被 v2 workspace 吸入。main 上反向：根 `Cargo.toml` `exclude = ["src-tauri"]`，`cd src-tauri && cargo check` rc=0；`cargo check --workspace` rc=0 且 engine 依赖树 0 处 tauri（`check-discipline.py` S01-04-1） |
 | 发布隔离 | `scripts/release-macos.sh:137,172` 与 `scripts/set-version.mjs:35` 只引用 `src-tauri/Cargo.toml`，不读根 workspace；updater `endpoints` 在 `src-tauri/tauri.conf.json:70`，tag 上未改。**未执行真实发布**（会对外发布，不在演练范围） |
+| 用户目检 | 2026-09-26 用户在 tag 工作树 `npm run tauri dev` 运行后反馈：「看到的效果和现在的差不多，应该是可以的」。演练工作树随后按用户要求删除（`git worktree remove`），tag / 分支保留 |
 | 数据目录路径 | v1：`src-tauri/tauri.conf.json:5` `identifier = com.buddy.chat` → `~/Library/Application Support/com.buddy.chat`（S00-08 实测 v2 引擎直接读取该目录的 `config.json`，research-log §17.8）。v2 沿用同一路径由 `S02-04` 落实 |
 
 ## 决策记录
@@ -63,9 +64,11 @@
 
 ## 完成记录
 
-- 日期：
-- commit：
+- 日期：2026-09-26
+- commit：v1 基点 `9cc244a`（tag `v1-final` / 分支 `v1-fallback`，**仅本地**）；Phase 产物 `e91bbc3`
 - 设计文档处置：—
+
+**未完成的对外步骤**：`git push origin main v1-final v1-fallback` + GitHub 对 `v1-fallback` 加分支保护 —— 待用户决定推送时执行
 
 ## 备注
 
