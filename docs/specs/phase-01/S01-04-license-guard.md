@@ -232,5 +232,6 @@ warning: patch `tree-sitter-language v0.1.8 (…)` was not used in the crate gra
 | S01-04-9 对已退役路径的历史引用（spec 头 `退役设计文档` 字段）误报 | 同上 | 已退役路径在 spec / tasks 中豁免；在 `AGENTS.md` / `CLAUDE.md` 中仍报错（RULES §7.5） |
 | S01-04-15 `git check-ignore` 不报告**已跟踪**路径 → 文档入库（`e91bbc3`）后，往 `.gitignore` 加 `docs/specs` 不再被拦（新 spec 文件会被静默忽略） | **拦截验证 7 由 OK 变 FAIL** | 加 `--no-index` |
 | CI 浅克隆无 git 历史 | 推理（新检查依赖 `git log`） | workflow `fetch-depth: 0` |
+| 拦截验证 1 注入 `gpui` 后只恢复 `engine/Cargo.toml`，`cargo tree` 写入 `Cargo.lock` 的 `buddy-engine → gpui` 条目残留，随 `89f92b8`..`fac8502` 被提交（依赖声明本身从未含 gpui） | 提交后 `git status` 出现 `Cargo.lock` 的 `- "gpui"` diff | 自测同时备份恢复 `Cargo.lock`；以正确 lock 追加提交 |
 
 新增拦截验证 9（入口残留已退役路径）、10（登记退役但文件仍在），**共 10 项全部通过**。

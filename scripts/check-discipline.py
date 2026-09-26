@@ -640,6 +640,10 @@ def self_test() -> int:
     # **测不到真正要测的东西**。
     eng = ROOT / "crates" / "engine" / "Cargo.toml"
     backup = eng.read_text(encoding="utf-8")
+    # cargo tree 会把注入的依赖写进 Cargo.lock；只恢复 Cargo.toml 会留下一条虚假的
+    # engine → gpui 锁条目（曾随 89f92b8..fac8502 被提交），故一并备份恢复
+    lock = ROOT / "Cargo.lock"
+    lock_backup = lock.read_bytes() if lock.exists() else None
     try:
         eng.write_text(
             backup.replace(
@@ -663,6 +667,8 @@ def self_test() -> int:
             failures += 1
     finally:
         eng.write_text(backup, encoding="utf-8")
+        if lock_backup is not None:
+            lock.write_bytes(lock_backup)
 
     # ── 验证 2：文档路径检查能拦住幽灵路径 ──
     tmpdir = Path(tempfile.mkdtemp())
