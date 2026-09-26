@@ -12,7 +12,7 @@
 |-------|------|--------|------|---------|
 | 00 | 可行性 Spike | **9** | **9** | — |
 | 01 | 工程骨架与分层 | 6 | 5 | **Phase 00 Go ✅ 已满足** |
-| 02 | 引擎层移植 | 9 | 8 | S01-01 |
+| 02 | 引擎层移植 | 9 | **9** | S01-01 |
 | 03 | 主题与设计令牌 | 7 | 0 | S01-01 |
 | 04 | Markdown 栈 | 9 | 0 | S01-01 |
 | 05 | 聊天界面 | 18 | 0 | S03-*, S04-* |
@@ -21,7 +21,7 @@
 | 08 | 更新与发布 | 11 | 0 | S07-* |
 | 09 | 平台对齐（Windows） | 9 | 0 | macOS 全链路验收 |
 | 10 | 测试与验收 | 7 | 0 | 与 02-09 并行 |
-| | **合计** | **104** | **22** | |
+| | **合计** | **104** | **23** | |
 
 > **准入条件是必要条件而非充分条件**：具体以各 spec 自身的「依赖」列为准（`RULES.md` §9.2）。
 > 规范强制 **Phase 单调性**：Phase `NN` 的 spec 只能依赖 Phase ≤ `NN` 的 spec（`RULES.md` §9.1）。
@@ -76,7 +76,7 @@
 | S02-03 | models 与流式数据类型移植 | S01-01 | `done` | `phase-02/S02-03-models.md` |
 | S02-04 | storage 移植与数据目录 | S02-03 | `done` | `phase-02/S02-04-storage.md` |
 | S02-05 | 流式取消语义与事件契约 | S02-01 | `done` | `phase-02/S02-05-stream-cancel.md` |
-| S02-06 | tokio / GPUI 执行器桥接 | S02-05 | `doing` | `phase-02/S02-06-executor-bridge.md` |
+| S02-06 | tokio / GPUI 执行器桥接 | S02-05 | `done` | `phase-02/S02-06-executor-bridge.md` |
 | S02-07 | 对话编排迁入（工具循环 / 审批 / 提问 / 持久化 / 终态事件） | S02-05 | `done` | `phase-02/S02-07-tool-approval.md` |
 | S02-08 | IPC 层作废（命令 → engine API 覆盖表） | S02-01..S02-07 | `done` | `phase-02/S02-08-ipc-retire.md` |
 | S02-09 | 引擎测试迁移与契约测试 | S02-01..S02-04 | `done` | `phase-02/S02-09-engine-tests.md` |
@@ -282,3 +282,4 @@
 | 2026-09-27 | S02-07 | `doing` → `done` | `send_message` 编排整体迁入 `chat::ChatEngine`；随迁单测 18 + 端到端 8（变异注入验证有效）；修复 mock 被本机端口探测干扰的随机失败，全量 30 次 0 失败。commit `039ed86` |
 | 2026-09-27 | S02-09 | `todo` → `doing` → `done` | v1 174 测试 vs engine 165 + 新增集成 20，差 9 全为窗口类（→ Phase 07）。真实契约 openai_compatible 通过（MiniMax-M3），anthropic 无配置未验证。联网用例失败集合与 v1 相同（v1 既有问题）。CI 加入引擎测试。commit `755fc44` |
 | 2026-09-27 | S02-08 | `todo` → `doing` → `done` | v1 16 命令：14 → `ChatEngine` 方法（编译期检查），2 窗口类 → Phase 07；外壳事件与插件能力逐项归属。退役 `ipc-contract.md`（发现其与代码不符 2 处）。v1 `commands.rs` 保留。commit `ff52929` |
+| 2026-09-27 | S02-06 | `todo` → `doing` → `done` | 桥接落在 `crates/ui/src/chat_bridge.rs`；驱动程序 4 场景 PASS（首批事件 12–16 ms、关窗不断流、占用释放、停止）。两个陷阱：`Tokio::spawn` drop 即 abort（反证：场景 2/3/4 FAIL）；engine async 方法须在 tokio 上执行。退役 `sse-and-api.md`。**Phase 02 完成（9/9）**。commit `b1aaab3` |
