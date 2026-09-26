@@ -1,6 +1,6 @@
 # S02-02 tools 移植
 
-> 状态: `doing`
+> 状态: `done`
 > Phase: 02
 > 依赖: S02-03
 > 阻塞: —
@@ -26,26 +26,26 @@
 
 ## 验收标准
 
-- [ ] `cargo test -p buddy-engine tools::` 通过，测试数与 v1 `cargo test tools::` 一致
-- [ ] `check_write_allowed` 与 v1 字节一致（`diff` 为空）
-- [ ] 分层检查 14 项通过；v1 `cargo check` 通过
+- [x] `cargo test -p buddy-engine tools::` 通过，测试数与 v1 `cargo test tools::` 一致
+- [x] `check_write_allowed` 与 v1 字节一致（`diff` 为空）
+- [x] 分层检查 14 项通过；v1 `cargo check` 通过
 
 ## 证据
 
 | 项 | 证据 |
 |----|------|
-| 测试数对照 | |
-| 权限逻辑一致 | |
-| 分层 / v1 回归 | |
+| 测试数对照 | `cargo test -p buddy-engine tools::` → **73 passed / 0 failed / 8 ignored**。`--list`：engine `tools::` 81 个（ignored 8）；v1 `src-tauri` `tools::` 81 个（ignored 8）→ 一致。全量 `cargo test -p buddy-engine` → 102 passed / 8 ignored |
+| 权限逻辑一致 | `tools/` 15 个文件逐个对 `git show v1-final:…` 做 `diff -q` → **0 个有差异**（含 `builtin.rs:108 check_write_allowed` 与 `:38 check_write_allowed_with_symlinks`） |
+| 分层 / v1 回归 | `grep -rn tauri crates/engine/src` → 0；`check-discipline.py` S01-04-1「147 个依赖，0 处禁止项」（`tempfile` 为 dev-dependency，不计入），14 项通过；`cd src-tauri && cargo check` rc=0 |
 
 ## 决策记录
 
 | 决策 | 选择 | 理由 |
 |------|------|------|
-| | | |
+| `commands.rs` 相关注释 | 暂保留 | `tools/mod.rs:44,132`、`builtin.rs:432,441,565,568` 描述 v1 的 commands 分派；ask_user / 审批改写归 S02-07，届时一并更新 |
 
 ## 完成记录
 
-- 日期：
-- commit：
-- 设计文档处置：
+- 日期：2026-09-26
+- commit：`32204d8`
+- 设计文档处置：`rust-data-models.md` 无 tools 专属段落；整份删除归 S02-01（见 S02-03 完成记录）
