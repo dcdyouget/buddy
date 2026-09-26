@@ -39,25 +39,35 @@ export function resolveApproval(approved: boolean, approveAll: boolean) {
 }
 
 export function useStreaming() {
-  const handleTextStart = useChatStore((s) => s.handleTextStart);
-  const handleTextEnd = useChatStore((s) => s.handleTextEnd);
-  const feedTextDelta = useChatStore((s) => s.feedTextDelta);
-  const handleThinkingStart = useChatStore((s) => s.handleThinkingStart);
-  const handleThinkingDelta = useChatStore((s) => s.handleThinkingDelta);
-  const handleThinkingEnd = useChatStore((s) => s.handleThinkingEnd);
-  const handleToolCallStart = useChatStore((s) => s.handleToolCallStart);
-  const handleToolCallDelta = useChatStore((s) => s.handleToolCallDelta);
-  const handleToolCallEnd = useChatStore((s) => s.handleToolCallEnd);
-  const handleToolExecuting = useChatStore((s) => s.handleToolExecuting);
-  const handleToolResult = useChatStore((s) => s.handleToolResult);
-  const handleToolApprovalRequired = useChatStore((s) => s.handleToolApprovalRequired);
-  const setPendingQuestion = useChatStore((s) => s.setPendingQuestion);
+  const queueStreamEvent = useChatStore((s) => s.queueStreamEvent);
+  const toolApproval = useChatStore((s) => s.toolApproval);
   const handleStreamDone = useChatStore((s) => s.handleStreamDone);
   const handleStreamError = useChatStore((s) => s.handleStreamError);
   const saveMessage = useChatStore((s) => s.saveMessage);
   const setPage = useUIStore((s) => s.setPage);
 
   const epochRef = useRef(0);
+
+  // 审批事件也先进入 FIFO；只有前序正文和 tool_call 已落到对应气泡后才显示弹窗。
+  useEffect(() => {
+    if (isBrowser || !toolApproval || approvalId === toolApproval.id) return;
+
+    approvalId = toolApproval.id;
+    import('@tauri-apps/api/core').then(async ({ invoke }) => {
+      const decision = await new Promise<{
+        approved: boolean;
+        approveAll: boolean;
+      }>((resolve) => {
+        approvalResolve = (approved, approveAll) => resolve({ approved, approveAll });
+      });
+      await invoke('approve_tool_call', {
+        id: toolApproval.id,
+        approved: decision.approved,
+        approveAll: decision.approveAll,
+      }).catch(() => {});
+      approvalId = null;
+    });
+  }, [toolApproval]);
 
   useEffect(() => {
     if (isBrowser) return;
@@ -73,80 +83,100 @@ export function useStreaming() {
               break;
 
             case 'text_start':
-              handleTextStart(e.content_index);
+              queueStreamEvent({ event: 'text_start', contentIndex: e.content_index });
               break;
 
             case 'text_delta':
-              // P9: 入队缓冲 → rAF 循环逐字渲染，避免突发 SSE chunk 导致视觉卡顿
-              feedTextDelta(e.delta);
+              queueStreamEvent({
+                event: 'text_delta',
+                contentIndex: e.content_index,
+                delta: e.delta,
+              });
               break;
 
             case 'text_end':
-              handleTextEnd(e.content_index, e.content);
+              queueStreamEvent({
+                event: 'text_end',
+                contentIndex: e.content_index,
+                content: e.content,
+              });
               break;
 
             case 'thinking_start':
-              handleThinkingStart(e.content_index);
+              queueStreamEvent({ event: 'thinking_start', contentIndex: e.content_index });
               break;
 
             case 'thinking_delta':
-              handleThinkingDelta(e.content_index, e.delta);
+              queueStreamEvent({
+                event: 'thinking_delta',
+                contentIndex: e.content_index,
+                delta: e.delta,
+              });
               break;
 
             case 'thinking_end':
-              handleThinkingEnd(e.content_index, e.content);
+              queueStreamEvent({
+                event: 'thinking_end',
+                contentIndex: e.content_index,
+                content: e.content,
+              });
               break;
 
             // ── Tool 事件 ────────────────────────────────
             case 'tool_call_start':
-              handleToolCallStart(e.id, e.name, e.content_index);
+              queueStreamEvent({
+                event: 'tool_call_start',
+                id: e.id,
+                name: e.name,
+                contentIndex: e.content_index,
+              });
               break;
 
             case 'tool_call_delta':
-              handleToolCallDelta(e.id, e.arguments_delta);
+              queueStreamEvent({
+                event: 'tool_call_delta',
+                id: e.id,
+                argumentsDelta: e.arguments_delta,
+              });
               break;
 
             case 'tool_call_end':
-              handleToolCallEnd(e.id, e.name, e.arguments);
+              queueStreamEvent({
+                event: 'tool_call_end',
+                id: e.id,
+                name: e.name,
+                arguments: e.arguments,
+              });
               break;
 
             case 'tool_executing':
-              handleToolExecuting(e.id, e.name);
+              queueStreamEvent({ event: 'tool_executing', id: e.id, name: e.name });
               break;
 
             case 'tool_result':
-              handleToolResult(
-                e.id,
-                e.name,
-                e.content,
-                e.images ?? [],
-                e.is_error,
-              );
-              break;
-
-            case 'tool_approval_required': {
-              handleToolApprovalRequired(e.id, e.name, e.arguments, e.reason);
-              // 阻塞等待用户审批
-              import('@tauri-apps/api/core').then(async ({ invoke }) => {
-                const doApprove = await new Promise<{ approved: boolean; approveAll: boolean }>((resolve) => {
-                  approvalResolve = (approved: boolean, approveAll: boolean) =>
-                    resolve({ approved, approveAll });
-                  approvalId = e.id;
-                });
-                await invoke('approve_tool_call', {
-                  id: e.id,
-                  approved: doApprove.approved,
-                  approveAll: doApprove.approveAll,
-                }).catch(() => {});
-                approvalId = null;
+              queueStreamEvent({
+                event: 'tool_result',
+                id: e.id,
+                name: e.name,
+                content: e.content,
+                images: e.images ?? [],
+                isError: e.is_error,
               });
               break;
-            }
 
-            case 'tool_question_required': {
-              // 模型调用了 ask_user tool:把问题挂到 chatStore,
-              // AskUserCard 会在对应工具调用处显示交互,answer 由 answerPendingQuestion 发起
-              setPendingQuestion({
+            case 'tool_approval_required':
+              queueStreamEvent({
+                event: 'tool_approval_required',
+                id: e.id,
+                name: e.name,
+                arguments: e.arguments,
+                reason: e.reason,
+              });
+              break;
+
+            case 'tool_question_required':
+              queueStreamEvent({
+                event: 'tool_question_required',
                 id: e.id,
                 question: e.question,
                 options: e.options,
@@ -154,10 +184,12 @@ export function useStreaming() {
                 header: e.header,
               });
               break;
-            }
 
             case 'turn_end':
-              // model 本轮结束，tool_calls_pending 非零时后端还在循环
+              queueStreamEvent({
+                event: 'turn_end',
+                toolCallsPending: e.tool_calls_pending,
+              });
               break;
 
             case 'done':

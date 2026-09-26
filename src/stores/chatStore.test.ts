@@ -23,7 +23,8 @@ beforeEach(() => {
     streamingTokens: 0,
     streamingBlocks: [],
     pendingTextBuffer: '',
-    pendingTextEnd: null,
+    pendingStreamEvents: [],
+    pendingTextEnds: [],
     streamDonePending: false,
     activeToolCalls: {},
     pendingQuestion: null,
@@ -129,7 +130,7 @@ describe('chatStore 流式中断收尾', () => {
       expect.objectContaining({
         isStreaming: true,
         pendingTextBuffer: '答案',
-        pendingTextEnd: { contentIndex: 0, content: '答案' },
+        pendingTextEnds: [{ contentIndex: 0, content: '答案' }],
         streamDonePending: true,
       }),
     );
@@ -150,7 +151,7 @@ describe('chatStore 流式中断收尾', () => {
       { type: 'text', content: '答案' },
     ]);
     expect(state.isStreaming).toBe(false);
-    expect(state.pendingTextEnd).toBeNull();
+    expect(state.pendingTextEnds).toEqual([]);
     expect(state.streamDonePending).toBe(false);
   });
 
@@ -265,6 +266,102 @@ describe('chatStore 流式中断收尾', () => {
     expect(state.messages).toEqual([]);
     expect(state.activeToolCalls).toEqual({});
     expect(state.error).toBe('网络错误');
+  });
+});
+
+describe('chatStore 多轮工具流协议', () => {
+  it('合并相邻小文本增量，让平滑渲染按积压量追赶', () => {
+    const store = useChatStore.getState();
+
+    for (let index = 0; index < 100; index += 1) {
+      store.feedTextDelta('字');
+    }
+
+    expect(useChatStore.getState().pendingStreamEvents).toEqual([
+      expect.objectContaining({ event: 'text_delta', delta: '字'.repeat(100) }),
+    ]);
+    store.smoothTextDelta(16);
+    expect(useChatStore.getState().streamingBlocks).toEqual([
+      { type: 'text', content: '字'.repeat(16) },
+    ]);
+  });
+
+  it('在首轮正文尚未渲染完时，按顺序保留工具轮与最终答案', () => {
+    const store = useChatStore.getState();
+
+    store.queueStreamEvent({ event: 'text_start', contentIndex: 0 });
+    store.queueStreamEvent({ event: 'text_delta', contentIndex: 0, delta: '先检索资料。' });
+    store.queueStreamEvent({ event: 'text_end', contentIndex: 0, content: '先检索资料。' });
+    store.queueStreamEvent({
+      event: 'tool_call_start',
+      id: 'call-search',
+      name: 'websearch',
+      contentIndex: 0,
+    });
+    store.queueStreamEvent({
+      event: 'tool_call_delta',
+      id: 'call-search',
+      argumentsDelta: '{"query":"Buddy"}',
+    });
+    store.queueStreamEvent({
+      event: 'tool_call_end',
+      id: 'call-search',
+      name: 'websearch',
+      arguments: '{"query":"Buddy"}',
+    });
+    store.queueStreamEvent({ event: 'turn_end', toolCallsPending: 1 });
+    store.queueStreamEvent({ event: 'tool_executing', id: 'call-search', name: 'websearch' });
+    store.queueStreamEvent({
+      event: 'tool_result',
+      id: 'call-search',
+      name: 'websearch',
+      content: '找到一条资料',
+      images: [],
+      isError: false,
+    });
+    store.queueStreamEvent({ event: 'text_start', contentIndex: 0 });
+    store.queueStreamEvent({ event: 'text_delta', contentIndex: 0, delta: '最终答案。' });
+    store.queueStreamEvent({ event: 'text_end', contentIndex: 0, content: '最终答案。' });
+    store.queueStreamEvent({ event: 'turn_end', toolCallsPending: 0 });
+    store.handleStreamDone();
+
+    // 第一段正文仍在平滑队列中，后续边界不能抢先写入第二轮。
+    expect(useChatStore.getState().pendingTextBuffer).toBe('先检索资料。');
+    expect(useChatStore.getState().messages).toHaveLength(1);
+
+    store.flushTextBuffer();
+
+    const state = useChatStore.getState();
+    expect(state.isStreaming).toBe(false);
+    expect(state.messages.map((message) => message.role)).toEqual([
+      'assistant',
+      'tool',
+      'assistant',
+    ]);
+    expect(state.messages[0]).toEqual(
+      expect.objectContaining({
+        content: '先检索资料。',
+        tool_calls: [
+          expect.objectContaining({
+            id: 'call-search',
+            arguments: '{"query":"Buddy"}',
+            status: 'done',
+            result: '找到一条资料',
+          }),
+        ],
+      }),
+    );
+    expect(state.messages[1]).toEqual(
+      expect.objectContaining({
+        role: 'tool',
+        tool_call_id: 'call-search',
+        content: '找到一条资料',
+      }),
+    );
+    expect(state.messages[2]).toEqual(
+      expect.objectContaining({ content: '最终答案。' }),
+    );
+    expect(state.messages[2].tool_calls).toBeUndefined();
   });
 });
 

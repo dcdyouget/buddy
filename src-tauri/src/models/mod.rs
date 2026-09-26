@@ -17,6 +17,7 @@ pub mod config; // 声明并公开子模块 config（位于 ./config.rs）
 pub mod mcp;
 pub mod message; // 声明并公开子模块 message（位于 ./message.rs）
 pub mod model_context; // 声明并公开子模块 model_context（位于 ./model_context.rs）
+pub mod model_identity;
 pub mod storage; // 声明并公开子模块 storage（位于 ./storage.rs） // MCP server 配置（位于 ./mcp.rs）
 
 // ============================================================================
@@ -38,4 +39,5 @@ pub mod storage; // 声明并公开子模块 storage（位于 ./storage.rs） //
 pub use config::*; // 把 config 子模块的 pub 项全部 re-export
 pub use message::*; // 把 message 子模块的 pub 项全部 re-export
 pub use model_context::*; // 把 model_context 子模块的 pub 项全部 re-export
+pub use model_identity::*;
 pub use storage::*; // 把 storage 子模块的 pub 项全部 re-export

@@ -26,6 +26,8 @@ interface ModelRowProps {
   enabled: boolean;
   /** 是否为当前默认模型 */
   isDefault: boolean;
+  /** 所属服务名称，用于区分跨服务同名模型 */
+  providerName?: string;
   /** 切换启用/禁用的回调 */
   onToggle: () => void;
   /** 设为默认模型的回调 */
@@ -54,6 +56,7 @@ export function ModelRow({
   model,
   enabled,
   isDefault,
+  providerName,
   onToggle,
   onSetDefault,
   onUpdateContextWindow,
@@ -122,6 +125,11 @@ export function ModelRow({
           <span className="t-body" style={{ fontWeight: 500, color: 'var(--text-primary)' }}>
             {model.display_name}
           </span>
+          {providerName && (
+            <span className="t-caption" style={{ color: 'var(--text-muted)' }}>
+              {providerName}
+            </span>
+          )}
           {/* 默认模型显示"默认"徽章 */}
           {isDefault && (
             <span

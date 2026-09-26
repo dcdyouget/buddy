@@ -51,6 +51,7 @@ export function ModelList({
               model={model}
               enabled={enabledModelIds.includes(model.id)}
               isDefault={isDefault}
+              providerName={provider?.name}
               onToggle={() => onToggle(model.id)}
               onSetDefault={() => onSetDefault(model.id)}
               onUpdateContextWindow={

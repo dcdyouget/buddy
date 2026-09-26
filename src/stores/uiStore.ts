@@ -34,8 +34,6 @@ interface UIState {
   setThemeReady: (ready: boolean) => void;     // 设置主题就绪
 }
 
-let activePageTransitionId = 0;
-
 export const useUIStore = create<UIState>((set, get) => ({
   currentPage: 'empty',
   previousPage: null,
@@ -54,15 +52,12 @@ export const useUIStore = create<UIState>((set, get) => ({
     const { currentPage } = get();
     if (currentPage === page) return;
 
-    const transitionId = ++activePageTransitionId;
     console.log('[Buddy] setPage called:', currentPage, '→', page);
 
-    // compact → content 必须先完成原生窗口放大，再挂载目标页面。
-    // 否则内容会先挤在 560×60 的旧窗口里，产生停顿和闪跳。
-    await resizeWindowForPage(currentPage, page);
-    if (transitionId !== activePageTransitionId) return;
-
+    // 先挂载目标页面，让 WebView 在原生窗口放大时始终有内容可绘制。
+    // setPage 的 Promise 仍会等待 resize 完成，供需要尺寸就绪的调用方 await。
     set({ currentPage: page, previousPage: currentPage, error: null, errorType: null });
+    await resizeWindowForPage(currentPage, page);
   },
 
   /** 返回上一个页面（如果有的话） */

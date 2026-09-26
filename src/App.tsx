@@ -21,13 +21,11 @@ import {
 } from '@/utils/windowEvents';
 import { EmptyPage } from '@/pages/EmptyPage';
 import { NoApiKeyPage } from '@/pages/NoApiKeyPage';
+import { ChatPage } from '@/pages/ChatPage';
 import { SlideInPanel } from '@/components/shared/SlideInPanel';
 import { WindowEntrance } from '@/components/shared/WindowEntrance';
 import { resizeWindowToPage } from '@/utils/windowResize';
 
-const ChatPage = lazy(() =>
-  import('@/pages/ChatPage').then(({ ChatPage }) => ({ default: ChatPage })),
-);
 const SettingsPage = lazy(() =>
   import('@/pages/SettingsPage').then(({ SettingsPage }) => ({
     default: SettingsPage,
@@ -41,7 +39,7 @@ const SettingsPage = lazy(() =>
  * 继续渲染上一个真正页面（previousPage），让 SettingsPage 在它
  * 上面叠盖滑入。这样对话/流式状态不会被清空，滑入动画才有意义。
  */
-function PageRenderer() {
+export function PageRenderer() {
   const currentPage = useUIStore((s) => s.currentPage);
   const previousPage = useUIStore((s) => s.previousPage);
 
@@ -251,9 +249,7 @@ function App() {
       onCompactRequested={openCompactAfterIdle}
     >
       {/* 背景页面 */}
-      <Suspense fallback={null}>
-        <PageRenderer />
-      </Suspense>
+      <PageRenderer />
 
       {/* 设置页覆层：从右滑入（在 ChatPage 之上，不卸载背景） */}
       <SlideInPanel from="right" show={currentPage === 'settings'}>

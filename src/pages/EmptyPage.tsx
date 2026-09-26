@@ -64,6 +64,7 @@ export function EmptyPage() {
     if (!showDropdown && config) {
       const openedNativeMenu = await openNativeModelMenu({
         models: enabledModels,
+        providers: config.providers,
         selectedId: config.selected_model_id,
         onSelect: (id) => useConfigStore.getState().setDefaultModel(id),
       });
@@ -170,6 +171,7 @@ export function EmptyPage() {
         {showDropdown && (
           <ModelDropdown
             models={enabledModels}
+            providers={config?.providers || []}
             selectedId={config?.selected_model_id || ''}
             onSelect={(id) => {
               useConfigStore.getState().setDefaultModel(id);

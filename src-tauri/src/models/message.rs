@@ -37,8 +37,11 @@ use serde::{Deserialize, Serialize}; // serde 是 Rust 最主流的序列化框�
 // public class ModelInfo { ... }
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ModelInfo {
-    pub id: String,              // 模型 ID，例如 "claude-sonnet-4-6"
-    pub provider_id: String,     // 所属 provider 的 ID
+    pub id: String,          // 配置内唯一 ID，例如 "anthropic::claude-sonnet-4-6"
+    pub provider_id: String, // 所属 provider 的 ID
+    /// Provider API 所需的原始模型 ID。旧配置缺失时由配置迁移补齐。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_model_id: Option<String>,
     pub display_name: String,    // 在 UI 上展示给用户看的人类可读名
     pub context_window: u32,     // 上下文窗口大小（token 数）；u32 = 32 位无符号整数
     pub latency_ms: Option<u32>, // 测得的延迟（毫秒）；Option<T> 表示"可能没有值"

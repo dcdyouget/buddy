@@ -108,6 +108,22 @@ pub struct CancelState {
     pub sender: Mutex<Option<watch::Sender<bool>>>,
 }
 
+/// 原子地占用生成通道。检查与写入必须使用同一把锁，否则两个同时到达的
+/// `send_message` 都可能通过检查，并让后一个请求覆盖前一个请求的取消 sender。
+fn reserve_generation(state: &CancelState) -> Result<watch::Receiver<bool>, String> {
+    let (sender, receiver) = watch::channel(false);
+    let mut active_sender = state.sender.lock();
+    if active_sender.is_some() {
+        return Err("已有生成任务正在进行中".to_string());
+    }
+    *active_sender = Some(sender);
+    Ok(receiver)
+}
+
+fn release_generation(state: &CancelState) {
+    state.sender.lock().take();
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tool 审批状态(共享)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -562,17 +578,126 @@ fn build_tool_msg(
 }
 
 /// 将同一次模型调用累积的消息一次性落盘，避免工具循环产生密集的小文件写入。
-async fn flush_pending_messages(app: tauri::AppHandle, pending: Vec<Message>) {
+async fn flush_pending_messages(
+    app: tauri::AppHandle,
+    pending: Vec<Message>,
+) -> Result<(), String> {
     if pending.is_empty() {
-        return;
+        return Ok(());
     }
 
     let count = pending.len();
     match tokio::task::spawn_blocking(move || storage::append_messages(&app, &pending)).await {
-        Ok(Ok(())) => info!("[send_message] 本轮 {} 条消息已批量持久化", count),
-        Ok(Err(e)) => warn!("[send_message] 批量持久化消息失败: {}", e),
-        Err(e) => warn!("[send_message] 批量持久化任务失败: {}", e),
+        Ok(Ok(())) => {
+            info!("[send_message] 本轮 {} 条消息已批量持久化", count);
+            Ok(())
+        }
+        Ok(Err(e)) => {
+            let message = format!("批量持久化消息失败: {e}");
+            warn!("[send_message] {}", message);
+            Err(message)
+        }
+        Err(e) => {
+            let message = format!("批量持久化任务失败: {e}");
+            warn!("[send_message] {}", message);
+            Err(message)
+        }
     }
+}
+
+enum TerminalStreamEvent {
+    Done {
+        full_text: String,
+    },
+    Error {
+        reason: StopReason,
+        message: String,
+        partial_text: String,
+    },
+}
+
+impl TerminalStreamEvent {
+    fn partial_text(&self) -> &str {
+        match self {
+            Self::Done { full_text } => full_text,
+            Self::Error { partial_text, .. } => partial_text,
+        }
+    }
+
+    fn persistence_failure(self, failure: String) -> Self {
+        let partial_text = self.partial_text().to_string();
+        let message = match self {
+            Self::Done { .. } => format!("聊天记录保存失败: {failure}"),
+            Self::Error { message, .. } => format!("{message}；聊天记录保存失败: {failure}"),
+        };
+        Self::Error {
+            reason: StopReason::Error,
+            message,
+            partial_text,
+        }
+    }
+
+    fn emit(self, emitter: &StreamEventEmitter) {
+        match self {
+            Self::Done { full_text } => emitter.done(StopReason::Stop, &full_text),
+            Self::Error {
+                reason,
+                message,
+                partial_text,
+            } => emitter.error(reason, &message, &partial_text),
+        }
+    }
+}
+
+fn terminal_event_for_outcome(
+    outcome: &Result<crate::streaming::StreamOutcome, crate::providers::ApiError>,
+    turn: usize,
+) -> TerminalStreamEvent {
+    match outcome {
+        Ok(outcome) if !outcome.had_stream_error => TerminalStreamEvent::Done {
+            full_text: outcome.full_text.clone(),
+        },
+        Ok(outcome) => {
+            let failure = outcome.terminal_error.as_ref();
+            TerminalStreamEvent::Error {
+                reason: failure
+                    .map(|failure| failure.reason.clone())
+                    .unwrap_or(StopReason::Error),
+                message: failure
+                    .map(|failure| failure.message.clone())
+                    .unwrap_or_else(|| "流式请求未正常结束".to_string()),
+                partial_text: outcome.full_text.clone(),
+            }
+        }
+        Err(error) => {
+            let message = if turn > 1 {
+                format!(
+                    "{} (工具调用后请求失败, 可能是 Provider 不支持 tool 回传格式)",
+                    error
+                )
+            } else {
+                error.to_string()
+            };
+            TerminalStreamEvent::Error {
+                reason: StopReason::Error,
+                message,
+                partial_text: String::new(),
+            }
+        }
+    }
+}
+
+fn cancelled_stream_outcome() -> crate::streaming::StreamOutcome {
+    crate::streaming::StreamOutcome::failed(
+        String::new(),
+        String::new(),
+        StopReason::Aborted,
+        "用户取消",
+    )
+}
+
+fn requires_tool_execution(outcome: &crate::streaming::StreamOutcome) -> bool {
+    !outcome.had_stream_error && !outcome.tool_calls.is_empty()
 }
 
 /// 发送消息命令
@@ -672,15 +797,9 @@ pub async fn send_message(
     // 本轮产生的用户、assistant 与工具消息先放在内存，结束时统一批量写入。
     let mut pending_persistence: Vec<Message> = messages.last().cloned().into_iter().collect();
 
-    // 防止并发 send_message：若有生成任务在跑，拒绝新的，避免第二个任务覆盖
-    // 第一个任务的取消通道，导致 stop_generation 对第一个任务失效。
-    if state.sender.lock().is_some() {
-        return Err("已有生成任务正在进行中".to_string());
-    }
-
-    // 创建取消通道
-    let (cancel_tx, mut cancel_rx) = watch::channel(false);
-    *state.sender.lock() = Some(cancel_tx);
+    // 防止并发 send_message：检查与占用在同一把锁下完成，不能让第二个请求覆盖
+    // 第一个请求的取消通道。
+    let mut cancel_rx = reserve_generation(&state)?;
 
     // 创建统一事件发射器
     let emitter = StreamEventEmitter::new(app.clone());
@@ -688,6 +807,7 @@ pub async fn send_message(
     // 根据 Provider 类型创建对应的适配器
     let llm_provider = providers::create_provider(&provider_type);
     let compat = provider.compat.as_ref();
+    let provider_model_id = raw_model_id(model);
 
     // ── P4: 构造 ToolRegistry(只包含内置 tool,MCP tool 由 P7 注入) ──
     let mut builtin_tools = crate::tools::builtin::builtin_tools(config.allowed_paths.clone());
@@ -695,7 +815,7 @@ pub async fn send_message(
         if let Some(tool) = crate::tools::image_generation::GenerateImageTool::for_provider(
             provider.base_url.clone(),
             provider.api_key.clone(),
-            model_id.clone(),
+            provider_model_id.to_string(),
             &provider.id,
             &provider.name,
         ) {
@@ -725,9 +845,23 @@ pub async fn send_message(
             Ok(messages) => messages,
             Err(error) => {
                 warn!("[send_message] 图片预处理失败: {}", error);
-                state.sender.lock().take();
-                flush_pending_messages(app.clone(), pending_persistence).await;
-                emitter.error(StopReason::Error, &error, "");
+                let persistence_error = flush_pending_messages(app.clone(), pending_persistence)
+                    .await
+                    .err();
+                release_generation(&state);
+                approval
+                    .approve_all_for_turn
+                    .store(false, Ordering::Relaxed);
+                let terminal = TerminalStreamEvent::Error {
+                    reason: StopReason::Error,
+                    message: error,
+                    partial_text: String::new(),
+                };
+                match persistence_error {
+                    Some(persistence_error) => terminal.persistence_failure(persistence_error),
+                    None => terminal,
+                }
+                .emit(&emitter);
                 return Ok(());
             }
         };
@@ -753,7 +887,10 @@ pub async fn send_message(
     let mut total_thinking_chars = 0usize;
     let mut total_tool_calls = 0usize;
 
-    let outcome: Result<crate::streaming::StreamOutcome, _> = loop {
+    let outcome: Result<crate::streaming::StreamOutcome, _> = 'conversation: loop {
+        if providers::cancellation_requested(&cancel_rx) {
+            break 'conversation Ok(cancelled_stream_outcome());
+        }
         turn += 1;
         if turn > MAX_TOOL_TURNS {
             warn!("[send_message] 达到 tool 轮数硬上限 {}", MAX_TOOL_TURNS);
@@ -776,7 +913,7 @@ pub async fn send_message(
             .stream_chat(
                 &provider.base_url,
                 &provider.api_key,
-                &model_id,
+                provider_model_id,
                 &request_id,
                 windowed,
                 &emitter,
@@ -839,8 +976,9 @@ pub async fn send_message(
             conv_messages.push(assistant_msg.clone());
         }
 
-        // 没 tool_calls → 正常结束
-        if out.tool_calls.is_empty() {
+        // Provider 以错误或取消结束时，已经持久化可恢复的部分回复；绝不能执行它
+        // 可能携带的半截 tool_call，也不能进入下一轮模型请求。
+        if !requires_tool_execution(&out) {
             break Ok(out);
         }
 
@@ -868,7 +1006,7 @@ pub async fn send_message(
                     turn,
                     out.tool_calls.len()
                 );
-                break;
+                break 'conversation Ok(cancelled_stream_outcome());
             }
             // ── ask_user 特殊分支:不进入普通 tool.execute,而是显示内联问答卡等回答 ──
             if call.name == "ask_user" {
@@ -946,18 +1084,25 @@ pub async fn send_message(
                         } else {
                             warn!("[send_message] ask_user 等待被用户取消");
                         }
-                        AskUserAnswer { selected: vec![], inputs: vec![], custom: Some("(已取消)".to_string()) }
+                        None
                     }
                     result = rx => {
-                        match result {
+                        Some(match result {
                             Ok(a) => a,
                             Err(_) => {
                                 warn!("[send_message] ask_user oneshot 失败");
                                 AskUserAnswer { selected: vec![], inputs: vec![], custom: Some("(无响应)".to_string()) }
                             }
-                        }
+                        })
                     }
                 };
+
+                let Some(answer) = answer else {
+                    break 'conversation Ok(cancelled_stream_outcome());
+                };
+                if providers::cancellation_requested(&cancel_rx) {
+                    break 'conversation Ok(cancelled_stream_outcome());
+                }
 
                 // 把答案转成 tool result 文本
                 let content = format_ask_user_answer(&parsed.options, &answer);
@@ -1014,18 +1159,24 @@ pub async fn send_message(
                         } else {
                             warn!("[send_message] 审批取消时找不到 slot id={} (可能已处理)", call.id);
                         }
-                        false
+                        None
                     }
                     result = rx => {
-                        match result {
+                        Some(match result {
                             Ok(b) => b,
                             Err(_) => {
                                 warn!("[send_message] 审批 oneshot 失败,按拒绝处理");
                                 false
                             }
-                        }
+                        })
                     }
                 };
+                let Some(approved) = approved else {
+                    break 'conversation Ok(cancelled_stream_outcome());
+                };
+                if providers::cancellation_requested(&cancel_rx) {
+                    break 'conversation Ok(cancelled_stream_outcome());
+                }
                 if !approved {
                     let content = "用户拒绝执行".to_string();
                     emitter.tool_result(&call.id, &call.name, &content, Vec::new(), true);
@@ -1037,6 +1188,9 @@ pub async fn send_message(
             }
 
             // 执行
+            if providers::cancellation_requested(&cancel_rx) {
+                break 'conversation Ok(cancelled_stream_outcome());
+            }
             emitter.tool_executing(&call.id, &call.name);
             let args_value: serde_json::Value = match serde_json::from_str(&call.arguments) {
                 Ok(v) => v,
@@ -1125,31 +1279,7 @@ pub async fn send_message(
         // 继续下一轮:重新调 stream_chat(把 tool result 给 model)
     };
 
-    // 成功时发射 done 事件（仅当 provider 内部未发射过 error 时）
-    // done 事件从 provider 移到这里发射，保证 tool 循环中的多轮 stream_chat
-    // 不会触发前端过早调用 handleStreamDone()
-    match &outcome {
-        Ok(out) if !out.had_stream_error => {
-            emitter.done(StopReason::Stop, &out.full_text);
-        }
-        Ok(_) => {
-            // provider 已发射过 error 事件，不再发 done
-        }
-        Err(e) => {
-            warn!("[send_message] 最终错误: {}", e);
-            let error_emitter = StreamEventEmitter::new(app.clone());
-            // 若在 tool 循环中失败(turn>1) → 附加提示信息
-            let error_msg = if turn > 1 {
-                format!(
-                    "{} (工具调用后请求失败, 可能是 Provider 不支持 tool 回传格式)",
-                    e
-                )
-            } else {
-                e.to_string()
-            };
-            error_emitter.error(StopReason::Error, &error_msg, "");
-        }
-    }
+    let mut terminal_event = terminal_event_for_outcome(&outcome, turn);
 
     let final_status = match &outcome {
         Ok(out) if out.had_stream_error => "partial_or_aborted",
@@ -1170,14 +1300,16 @@ pub async fn send_message(
         total_tool_calls,
     );
 
-    // 不论正常完成、取消还是工具循环报错，均保存本轮已经生成的完整记录。
-    flush_pending_messages(app.clone(), pending_persistence).await;
-
-    // 清理:取消通道 + 重置 "本次都允许" 标志(P5 一次性,下次 send_message 重新开始)
-    state.sender.lock().take();
+    // 终态事件必须晚于持久化和占用释放：前端收到 done/error 后可以立刻开始下一轮，
+    // 此时后端不能仍持有上一轮的 CancelState。
+    if let Err(persistence_error) = flush_pending_messages(app.clone(), pending_persistence).await {
+        terminal_event = terminal_event.persistence_failure(persistence_error);
+    }
+    release_generation(&state);
     approval
         .approve_all_for_turn
         .store(false, Ordering::Relaxed);
+    terminal_event.emit(&emitter);
     Ok(())
 }
 
@@ -1502,6 +1634,85 @@ mod tests {
             Some("animation-start")
         );
         assert_eq!(window_frontend_diagnostic_stage("forged\nline"), None);
+    }
+
+    #[test]
+    fn generation_reservation_is_atomic_and_reusable_after_release() {
+        let state = CancelState {
+            sender: Mutex::new(None),
+        };
+
+        let receiver = reserve_generation(&state).unwrap();
+        assert!(reserve_generation(&state).is_err());
+        state.sender.lock().as_ref().unwrap().send(true).unwrap();
+        assert!(providers::cancellation_requested(&receiver));
+
+        release_generation(&state);
+        assert!(reserve_generation(&state).is_ok());
+    }
+
+    #[test]
+    fn stream_failure_with_tool_calls_never_enters_tool_execution() {
+        let mut outcome = crate::streaming::StreamOutcome::failed(
+            "已收到的部分回复".to_string(),
+            String::new(),
+            StopReason::Error,
+            "连接中断",
+        );
+        outcome.tool_calls.push(crate::models::ToolCall {
+            id: "partial-call".to_string(),
+            name: "write_file".to_string(),
+            arguments: r#"{"path":"/tmp/example"#.to_string(),
+        });
+
+        assert!(!requires_tool_execution(&outcome));
+        match terminal_event_for_outcome(&Ok(outcome), 1) {
+            TerminalStreamEvent::Error {
+                reason,
+                message,
+                partial_text,
+            } => {
+                assert!(matches!(reason, StopReason::Error));
+                assert_eq!(message, "连接中断");
+                assert_eq!(partial_text, "已收到的部分回复");
+            }
+            TerminalStreamEvent::Done { .. } => panic!("stream failure must emit error"),
+        }
+    }
+
+    #[test]
+    fn cancellation_does_not_produce_a_follow_up_tool_turn() {
+        let outcome = cancelled_stream_outcome();
+
+        assert!(outcome.had_stream_error);
+        assert!(!requires_tool_execution(&outcome));
+        match terminal_event_for_outcome(&Ok(outcome), 1) {
+            TerminalStreamEvent::Error { reason, .. } => {
+                assert!(matches!(reason, StopReason::Aborted));
+            }
+            TerminalStreamEvent::Done { .. } => panic!("cancellation must emit error"),
+        }
+    }
+
+    #[test]
+    fn persistence_failure_replaces_done_but_keeps_partial_text() {
+        let terminal = TerminalStreamEvent::Done {
+            full_text: "已完成但尚未保存的回复".to_string(),
+        }
+        .persistence_failure("磁盘已满".to_string());
+
+        match terminal {
+            TerminalStreamEvent::Error {
+                reason,
+                message,
+                partial_text,
+            } => {
+                assert!(matches!(reason, StopReason::Error));
+                assert!(message.contains("聊天记录保存失败"));
+                assert_eq!(partial_text, "已完成但尚未保存的回复");
+            }
+            TerminalStreamEvent::Done { .. } => panic!("persistence failure must emit error"),
+        }
     }
 
     fn make_msg(content: &str) -> Message {

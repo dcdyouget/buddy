@@ -397,12 +397,12 @@ impl LlmProvider for OpenAICompatibleProvider {
             // ── 5. 发送请求 ──
             // 与 Anthropic 不同：OpenAI 用 Authorization: Bearer <key>
             let request_started = Instant::now();
-            let response = client
+            let request = client
                 .post(&url)
                 .header("Authorization", format!("Bearer {}", api_key))
                 .header("Content-Type", "application/json")
-                .json(&body)
-                .send()
+                .json(&body);
+            let Some(response) = super::send_request_cancellable(request, &mut cancel_rx)
                 .await
                 .map_err(|e| {
                     if e.is_timeout() {
@@ -412,7 +412,24 @@ impl LlmProvider for OpenAICompatibleProvider {
                     } else {
                         ApiError::NetworkError(e.to_string())
                     }
-                })?;
+                })?
+            else {
+                return Ok(StreamOutcome::failed(
+                    String::new(),
+                    String::new(),
+                    StopReason::Aborted,
+                    "用户取消",
+                ));
+            };
+
+            if super::cancellation_requested(&cancel_rx) {
+                return Ok(StreamOutcome::failed(
+                    String::new(),
+                    String::new(),
+                    StopReason::Aborted,
+                    "用户取消",
+                ));
+            }
 
             // ── 6. 检查 HTTP 状态 ──
             let status = response.status();
@@ -502,12 +519,12 @@ impl LlmProvider for OpenAICompatibleProvider {
                                 "[openai::stream_chat] 被取消: {} chunks, {} tokens",
                                 chunk_count, token_count
                             );
-                            emitter.error(
+                            return Ok(StreamOutcome::failed(
+                                full_response,
+                                thinking_response,
                                 StopReason::Aborted,
                                 "用户取消",
-                                &full_response,
-                            );
-                            return Ok(StreamOutcome { full_text: full_response, thinking_text: thinking_response, tool_calls: vec![], had_stream_error: true });
+                            ));
                         }
                         continue;
                     }
@@ -520,12 +537,12 @@ impl LlmProvider for OpenAICompatibleProvider {
                                     "[openai::stream_chat] 读取超时: {} chunks, {} tokens, {} chars",
                                     chunk_count, token_count, full_response.len()
                                 );
-                                emitter.error(
+                                return Ok(StreamOutcome::failed(
+                                    full_response,
+                                    thinking_response,
                                     StopReason::Error,
                                     "读取超时",
-                                    &full_response,
-                                );
-                                return Ok(StreamOutcome { full_text: full_response, thinking_text: thinking_response, tool_calls: vec![], had_stream_error: true });
+                                ));
                             }
                         }
                     }
@@ -545,17 +562,12 @@ impl LlmProvider for OpenAICompatibleProvider {
                                 "[openai::stream_chat] SSE 行数据超过 {} 字节，终止解析",
                                 MAX_SSE_LINE_BYTES
                             );
-                            emitter.error(
+                            return Ok(StreamOutcome::failed(
+                                full_response,
+                                thinking_response,
                                 StopReason::Error,
                                 "响应数据行超过大小上限",
-                                &full_response,
-                            );
-                            return Ok(StreamOutcome {
-                                full_text: full_response,
-                                thinking_text: thinking_response,
-                                tool_calls: vec![],
-                                had_stream_error: true,
-                            });
+                            ));
                         }
 
                         // ── 逐行解析（OpenAI 协议比 Anthropic 简单） ──
@@ -607,12 +619,11 @@ impl LlmProvider for OpenAICompatibleProvider {
                                         usage_log_summary(final_usage.as_ref()),
                                     );
                                     // done 事件由 commands.rs 在整轮 tool 循环结束时统一发射
-                                    return Ok(StreamOutcome {
-                                        full_text: full_response,
-                                        thinking_text: thinking_response,
-                                        tool_calls: calls,
-                                        had_stream_error: false,
-                                    });
+                                    return Ok(StreamOutcome::completed(
+                                        full_response,
+                                        thinking_response,
+                                        calls,
+                                    ));
                                 }
                                 if data.is_empty() {
                                     continue;
@@ -771,19 +782,13 @@ impl LlmProvider for OpenAICompatibleProvider {
                         }
                     }
                     Some(Err(e)) => {
-                        emitter.error(
+                        // 网络中断时 tool_call 参数可能不完整，不能将其标记为完成或继续执行。
+                        return Ok(StreamOutcome::failed(
+                            full_response,
+                            thinking_response,
                             StopReason::Error,
-                            &format!("流读取错误: {}", e),
-                            &full_response,
-                        );
-                        // 保留已累积的完整工具调用，避免网络错误时整轮工具结果丢失
-                        let calls = flush_tool_calls(&mut tool_calls, &tool_call_indexes, emitter);
-                        return Ok(StreamOutcome {
-                            full_text: full_response,
-                            thinking_text: thinking_response,
-                            tool_calls: calls,
-                            had_stream_error: true,
-                        });
+                            format!("流读取错误: {}", e),
+                        ));
                     }
                     None => {
                         // 走到这里说明从未收到 [DONE] 终止标记（[DONE] 分支会直接 return）。
@@ -816,12 +821,11 @@ impl LlmProvider for OpenAICompatibleProvider {
                             usage_log_summary(final_usage.as_ref()),
                         );
                         // done 事件由 commands.rs 在整轮 tool 循环结束时统一发射
-                        return Ok(StreamOutcome {
-                            full_text: full_response,
-                            thinking_text: thinking_response,
-                            tool_calls: calls,
-                            had_stream_error: false,
-                        });
+                        return Ok(StreamOutcome::completed(
+                            full_response,
+                            thinking_response,
+                            calls,
+                        ));
                     }
                 }
             }
@@ -908,6 +912,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                             Some(ModelInfo {
                                 id: id.to_string(),
                                 provider_id: String::new(),
+                                api_model_id: None,
                                 display_name: id.to_string(),
                                 context_window: get_context_window(id),
                                 latency_ms: None,
@@ -933,6 +938,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                             Some(ModelInfo {
                                 id: id.to_string(),
                                 provider_id: String::new(),
+                                api_model_id: None,
                                 display_name: id.to_string(),
                                 context_window: get_context_window(id),
                                 latency_ms: None,
@@ -1372,6 +1378,52 @@ mod tests {
 
         assert_eq!(out.len(), 1, "未完成配对的纯工具 assistant 消息应被过滤");
         assert_eq!(out[0]["role"], "system");
+    }
+
+    #[test]
+    fn preserves_final_assistant_text_after_tool_result_before_follow_up() {
+        let messages = vec![
+            make_assistant_with_tool_arguments(
+                "a-tool",
+                "call-read",
+                "read_file",
+                r#"{"path":"/tmp/note.txt"}"#,
+            ),
+            make_tool_msg("tool-result", "call-read", "文件正文"),
+            Message {
+                id: "a-final".to_string(),
+                role: MessageRole::Assistant,
+                content: "根据文件内容，结论是可继续。".to_string(),
+                images: Vec::new(),
+                blocks: None,
+                model_id: None,
+                created_at: 0,
+                tool_calls: None,
+                tool_call_id: None,
+                tool_name: None,
+                is_error: None,
+                parent_message_id: None,
+            },
+            make_user_message("u-follow-up", "请继续解释", 1_800_000_000),
+        ];
+
+        let output = OpenAICompatibleProvider::convert_messages(&messages);
+
+        assert_eq!(
+            output
+                .iter()
+                .map(|message| message["role"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["system", "assistant", "tool", "assistant", "user"]
+        );
+        assert!(output[1]["content"].is_null());
+        assert_eq!(output[1]["tool_calls"][0]["function"]["name"], "read_file");
+        assert_eq!(output[2]["tool_call_id"], "call-read");
+        assert_eq!(output[3]["content"], "根据文件内容，结论是可继续。");
+        assert!(output[4]["content"]
+            .as_str()
+            .unwrap()
+            .starts_with("请继续解释\n\n<buddy_runtime_context>"));
     }
 
     #[test]

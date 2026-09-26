@@ -1,4 +1,4 @@
-import type { ModelInfo } from '@/types';
+import type { ModelInfo, ProviderConfig } from '@/types';
 
 let activeModelMenu: Awaited<
   ReturnType<typeof import('@tauri-apps/api/menu').Menu.new>
@@ -6,6 +6,7 @@ let activeModelMenu: Awaited<
 
 interface OpenModelMenuOptions {
   models: ModelInfo[];
+  providers: ProviderConfig[];
   selectedId: string;
   onSelect: (modelId: string) => void | Promise<void>;
 }
@@ -18,6 +19,7 @@ interface OpenModelMenuOptions {
  */
 export async function openNativeModelMenu({
   models,
+  providers,
   selectedId,
   onSelect,
 }: OpenModelMenuOptions): Promise<boolean> {
@@ -31,12 +33,15 @@ export async function openNativeModelMenu({
   ]);
 
   await activeModelMenu?.close();
+  const providerNames = new Map(providers.map((provider) => [provider.id, provider.name]));
 
   const items = await Promise.all(
     models.map((model, index) =>
       CheckMenuItem.new({
         id: `buddy-model-${index}`,
-        text: model.display_name,
+        text: providerNames.has(model.provider_id)
+          ? `${model.display_name} · ${providerNames.get(model.provider_id)}`
+          : model.display_name,
         checked: model.id === selectedId,
         action: () => {
           void onSelect(model.id);

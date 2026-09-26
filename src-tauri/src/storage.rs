@@ -13,6 +13,10 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::Manager;
 
+mod atomic_file;
+mod attachment_files;
+mod config_files;
+
 /// 每个分块文件的最大消息数量
 const CHUNK_SIZE: u32 = 100;
 
@@ -43,10 +47,7 @@ fn write_file_atomic(
     content: &str,
     label: &str,
 ) -> Result<(), String> {
-    let tmp_path = dir.join(format!(".{file_name}.tmp"));
-    fs::write(&tmp_path, content).map_err(|e| format!("写入{label}临时文件失败: {e}"))?;
-    fs::rename(&tmp_path, dir.join(file_name)).map_err(|e| format!("写入{label}失败: {e}"))?;
-    Ok(())
+    atomic_file::write_file_atomic(dir, file_name, content, label)
 }
 
 // ── Config ────────────────────────────────────────────────
@@ -56,26 +57,12 @@ fn write_file_atomic(
 /// 若 config.json 不存在则返回默认配置；
 /// 若文件损坏（JSON 解析失败）则打印警告并返回默认配置，避免应用无法启动。
 pub fn get_config(app: &tauri::AppHandle) -> Result<AppConfig, String> {
-    let dir = data_dir(app)?;
-    let path = dir.join("config.json");
-
-    if !path.exists() {
-        return Ok(AppConfig::default());
-    }
-
-    let content = fs::read_to_string(&path).map_err(|e| format!("读取配置文件失败: {}", e))?;
-    serde_json::from_str(&content).or_else(|e| {
-        log::warn!("配置文件损坏，使用默认配置: {}", e);
-        Ok(AppConfig::default())
-    })
+    config_files::read_config(&data_dir(app)?)
 }
 
 /// 保存应用配置到磁盘
 pub fn save_config(app: &tauri::AppHandle, config: &AppConfig) -> Result<(), String> {
-    let dir = ensure_data_dir(app)?;
-    let content =
-        serde_json::to_string_pretty(config).map_err(|e| format!("序列化配置失败: {}", e))?;
-    write_file_atomic(&dir, "config.json", &content, "配置文件")
+    config_files::save_config(&data_dir(app)?, config)
 }
 
 // ── Manifest ──────────────────────────────────────────────
@@ -190,17 +177,10 @@ pub fn store_image_data_url(
 /// 返回 Ok(false) = 文件不存在；Ok(true) = 已删除。
 /// 限制在 attachments 目录内，防止任意路径的穿越删除。
 pub fn delete_attachment_file(app: &tauri::AppHandle, path: &str) -> Result<bool, String> {
-    let dir = data_dir(app)?;
-    let attachments_dir = dir.join("attachments");
-    let target = std::path::Path::new(path);
-    if !target.starts_with(&attachments_dir) {
-        return Err("不允许删除附件目录之外的文件".to_string());
-    }
-    match fs::remove_file(target) {
-        Ok(_) => Ok(true),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(e) => Err(format!("删除附件文件失败: {e}")),
-    }
+    attachment_files::delete_attachment_in_dir(
+        &data_dir(app)?.join("attachments"),
+        std::path::Path::new(path),
+    )
 }
 
 /// 追加一条新消息到分块存储

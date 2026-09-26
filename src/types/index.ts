@@ -43,6 +43,8 @@ export interface ProviderConfig {
 export interface ModelInfo {
   id: string;
   provider_id: string;
+  /** Provider API 使用的原始模型 ID；配置迁移后始终存在。 */
+  api_model_id?: string;
   display_name: string;
   context_window: number;
   latency_ms: number | null;

@@ -40,9 +40,7 @@ interface AddProviderPanelProps {
  * 5. 确认添加后将 provider 和模型写入配置
  */
 export function AddProviderPanel({ onBack, onAdded }: AddProviderPanelProps) {
-  const addProvider = useConfigStore((state) => state.addProvider);
-  const addModels = useConfigStore((state) => state.addModels);
-  const setDefaultModel = useConfigStore((state) => state.setDefaultModel);
+  const addProviderWithModels = useConfigStore((state) => state.addProviderWithModels);
   const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
   const [baseUrl, setBaseUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
@@ -111,10 +109,13 @@ export function AddProviderPanel({ onBack, onAdded }: AddProviderPanelProps) {
   const handleAdd = async () => {
     if (!selectedPreset || !baseUrl || !apiKey) return;
 
+    const preset = PROVIDER_PRESETS.find((item) => item.id === selectedPreset);
+    const providerId = selectedPreset === 'custom' ? `custom-${Date.now()}` : preset?.id;
+    if (!providerId) return;
+    let provider: ProviderConfig;
     if (selectedPreset === 'custom') {
-      const customId = `custom-${Date.now()}`;
-      const provider: ProviderConfig = {
-        id: customId,
+      provider = {
+        id: providerId,
         name: '自定义服务',
         base_url: baseUrl,
         api_key: apiKey,
@@ -122,38 +123,33 @@ export function AddProviderPanel({ onBack, onAdded }: AddProviderPanelProps) {
         provider_type: effectiveProviderType,
         compat: undefined,
       };
-      const modelsToAdd = fetchedModels
-        .filter((m) => selectedModelIds.has(m.id))
-        .map((m) => ({ ...m, provider_id: customId }));
-      await addProvider(provider);
-      if (modelsToAdd.length > 0) await addModels(modelsToAdd);
-      // 自动选中第一个模型，避免出现「已配 Key 但仍提示无 Key」的情况
-      const firstId = modelsToAdd[0]?.id;
-      if (firstId) await setDefaultModel(firstId);
-      onAdded();
-      return;
+    } else {
+      if (!preset) return;
+      provider = {
+        id: preset.id,
+        name: preset.name,
+        base_url: baseUrl,
+        api_key: apiKey,
+        enabled_model_ids: Array.from(selectedModelIds),
+        provider_type: preset.provider_type,
+        compat: preset.compat,
+      };
     }
+    const modelsToAdd = fetchedModels
+      .filter((model) => selectedModelIds.has(model.id))
+      .map((model) => ({ ...model, provider_id: providerId }));
 
-    const preset = PROVIDER_PRESETS.find((p) => p.id === selectedPreset);
-    if (!preset) return;
-
-    const provider: ProviderConfig = {
-      id: preset.id,
-      name: preset.name,
-      base_url: baseUrl,
-      api_key: apiKey,
-      enabled_model_ids: Array.from(selectedModelIds),
-      provider_type: preset.provider_type,
-      compat: preset.compat,
-    };
-    const modelsToAdd = fetchedModels.filter((m) => selectedModelIds.has(m.id));
-
-    await addProvider(provider);
-    if (modelsToAdd.length > 0) await addModels(modelsToAdd);
-    // 自动选中第一个模型，避免出现「已配 Key 但仍提示无 Key」的情况
-    const firstId = modelsToAdd[0]?.id;
-    if (firstId) await setDefaultModel(firstId);
-    onAdded();
+    setLoading(true);
+    setError(null);
+    try {
+      // 一个事务同时写入 Provider、模型、启用状态与默认模型，保存失败时不会离开页面。
+      await addProviderWithModels(provider, modelsToAdd, modelsToAdd[0]?.id);
+      onAdded();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
   };
 
   /** 切换单个模型的选中状态 */

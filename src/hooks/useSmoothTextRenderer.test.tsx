@@ -57,7 +57,8 @@ beforeEach(() => {
     streamingTokens: 0,
     streamingBlocks: [],
     pendingTextBuffer: '',
-    pendingTextEnd: null,
+    pendingStreamEvents: [],
+    pendingTextEnds: [],
     streamDonePending: false,
     activeToolCalls: {},
     pendingQuestion: null,
@@ -98,6 +99,22 @@ describe('useSmoothTextRenderer 后台输出', () => {
 
     expect(useChatStore.getState().pendingTextBuffer).toBe('');
     expect(liveText()).toBe('后台继续😀');
+  });
+
+  it('后台立即消费大量碎片正文，不发生递归堆栈或遗留队列', () => {
+    render(<RendererHarness />);
+
+    act(() => {
+      window.dispatchEvent(new Event(WINDOW_WILL_HIDE_EVENT));
+      for (let index = 0; index < 4_000; index += 1) {
+        useChatStore.getState().feedTextDelta('字');
+      }
+    });
+
+    const state = useChatStore.getState();
+    expect(liveText()).toHaveLength(4_000);
+    expect(state.pendingTextBuffer).toBe('');
+    expect(state.pendingStreamEvents).toEqual([]);
   });
 
   it('重新显示时清理补发事件，随后恢复逐字速度', async () => {

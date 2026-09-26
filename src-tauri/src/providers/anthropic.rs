@@ -368,13 +368,13 @@ impl LlmProvider for AnthropicProvider {
             //       完成后取回 Result
             //     ≈ Java 的 CompletableFuture.get() 或 Kotlin 的 suspend fun
             let request_started = Instant::now();
-            let response = client
+            let request = client
                 .post(&url)
                 .header("x-api-key", api_key)
                 .header("anthropic-version", ANTHROPIC_VERSION)
                 .header("Content-Type", "application/json")
-                .json(&body)
-                .send()
+                .json(&body);
+            let Some(response) = super::send_request_cancellable(request, &mut cancel_rx)
                 .await
                 .map_err(|e| {
                     // `e.is_timeout()` / `e.is_connect()` 是 reqwest::Error 的判定方法
@@ -386,7 +386,24 @@ impl LlmProvider for AnthropicProvider {
                     } else {
                         ApiError::NetworkError(e.to_string())
                     }
-                })?;
+                })?
+            else {
+                return Ok(StreamOutcome::failed(
+                    String::new(),
+                    String::new(),
+                    StopReason::Aborted,
+                    "用户取消",
+                ));
+            };
+
+            if super::cancellation_requested(&cancel_rx) {
+                return Ok(StreamOutcome::failed(
+                    String::new(),
+                    String::new(),
+                    StopReason::Aborted,
+                    "用户取消",
+                ));
+            }
 
             // ── 6. 检查 HTTP 状态码 ──
             let status = response.status();
@@ -503,12 +520,12 @@ impl LlmProvider for AnthropicProvider {
                                 "[anthropic::stream_chat] 被取消: {} chunks, {} tokens",
                                 chunk_count, token_count
                             );
-                            emitter.error(
+                            return Ok(StreamOutcome::failed(
+                                full_response,
+                                thinking_response,
                                 StopReason::Aborted,
                                 "用户取消",
-                                &full_response,
-                            );
-                            return Ok(StreamOutcome { full_text: full_response, thinking_text: thinking_response, tool_calls: vec![], had_stream_error: true });
+                            ));
                         }
                         continue;  // 还没取消，继续下一轮循环
                     }
@@ -524,12 +541,12 @@ impl LlmProvider for AnthropicProvider {
                                     "[anthropic::stream_chat] 读取超时: {} chunks, {} tokens",
                                     chunk_count, token_count
                                 );
-                                emitter.error(
+                                return Ok(StreamOutcome::failed(
+                                    full_response,
+                                    thinking_response,
                                     StopReason::Error,
                                     "读取超时",
-                                    &full_response,
-                                );
-                                return Ok(StreamOutcome { full_text: full_response, thinking_text: thinking_response, tool_calls: vec![], had_stream_error: true });
+                                ));
                             }
                         }
                     }
@@ -553,17 +570,12 @@ impl LlmProvider for AnthropicProvider {
                                 "[anthropic::stream_chat] SSE 行数据超过 {} 字节，终止解析",
                                 MAX_SSE_LINE_BYTES
                             );
-                            emitter.error(
+                            return Ok(StreamOutcome::failed(
+                                full_response,
+                                thinking_response,
                                 StopReason::Error,
                                 "响应数据行超过大小上限",
-                                &full_response,
-                            );
-                            return Ok(StreamOutcome {
-                                full_text: full_response,
-                                thinking_text: thinking_response,
-                                tool_calls: vec![],
-                                had_stream_error: true,
-                            });
+                            ));
                         }
 
                         // 逐行解析：SSE 是行分隔的协议
@@ -812,12 +824,11 @@ impl LlmProvider for AnthropicProvider {
                                                             usage_summary,
                                                         );
                                                         // done 事件由 commands.rs 在整轮 tool 循环结束时统一发射
-                                                        return Ok(StreamOutcome {
-                                                            full_text: full_response,
-                                                            thinking_text: thinking_response,
-                                                            tool_calls: calls,
-                                                            had_stream_error: false,
-                                                        });
+                                                        return Ok(StreamOutcome::completed(
+                                                            full_response,
+                                                            thinking_response,
+                                                            calls,
+                                                        ));
                                                     }
                                                     "error" => {
                                                         // 服务端推送的 error 事件
@@ -828,17 +839,12 @@ impl LlmProvider for AnthropicProvider {
                                                             "[anthropic] error 事件: {}",
                                                             error_msg
                                                         );
-                                                        emitter.error(
+                                                        return Ok(StreamOutcome::failed(
+                                                            full_response,
+                                                            thinking_response,
                                                             StopReason::Error,
                                                             error_msg,
-                                                            &full_response,
-                                                        );
-                                                        return Ok(StreamOutcome {
-                                                            full_text: full_response,
-                                                            thinking_text: thinking_response,
-                                                            tool_calls: vec![],
-                                                            had_stream_error: true,
-                                                        });
+                                                        ));
                                                     }
                                                     _ => {}
                                                 }
@@ -863,33 +869,25 @@ impl LlmProvider for AnthropicProvider {
                         }
                     }
                     Some(Err(e)) => {
-                        // 网络错误：保留已累积的完整工具调用（不完整调用在 flush 内被丢弃），
-                        // 避免整轮工具结果因网络错误而丢失。
-                        emitter.error(
+                        // 网络中断时 tool_call 参数可能不完整，不能将其标记为完成或继续执行。
+                        return Ok(StreamOutcome::failed(
+                            full_response,
+                            thinking_response,
                             StopReason::Error,
-                            &format!("流读取错误: {}", e),
-                            &full_response,
-                        );
-                        let calls = flush_tool_calls(&mut tool_calls, emitter);
-                        return Ok(StreamOutcome {
-                            full_text: full_response,
-                            thinking_text: thinking_response,
-                            tool_calls: calls,
-                            had_stream_error: true,
-                        });
+                            format!("流读取错误: {}", e),
+                        ));
                     }
                     None => {
                         // 流结束但没收到 message_stop：连接被提前切断（异常结束）。
                         // Anthropic 协议保证正常完成的响应必然以 message_stop 收尾，
                         // 走到这里说明消息不完整——按网络错误处理，不执行未完成工具调用。
                         warn!("[anthropic::stream_chat] 流提前结束(未收到 message_stop)，视为异常");
-                        emitter.error(StopReason::Error, "流提前结束(连接中断)", &full_response);
-                        return Ok(StreamOutcome {
-                            full_text: full_response,
-                            thinking_text: thinking_response,
-                            tool_calls: vec![],
-                            had_stream_error: true,
-                        });
+                        return Ok(StreamOutcome::failed(
+                            full_response,
+                            thinking_response,
+                            StopReason::Error,
+                            "流提前结束(连接中断)",
+                        ));
                     }
                 }
             }
@@ -951,6 +949,7 @@ impl LlmProvider for AnthropicProvider {
                     Some(ModelInfo {
                         id: id.to_string(),
                         provider_id: String::new(),
+                        api_model_id: None,
                         display_name: id.to_string(),
                         context_window: get_context_window(id),
                         latency_ms: None,
@@ -1025,6 +1024,7 @@ fn builtin_anthropic_models() -> Vec<ModelInfo> {
         ModelInfo {
             id: "claude-sonnet-4-6".to_string(),
             provider_id: String::new(),
+            api_model_id: None,
             display_name: "Claude Sonnet 4.6".to_string(),
             context_window: get_context_window("claude-sonnet-4-6"),
             latency_ms: None,
@@ -1034,6 +1034,7 @@ fn builtin_anthropic_models() -> Vec<ModelInfo> {
         ModelInfo {
             id: "claude-opus-4-8".to_string(),
             provider_id: String::new(),
+            api_model_id: None,
             display_name: "Claude Opus 4.8".to_string(),
             context_window: get_context_window("claude-opus-4-8"),
             latency_ms: None,
@@ -1043,6 +1044,7 @@ fn builtin_anthropic_models() -> Vec<ModelInfo> {
         ModelInfo {
             id: "claude-haiku-4-5".to_string(),
             provider_id: String::new(),
+            api_model_id: None,
             display_name: "Claude Haiku 4.5".to_string(),
             context_window: get_context_window("claude-haiku-4-5"),
             latency_ms: None,
@@ -1052,6 +1054,7 @@ fn builtin_anthropic_models() -> Vec<ModelInfo> {
         ModelInfo {
             id: "claude-fable-5".to_string(),
             provider_id: String::new(),
+            api_model_id: None,
             display_name: "Claude Fable 5".to_string(),
             context_window: get_context_window("claude-fable-5"),
             latency_ms: None,
@@ -1168,5 +1171,78 @@ mod tests {
                 make_user_message("u2", "新问题", 1_800_000_000),
             ])
         );
+    }
+
+    #[test]
+    fn preserves_final_assistant_text_after_tool_result_before_follow_up() {
+        let messages = vec![
+            Message {
+                id: "a-tool".to_string(),
+                role: MessageRole::Assistant,
+                content: String::new(),
+                images: Vec::new(),
+                blocks: None,
+                model_id: None,
+                created_at: 0,
+                tool_calls: Some(vec![ToolCall {
+                    id: "call-read".to_string(),
+                    name: "read_file".to_string(),
+                    arguments: r#"{"path":"/tmp/note.txt"}"#.to_string(),
+                }]),
+                tool_call_id: None,
+                tool_name: None,
+                is_error: None,
+                parent_message_id: None,
+            },
+            Message {
+                id: "tool-result".to_string(),
+                role: MessageRole::Tool,
+                content: "文件正文".to_string(),
+                images: Vec::new(),
+                blocks: None,
+                model_id: None,
+                created_at: 0,
+                tool_calls: None,
+                tool_call_id: Some("call-read".to_string()),
+                tool_name: Some("read_file".to_string()),
+                is_error: Some(false),
+                parent_message_id: None,
+            },
+            Message {
+                id: "a-final".to_string(),
+                role: MessageRole::Assistant,
+                content: "根据文件内容，结论是可继续。".to_string(),
+                images: Vec::new(),
+                blocks: None,
+                model_id: None,
+                created_at: 0,
+                tool_calls: None,
+                tool_call_id: None,
+                tool_name: None,
+                is_error: None,
+                parent_message_id: None,
+            },
+            make_user_message("u-follow-up", "请继续解释", 1_800_000_000),
+        ];
+
+        let output = AnthropicProvider::convert_messages(&messages);
+
+        assert_eq!(
+            output
+                .iter()
+                .map(|message| message["role"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["assistant", "user", "assistant", "user"]
+        );
+        assert_eq!(output[0]["content"][0]["type"], "tool_use");
+        assert_eq!(output[1]["content"][0]["type"], "tool_result");
+        assert_eq!(
+            output[2]["content"][0]["text"],
+            "根据文件内容，结论是可继续。"
+        );
+        assert!(output[3]["content"]
+            .as_str()
+            .unwrap()
+            .starts_with("请继续解释\n\n<buddy_runtime_context>"));
     }
 }

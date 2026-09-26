@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Check } from 'lucide-react';
-import type { ModelInfo } from '@/types';
+import type { ModelInfo, ProviderConfig } from '@/types';
 
 /** 模型下拉菜单的 Props */
 interface ModelDropdownProps {
@@ -9,6 +9,8 @@ interface ModelDropdownProps {
   models: ModelInfo[];
   /** 当前默认模型的 ID */
   selectedId: string;
+  /** 服务名称，用于区分跨服务同名模型 */
+  providers: ProviderConfig[];
   /** 选择模型后的回调，传入模型 ID */
   onSelect: (modelId: string) => void;
   /** 关闭下拉菜单的回调（Esc 或点击外部） */
@@ -26,6 +28,7 @@ interface ModelDropdownProps {
 export function ModelDropdown({
   models,
   selectedId,
+  providers,
   onSelect,
   onClose,
 }: ModelDropdownProps) {
@@ -66,6 +69,7 @@ export function ModelDropdown({
   // 仅展示 enabled 不为 false 的模型
   const enabledModels = models.filter((m) => (m as any).enabled !== false);
   const displayedSelectedId = pendingSelectedId ?? selectedId;
+  const providerNames = new Map(providers.map((provider) => [provider.id, provider.name]));
 
   /** 先展示短促的选中反馈，再关闭菜单。 */
   const handleSelect = (modelId: string) => {
@@ -113,6 +117,7 @@ export function ModelDropdown({
         )}
         {enabledModels.map((model) => {
           const isDefault = model.id === displayedSelectedId;
+          const providerName = providerNames.get(model.provider_id);
 
           return (
             <button
@@ -158,6 +163,7 @@ export function ModelDropdown({
                     whiteSpace: 'nowrap',
                   }}
                 >
+                  {providerName ? `${providerName} · ` : ''}
                   {model.context_window
                     ? `${(model.context_window / 1000).toFixed(0)}K 上下文`
                     : ''}

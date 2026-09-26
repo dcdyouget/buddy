@@ -114,6 +114,25 @@ describe('useSmoothWheelScroll', () => {
     expect(pendingFrames.size).toBe(1);
   });
 
+  it('触控板小幅上滑也会立即报告用户意图', () => {
+    const onUserScrollIntent = vi.fn();
+    const { getByTestId } = render(
+      createElement(ScrollHarness, { onUserScrollIntent }),
+    );
+    const scroller = getByTestId('scroller');
+    configureScrollBox(scroller, {
+      scrollTop: 800,
+      scrollHeight: 1000,
+      clientHeight: 200,
+    });
+
+    fireEvent.wheel(scroller, { deltaY: -4 });
+
+    expect(onUserScrollIntent).toHaveBeenCalledWith(-4);
+    act(runNextFrame);
+    expect(scroller.scrollTop).toBeCloseTo(798.88);
+  });
+
   it('程序化修改滚动位置后废弃旧的滚轮目标', () => {
     const { getByTestId } = render(createElement(ScrollHarness));
     const scroller = getByTestId('scroller');

@@ -53,6 +53,48 @@ pub(crate) fn shared_http_client() -> Result<Client, String> {
         .clone()
 }
 
+/// 请求响应头阶段也要响应停止操作。`reqwest::RequestBuilder::send` 在 DNS、建连或等待
+/// 服务端首字节时都可能长时间 pending，不能只在 SSE body 读取循环检查取消信号。
+async fn await_cancellable<T, F>(request: F, cancel_rx: &mut watch::Receiver<bool>) -> Option<T>
+where
+    F: Future<Output = T>,
+{
+    if *cancel_rx.borrow() {
+        return None;
+    }
+
+    tokio::pin!(request);
+    loop {
+        tokio::select! {
+            result = &mut request => return Some(result),
+            changed = cancel_rx.changed() => {
+                if *cancel_rx.borrow() {
+                    return None;
+                }
+                // 发送端在 command 收尾前始终存活；若异常关闭，继续等待已经发出的
+                // 请求完成，避免把一次正常请求误判为取消。
+                if changed.is_err() {
+                    return Some(request.await);
+                }
+            }
+        }
+    }
+}
+
+pub(crate) async fn send_request_cancellable(
+    request: reqwest::RequestBuilder,
+    cancel_rx: &mut watch::Receiver<bool>,
+) -> Result<Option<reqwest::Response>, reqwest::Error> {
+    match await_cancellable(request.send(), cancel_rx).await {
+        Some(response) => response.map(Some),
+        None => Ok(None),
+    }
+}
+
+pub(crate) fn cancellation_requested(cancel_rx: &watch::Receiver<bool>) -> bool {
+    *cancel_rx.borrow()
+}
+
 /// 从 API 错误响应 JSON 中提取人类可读的错误消息
 ///
 /// 尝试解析常见格式：
@@ -499,5 +541,42 @@ mod system_prompt_tests {
         assert!(summary.contains("historical_tool_calls=1"));
         assert!(summary.contains("latest_user=\"请总结这份材料\""));
         assert!(!summary.contains("data:image/png"));
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::{await_cancellable, send_request_cancellable};
+    use reqwest::Client;
+    use std::time::Duration;
+    use tokio::{sync::watch, time::timeout};
+
+    #[tokio::test]
+    async fn pre_cancelled_request_skips_the_headers_wait() {
+        let client = Client::new();
+        let request = client.get("http://127.0.0.1:9/never-started");
+        let (sender, mut receiver) = watch::channel(false);
+        sender.send(true).unwrap();
+
+        let response = send_request_cancellable(request, &mut receiver)
+            .await
+            .unwrap();
+
+        assert!(response.is_none());
+    }
+
+    #[tokio::test]
+    async fn cancellation_interrupts_a_pending_headers_wait() {
+        let (sender, mut receiver) = watch::channel(false);
+        let request_task = tokio::spawn(async move {
+            await_cancellable(std::future::pending::<()>(), &mut receiver).await
+        });
+        sender.send(true).unwrap();
+
+        let response = timeout(Duration::from_secs(1), request_task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(response.is_none());
     }
 }

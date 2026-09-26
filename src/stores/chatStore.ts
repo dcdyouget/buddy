@@ -30,6 +30,55 @@ import type {
 import { isBrowser, MOCK_MESSAGES } from '@/utils/mock';
 import { parseThinkBlocks } from '@/utils/thinkParser';
 
+/**
+ * 需要按顺序落到界面的流事件。
+ *
+ * 正文会被平滑渲染器拆成多帧消费；若在它尚未消费完时立即处理后续
+ * text_end、思考或工具事件，下一轮的边界就会越过前一轮正文。这里把
+ * 所有会改变 assistant 内容的事件放在同一个 FIFO 中，保留后端的原始顺序。
+ */
+type QueuedStreamEvent =
+  | { event: 'text_start'; contentIndex: number }
+  | { event: 'text_delta'; contentIndex: number; delta: string }
+  | { event: 'text_end'; contentIndex: number; content: string }
+  | { event: 'thinking_start'; contentIndex: number }
+  | { event: 'thinking_delta'; contentIndex: number; delta: string }
+  | { event: 'thinking_end'; contentIndex: number; content: string }
+  | { event: 'tool_call_start'; id: string; name: string; contentIndex: number }
+  | { event: 'tool_call_delta'; id: string; argumentsDelta: string }
+  | { event: 'tool_call_end'; id: string; name: string; arguments: string }
+  | { event: 'tool_executing'; id: string; name: string }
+  | {
+      event: 'tool_result';
+      id: string;
+      name: string;
+      content: string;
+      images: ImageAttachment[];
+      isError: boolean;
+    }
+  | {
+      event: 'tool_approval_required';
+      id: string;
+      name: string;
+      arguments: string;
+      reason: string;
+    }
+  | {
+      event: 'tool_question_required';
+      id: string;
+      question: string;
+      options: PendingQuestion['options'];
+      multiSelect: boolean;
+      header: string;
+    }
+  | { event: 'turn_end'; toolCallsPending: number };
+
+// Zustand 的订阅在 set() 内同步触发。窗口隐藏时，平滑渲染器会在订阅中立即
+// flush；这时 drain 又可能设置下一批正文。两个 guard 让这一链路保持迭代式，
+// 避免成千上万小 SSE chunk 形成递归调用栈。
+let isDrainingStreamEvents = false;
+let isFlushingTextBuffer = false;
+
 /** ChatStore 状态和操作定义 */
 interface ChatState {
   messages: Message[];
@@ -60,16 +109,19 @@ interface ChatState {
   // P11: 当前等待回答的 ask_user 问题(后端 ToolQuestionRequired 事件触发)
   pendingQuestion: PendingQuestion | null;
 
-  // P9: 当前流式轮次中正在进行的工具调用（按 id 索引）
-  // 流式结束后会被合并到最后一条 assistant 消息的 tool_calls 字段中
+  // 当前 assistant 轮次中正在进行的工具调用（按 id 索引）
+  // 每个 tool turn 均落为独立的 assistant + tool 消息，保证下次请求的
+  // OpenAI tool_calls 协议不会与最终正文合并到同一条 assistant 消息。
   activeToolCalls: Record<string, ToolCall>;
 
   // P9: 平滑文本渲染 —— 后端推送的文本增量先入队缓冲
   // rAF 循环再从队头逐字消费到 streamingBlocks，避免突发的 SSE chunk
   // 导致 React 批量 re-render 产生的「一卡一卡」视觉
   pendingTextBuffer: string;
-  /** 文本仍在逐字显示时，延后提交 text_end，避免尾部被一次性冲出。 */
-  pendingTextEnd: { contentIndex: number; content: string } | null;
+  /** 与正文共享 FIFO 的结构化事件。 */
+  pendingStreamEvents: QueuedStreamEvent[];
+  /** 兼容直接调用 store 的旧路径：不再覆盖，而是按到达顺序保存每个 text_end。 */
+  pendingTextEnds: Array<{ contentIndex: number; content: string }>;
   /** 后端已结束，但前端仍在消费逐字动画队列。 */
   streamDonePending: boolean;
 
@@ -102,6 +154,7 @@ interface ChatState {
     images: ImageAttachment[],
     isError: boolean,
   ) => void;
+  handleTurnEnd: (toolCallsPending: number) => void;
   handleToolApprovalRequired: (id: string, name: string, args: string, reason: string) => void;
   setToolApproval: (approval: ChatState['toolApproval']) => void;
   // P11: ask_user 问题的状态控制
@@ -111,6 +164,10 @@ interface ChatState {
   handleStreamError: (reason: string, message: string) => void;
   finalizeMessage: () => void;
   // P9: 平滑渲染
+  queueStreamEvent: (event: QueuedStreamEvent) => void;
+  _drainStreamEventQueue: () => void;
+  _ensureStreamingAssistantTurn: () => void;
+  _commitCurrentAssistantTurn: (persistCompletedToolsOnly: boolean) => void;
   feedTextDelta: (delta: string) => void;
   smoothTextDelta: (count: number) => void;
   flushTextBuffer: () => void;
@@ -285,6 +342,32 @@ function getPersistableToolCalls(
   });
 }
 
+/** 参数完整的调用可先写入本轮 assistant，随后由对应 tool 消息完成配对。 */
+function getCompleteToolCalls(
+  activeToolCalls: Record<string, ToolCall>,
+): ToolCall[] {
+  return Object.values(activeToolCalls).filter((toolCall) => {
+    if (!toolCall.id.trim() || !toolCall.name.trim()) return false;
+    try {
+      const parsed = JSON.parse(toolCall.arguments);
+      return Boolean(parsed && typeof parsed === 'object' && !Array.isArray(parsed));
+    } catch {
+      return false;
+    }
+  });
+}
+
+function createStreamingAssistantMessage(modelId: string | null): Message {
+  return {
+    id: generateId(),
+    role: 'assistant',
+    content: '',
+    blocks: [],
+    model_id: modelId,
+    created_at: Math.floor(Date.now() / 1000),
+  };
+}
+
 const HISTORY_PAGE_SIZE = 10;
 
 export function hydrateHistoryMessages(messages: Message[]): Message[] {
@@ -368,7 +451,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   activeToolCalls: {},
   pendingQuestion: null,
   pendingTextBuffer: '',
-  pendingTextEnd: null,
+  pendingStreamEvents: [],
+  pendingTextEnds: [],
   streamDonePending: false,
   /** 设置输入框草稿文本（用于接收外部选中的文本） */
   setDraftInput: (text: string) => {
@@ -454,7 +538,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamingRevealCount: 0,
       streamingRevealRevision: 0,
       pendingTextBuffer: '',
-      pendingTextEnd: null,
+      pendingStreamEvents: [],
+      pendingTextEnds: [],
       streamDonePending: false,
       error: null,
       activeToolCalls: {},
@@ -576,6 +661,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   /** 初始化/重置 streamingBlocks */
   handleTextStart: (contentIndex: number) => {
+    get()._ensureStreamingAssistantTurn();
     const blocks = [...get().streamingBlocks];
     // 多轮情况下 text_start 会被多次调用,只在该索引位置还没有 block 时才创建
     // 否则会覆盖前序轮的累积内容(导致"只显示最后一条"bug)
@@ -590,20 +676,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   /** 追加 Rust 已规范化的正文 delta */
   handleTextDelta: (_contentIndex: number, delta: string) => {
-    const { messages } = get();
-
-    // 改用 findLastAssistantIdx: 同 appendTextToken 注释,避免覆盖 tool 消息
-    const updated = [...messages];
-    const idx = findLastAssistantIdx(updated);
-    if (idx < 0) return;
-    const lastMsg = { ...updated[idx] } as Message;
-    lastMsg.content = (lastMsg.content || '') + delta;
-    updated[idx] = lastMsg;
-
+    get()._ensureStreamingAssistantTurn();
     const newBlocks = appendStreamingText(get().streamingBlocks, delta);
 
     set({
-      messages: updated,
       streamingBlocks: newBlocks,
       streamingTokens: get().streamingTokens + 1,
     });
@@ -612,7 +688,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
   /** 文本块结束 */
   handleTextEnd: (contentIndex: number, content: string) => {
     if (get().pendingTextBuffer.length > 0) {
-      set({ pendingTextEnd: { contentIndex, content } });
+      set((state) => ({
+        pendingTextEnds: [...state.pendingTextEnds, { contentIndex, content }],
+      }));
       return;
     }
 
@@ -680,6 +758,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   /** 思考块开始 —— 追加到 blocks 末尾而非按 content_index 覆盖 */
   handleThinkingStart: (_contentIndex: number) => {
+    get()._ensureStreamingAssistantTurn();
     const blocks = [...get().streamingBlocks];
     // text_start 可能先创建一个空占位块；内联 <think> 位于正文开头时移除它，
     // 保持与 Rust 最终持久化的 blocks 结构一致。
@@ -699,6 +778,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   /** 追加思考 delta —— 在 blocks 末尾找最后一个 open 的 thinking block */
   handleThinkingDelta: (_contentIndex: number, delta: string) => {
+    get()._ensureStreamingAssistantTurn();
     const blocks = [...get().streamingBlocks];
     // 从后往前找最后一个 open 的 thinking block
     let found = false;
@@ -721,6 +801,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   /** 思考块结束 */
   handleThinkingEnd: (_contentIndex: number, content: string) => {
+    get()._ensureStreamingAssistantTurn();
     const blocks = [...get().streamingBlocks];
     for (let i = blocks.length - 1; i >= 0; i--) {
       const b = blocks[i];
@@ -736,47 +817,28 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   /** 流式完成：等逐字动画队列清空，再将 streamingBlocks 附加到消息 */
   handleStreamDone: () => {
-    if (get().pendingTextBuffer.length > 0) {
+    get()._drainStreamEventQueue();
+    if (
+      get().pendingTextBuffer.length > 0 ||
+      get().pendingStreamEvents.length > 0 ||
+      get().pendingTextEnds.length > 0
+    ) {
       set({ streamDonePending: true });
       return;
     }
 
-    const pendingEnd = get().pendingTextEnd;
-    if (pendingEnd) {
-      set({ pendingTextEnd: null });
-      get().handleTextEnd(pendingEnd.contentIndex, pendingEnd.content);
-    }
-
-    const { messages, streamingBlocks, activeToolCalls } = get();
-    const updated = [...messages];
-    // 找到最后一条 assistant 消息 —— 它才是 streamingBlocks / tool_calls 的目标。
-    // 注意: handleToolResult 会在 messages 末尾 push role='tool' 的消息,
-    // 所以 messages 的最后一条可能是 tool 消息而不是 assistant。
-    const lastAssistantIdx = findLastAssistantIdx(updated);
-    if (lastAssistantIdx >= 0) {
-      const lastAssistant = { ...updated[lastAssistantIdx] } as Message;
-      const closedBlocks = finalizeStreamingBlocks(streamingBlocks);
-      lastAssistant.blocks = closedBlocks;
-      lastAssistant.content = textContentFromBlocks(closedBlocks);
-      // 仅保留已完成且参数完整的 tool_calls。
-      // 主动停止时，calling/executing 调用仍可能只有半截 JSON，不能进入下一轮。
-      const toolCallsList = getPersistableToolCalls(activeToolCalls);
-      if (toolCallsList.length > 0) {
-        lastAssistant.tool_calls = toolCallsList;
-      } else {
-        delete lastAssistant.tool_calls;
-      }
-      updated[lastAssistantIdx] = lastAssistant;
-    }
+    // 最终收尾只保留已有 tool_result 配对的调用；半截或仍在执行的调用
+    // 不能进入下一次 API 请求。
+    get()._commitCurrentAssistantTurn(true);
 
     set({
-      messages: updated,
       isStreaming: false,
       streamingTokens: 0,
       streamingModelId: null,
       streamingBlocks: [],
       pendingTextBuffer: '',
-      pendingTextEnd: null,
+      pendingStreamEvents: [],
+      pendingTextEnds: [],
       streamDonePending: false,
       toolApproval: null,
       activeToolCalls: {},
@@ -787,6 +849,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   /** 流式错误：先清缓冲再重置状态 */
   handleStreamError: (_reason: string, message: string) => {
     get().flushTextBuffer();
+    get()._drainStreamEventQueue();
     // 错误时仅保留此前已经完成的调用，不能把半截调用伪装成 error 后写入历史。
     const { messages, streamingBlocks, activeToolCalls } = get();
     let updated = [...messages];
@@ -822,7 +885,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamingModelId: null,
       streamingBlocks: [],
       pendingTextBuffer: '',
-      pendingTextEnd: null,
+      pendingStreamEvents: [],
+      pendingTextEnds: [],
       streamDonePending: false,
       error: message,
       activeToolCalls: {},
@@ -833,15 +897,136 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   // ── P9: 平滑文本渲染 ────────────────────────────
 
-  /** 将 text_delta 入队到缓冲，等待 rAF 循环小批量消费 */
+  /**
+   * 将会影响 assistant 内容的事件按后端顺序入队。
+   * text_delta 到队首后交给 rAF 逐字消费，其后的 text_end / 工具事件必须等待。
+   */
+  queueStreamEvent: (event: QueuedStreamEvent) => {
+    set((state) => {
+      const last = state.pendingStreamEvents[state.pendingStreamEvents.length - 1];
+      // 只有相邻的正文增量才可合并；任何结构边界仍保留为独立队列项。
+      // 这让数千个 1 字符 SSE chunk 在一帧内变成一个可按积压长度追赶的缓冲。
+      if (event.event === 'text_delta' && last?.event === 'text_delta') {
+        return {
+          pendingStreamEvents: [
+            ...state.pendingStreamEvents.slice(0, -1),
+            { ...last, delta: last.delta + event.delta },
+          ],
+        };
+      }
+      return { pendingStreamEvents: [...state.pendingStreamEvents, event] };
+    });
+    get()._drainStreamEventQueue();
+  },
+
+  /** 消费队首的非正文事件；正文留给 smoothTextDelta 逐字显示。 */
+  _drainStreamEventQueue: () => {
+    if (isDrainingStreamEvents) return;
+    isDrainingStreamEvents = true;
+    try {
+      while (true) {
+        const state = get();
+        const next = state.pendingStreamEvents[0];
+        if (!next) {
+          if (state.pendingTextBuffer) {
+            set({ pendingTextBuffer: '' });
+          }
+          return;
+        }
+
+        if (next.event === 'text_delta') {
+          if (next.delta.length > 0) {
+            if (state.pendingTextBuffer !== next.delta) {
+              set({ pendingTextBuffer: next.delta });
+            }
+            // 隐藏窗口时订阅会同步清空当前 delta。继续循环处理下一项，
+            // 否则前序 drain 返回后可能遗留结构边界未落盘。
+            if (get().pendingTextBuffer.length === 0) continue;
+            return;
+          }
+          set({ pendingStreamEvents: state.pendingStreamEvents.slice(1) });
+          continue;
+        }
+
+        set({ pendingStreamEvents: state.pendingStreamEvents.slice(1) });
+        switch (next.event) {
+          case 'text_start':
+            get().handleTextStart(next.contentIndex);
+            break;
+          case 'text_end':
+            get().handleTextEnd(next.contentIndex, next.content);
+            break;
+          case 'thinking_start':
+            get().handleThinkingStart(next.contentIndex);
+            break;
+          case 'thinking_delta':
+            get().handleThinkingDelta(next.contentIndex, next.delta);
+            break;
+          case 'thinking_end':
+            get().handleThinkingEnd(next.contentIndex, next.content);
+            break;
+          case 'tool_call_start':
+            get().handleToolCallStart(next.id, next.name, next.contentIndex);
+            break;
+          case 'tool_call_delta':
+            get().handleToolCallDelta(next.id, next.argumentsDelta);
+            break;
+          case 'tool_call_end':
+            get().handleToolCallEnd(next.id, next.name, next.arguments);
+            break;
+          case 'tool_executing':
+            get().handleToolExecuting(next.id, next.name);
+            break;
+          case 'tool_result':
+            get().handleToolResult(
+              next.id,
+              next.name,
+              next.content,
+              next.images,
+              next.isError,
+            );
+            break;
+          case 'tool_approval_required':
+            get().handleToolApprovalRequired(
+              next.id,
+              next.name,
+              next.arguments,
+              next.reason,
+            );
+            break;
+          case 'tool_question_required':
+            get().setPendingQuestion({
+              id: next.id,
+              question: next.question,
+              options: next.options,
+              multiSelect: next.multiSelect,
+              header: next.header,
+            });
+            break;
+          case 'turn_end':
+            get().handleTurnEnd(next.toolCallsPending);
+            break;
+        }
+      }
+    } finally {
+      isDrainingStreamEvents = false;
+    }
+  },
+
+  /** 将 text_delta 入队到缓冲，等待 rAF 循环小批量消费。 */
   feedTextDelta: (delta: string) => {
-    set((s) => ({ pendingTextBuffer: s.pendingTextBuffer + delta }));
+    get().queueStreamEvent({
+      event: 'text_delta',
+      contentIndex: 0,
+      delta,
+    });
   },
 
   /** rAF 定时调用：从缓冲区取 count 个字符，仅追加到轻量实时内容块。 */
   smoothTextDelta: (count: number) => {
-    const { pendingTextBuffer, streamingBlocks } = get();
-    if (pendingTextBuffer.length === 0) return;
+    const { pendingTextBuffer, streamingBlocks, pendingStreamEvents } = get();
+    const head = pendingStreamEvents[0];
+    if (pendingTextBuffer.length === 0 || head?.event !== 'text_delta') return;
 
     const {
       prefix: chars,
@@ -852,8 +1037,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     const blocks = appendStreamingText(streamingBlocks, chars);
 
+    const nextEvents =
+      rest.length > 0
+        ? [{ ...head, delta: rest }, ...pendingStreamEvents.slice(1)]
+        : pendingStreamEvents.slice(1);
     set({
       pendingTextBuffer: rest,
+      pendingStreamEvents: nextEvents,
       streamingBlocks: blocks,
       streamingTokens: get().streamingTokens + 1,
       streamingRevealCount: characterCount,
@@ -861,16 +1051,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
     });
 
     if (rest.length === 0) {
-      const pendingEnd = get().pendingTextEnd;
-      if (pendingEnd) {
-        set({ pendingTextEnd: null });
-        get().handleTextEnd(pendingEnd.contentIndex, pendingEnd.content);
+      const pendingEnds = get().pendingTextEnds;
+      if (pendingEnds.length > 0) {
+        set({ pendingTextEnds: [] });
+        for (const pendingEnd of pendingEnds) {
+          get().handleTextEnd(pendingEnd.contentIndex, pendingEnd.content);
+        }
       }
+      get()._drainStreamEventQueue();
 
       if (
         get().streamDonePending &&
         get().pendingTextBuffer.length === 0 &&
-        !get().pendingTextEnd
+        get().pendingStreamEvents.length === 0 &&
+        get().pendingTextEnds.length === 0
       ) {
         set({ streamDonePending: false });
         get().handleStreamDone();
@@ -880,9 +1074,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   /** 将缓冲区剩余字符全部推入（done/error 前调用，防止丢字） */
   flushTextBuffer: () => {
-    const { pendingTextBuffer } = get();
-    if (pendingTextBuffer.length === 0) return;
-    get().smoothTextDelta(pendingTextBuffer.length);
+    if (isFlushingTextBuffer) return;
+    isFlushingTextBuffer = true;
+    try {
+      while (get().pendingTextBuffer.length > 0) {
+        get().smoothTextDelta(get().pendingTextBuffer.length);
+      }
+      get()._drainStreamEventQueue();
+    } finally {
+      isFlushingTextBuffer = false;
+    }
   },
 
   /** 流式生成完成后的收尾工作 */
@@ -991,8 +1192,54 @@ export const useChatStore = create<ChatState>((set, get) => ({
   // ── P8: Tool 事件处理 ────────────────────────────────
   // 注意: 不再将 tool 状态文本拼入 assistant.content，防止污染对话历史
   // 导致模型看到 "[create_file 结果]:" 等文本后产生幻觉、不再调用工具
-  // 状态由 activeToolCalls (id -> ToolCall) 维护,流式结束后在 handleStreamDone
-  // 时合并到最后一条 assistant 消息的 tool_calls 字段,以便持久化/重渲染
+  // 状态由 activeToolCalls (id -> ToolCall) 维护；每次 turn_end 和 tool_result
+  // 都同步到对应的 assistant 消息，以便后续 Provider 请求和历史重渲染。
+
+  /**
+   * 一个 tool result 后，下一次模型输出属于新的 assistant turn。
+   * `messages` 直接保存 Provider 所需的 assistant/tool 序列；ChatPage 已把
+   * 连续 assistant 气泡视觉上衔接，因此不再通过把多轮内容合并为一条消息来展示。
+   */
+  _ensureStreamingAssistantTurn: () => {
+    const { messages, streamingModelId } = get();
+    if (messages[messages.length - 1]?.role === 'assistant') return;
+    set({
+      messages: [...messages, createStreamingAssistantMessage(streamingModelId)],
+      streamingBlocks: [],
+      activeToolCalls: {},
+      streamingRevealCount: 0,
+      streamingRevealRevision: 0,
+    });
+  },
+
+  /** 将当前轮实时内容落到对应 assistant，供后续 API 请求和历史重放使用。 */
+  _commitCurrentAssistantTurn: (persistCompletedToolsOnly: boolean) => {
+    const { messages, streamingBlocks, activeToolCalls } = get();
+    const updated = [...messages];
+    const lastAssistantIdx = findLastAssistantIdx(updated);
+    if (lastAssistantIdx < 0) return;
+
+    const lastAssistant = { ...updated[lastAssistantIdx] } as Message;
+    const closedBlocks = finalizeStreamingBlocks(streamingBlocks);
+    lastAssistant.blocks = closedBlocks;
+    lastAssistant.content = textContentFromBlocks(closedBlocks);
+
+    const toolCalls = persistCompletedToolsOnly
+      ? getPersistableToolCalls(activeToolCalls)
+      : getCompleteToolCalls(activeToolCalls);
+    if (toolCalls.length > 0) {
+      lastAssistant.tool_calls = toolCalls;
+    } else {
+      delete lastAssistant.tool_calls;
+    }
+    updated[lastAssistantIdx] = lastAssistant;
+    set({ messages: updated });
+  },
+
+  /** 一轮 assistant 结束时，先保留结构完整的调用，等待后续 tool_result 配对。 */
+  handleTurnEnd: (_toolCallsPending: number) => {
+    get()._commitCurrentAssistantTurn(false);
+  },
 
   /** 找到/创建当前流式最后一条 assistant 消息的 tool_calls 数组,并返回其引用 */
   _ensureToolCallEntry: (id: string, name: string, status: ToolCallStatus): ToolCall => {
@@ -1023,6 +1270,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   handleToolCallStart: (id: string, name: string, _contentIndex: number) => {
+    get()._ensureStreamingAssistantTurn();
     get()._ensureToolCallEntry(id, name, 'calling');
     // 记录内联位置:tool_call 应当插入到哪个 block 之后
     const insertAfter = get()._computeInsertAfterBlockIndex();
@@ -1031,6 +1279,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       active[id] = { ...active[id], insertAfterBlockIndex: insertAfter };
       set({ activeToolCalls: active });
     }
+    get()._commitCurrentAssistantTurn(false);
   },
 
   handleToolCallDelta: (id: string, argumentsDelta: string) => {
@@ -1039,9 +1288,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!prev) return; // 兜底:start 缺失时直接忽略 delta
     active[id] = { ...prev, arguments: (prev.arguments || '') + argumentsDelta };
     set({ activeToolCalls: active });
+    get()._commitCurrentAssistantTurn(false);
   },
 
   handleToolCallEnd: (id: string, name: string, args: string) => {
+    get()._ensureStreamingAssistantTurn();
     const active = { ...get().activeToolCalls };
     const prev = active[id];
     if (prev) {
@@ -1051,10 +1302,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
       active[id] = { id, name, arguments: args, status: 'calling' };
     }
     set({ activeToolCalls: active });
+    get()._commitCurrentAssistantTurn(false);
   },
 
   handleToolExecuting: (id: string, name: string) => {
+    get()._ensureStreamingAssistantTurn();
     get()._ensureToolCallEntry(id, name, 'executing');
+    get()._commitCurrentAssistantTurn(false);
   },
 
   handleToolResult: (
@@ -1100,9 +1354,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
       tool_name: name,
       is_error: isError,
     };
+    const messages = [...state.messages];
+    const lastAssistantIdx = findLastAssistantIdx(messages);
+    if (lastAssistantIdx >= 0) {
+      const assistant = { ...messages[lastAssistantIdx] } as Message;
+      const completeCalls = getCompleteToolCalls(active);
+      if (completeCalls.length > 0) {
+        assistant.tool_calls = completeCalls;
+      } else {
+        delete assistant.tool_calls;
+      }
+      messages[lastAssistantIdx] = assistant;
+    }
     set({
       activeToolCalls: active,
-      messages: [...state.messages, toolMsg],
+      messages: [...messages, toolMsg],
     });
   },
 
@@ -1160,7 +1426,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streamingRevealCount: 0,
       streamingRevealRevision: 0,
       pendingTextBuffer: '',
-      pendingTextEnd: null,
+      pendingStreamEvents: [],
+      pendingTextEnds: [],
       streamDonePending: false,
       historyOffset: 0,
       hasMoreHistory: false,

@@ -263,8 +263,18 @@ pub struct QuestionOption {
 ///
 /// 拆分 full_text + tool_calls,让 P4 的 send_message 知道本轮有没有 tool_call 需要执行
 ///
-/// `had_stream_error`: provider 内部是否已发射过 error 事件。
-/// 为 true 时 commands.rs 不应再发 done，避免前端收到 error + done 的组合。
+/// Provider 的终态错误信息。
+///
+/// Provider 只负责收集错误；由 `send_message` 在消息持久化、释放生成占用后再统一
+/// 发射终态事件，避免前端已经允许下一次发送时后端仍认为上一轮在运行。
+#[derive(Debug, Clone)]
+pub struct StreamFailure {
+    pub reason: StopReason,
+    pub message: String,
+}
+
+/// `had_stream_error` 表示 Provider 流未正常结束。为 true 时 `terminal_error` 必须存在，
+/// 供 commands.rs 在收尾阶段发射唯一的 error 事件。
 #[derive(Debug, Clone, Default)]
 pub struct StreamOutcome {
     /// 累积的完整文本(用于持久化 + UI 展示)
@@ -274,8 +284,44 @@ pub struct StreamOutcome {
     pub thinking_text: String,
     /// 本轮产生的 tool_calls(可能为空,表示纯文本回复)
     pub tool_calls: Vec<crate::models::ToolCall>,
-    /// provider 内部是否已通过 emitter 发射过 error 事件
+    /// Provider 是否遇到流错误或取消
     pub had_stream_error: bool,
+    /// 延后到 command 层发射的终态错误
+    pub terminal_error: Option<StreamFailure>,
+}
+
+impl StreamOutcome {
+    pub fn completed(
+        full_text: String,
+        thinking_text: String,
+        tool_calls: Vec<crate::models::ToolCall>,
+    ) -> Self {
+        Self {
+            full_text,
+            thinking_text,
+            tool_calls,
+            had_stream_error: false,
+            terminal_error: None,
+        }
+    }
+
+    pub fn failed(
+        full_text: String,
+        thinking_text: String,
+        reason: StopReason,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            full_text,
+            thinking_text,
+            tool_calls: Vec::new(),
+            had_stream_error: true,
+            terminal_error: Some(StreamFailure {
+                reason,
+                message: message.into(),
+            }),
+        }
+    }
 }
 ///
 /// 所有 Provider 实现都输出此枚举的事件。

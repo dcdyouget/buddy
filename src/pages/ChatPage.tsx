@@ -18,6 +18,7 @@ import { ModelDropdown } from '@/components/chat/ModelDropdown';
 import { useDragHandle } from '@/hooks/useDragHandle';
 import { useSmoothWheelScroll } from '@/hooks/useSmoothWheelScroll';
 import { useSmoothTextRenderer } from '@/hooks/useSmoothTextRenderer';
+import { resolveBottomFollowState } from '@/utils/bottomFollow';
 import { openNativeModelMenu } from '@/utils/modelMenu';
 import type { ModelInfo } from '@/types';
 
@@ -123,6 +124,7 @@ export function ChatPage() {
     if (!showDropdown && config) {
       const openedNativeMenu = await openNativeModelMenu({
         models: enabledModels,
+        providers: config.providers,
         selectedId: config.selected_model_id,
         onSelect: (id) => useConfigStore.getState().setDefaultModel(id),
       });
@@ -134,17 +136,25 @@ export function ChatPage() {
   // ── 智能滚动：仅当用户在底部时才自动跟随，翻看历史时不强拉 ──
   const scrollRef = useRef<HTMLDivElement>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
-  // 用 ref 跟踪上一次的 isAtBottom 和 showScrollButton，避免重复打 log
+  // 几何位置与跟随意图分开记录，避免小幅上滑被底部容差重新吸回。
   const prevIsAtBottomRef = useRef(true);
+  const isDetachedFromBottomRef = useRef(false);
+  const previousScrollTopRef = useRef<number | null>(null);
   const prevShowButtonRef = useRef(false);
   const isLoadingOlderRef = useRef(false);
   const lastSeenMessageCountRef = useRef(messages.length);
 
   /** 滚轮先于 scroll 事件表达用户意图，立即停止工具卡片高度变化触发的自动跟随。 */
   const handleUserScrollIntent = useCallback((deltaY: number) => {
-    if (deltaY < 0 && prevIsAtBottomRef.current) {
-      prevIsAtBottomRef.current = false;
-      setIsAtBottom(false);
+    if (scrollRef.current) {
+      previousScrollTopRef.current = scrollRef.current.scrollTop;
+    }
+    if (deltaY < 0) {
+      isDetachedFromBottomRef.current = true;
+      if (prevIsAtBottomRef.current) {
+        prevIsAtBottomRef.current = false;
+        setIsAtBottom(false);
+      }
     }
   }, []);
   const cancelSmoothWheelScroll = useSmoothWheelScroll(
@@ -179,15 +189,28 @@ export function ChatPage() {
   }, [cancelSmoothWheelScroll, hasMoreHistory, loadOlderMessages]);
 
   const handleScroll = useCallback(() => {
-    const atBottom = checkAtBottom();
+    const el = scrollRef.current;
+    if (!el) return;
+
+    const previousScrollTop = previousScrollTopRef.current ?? el.scrollTop;
+    const nextState = resolveBottomFollowState({
+      geometricallyAtBottom: checkAtBottom(),
+      isDetachedFromBottom: isDetachedFromBottomRef.current,
+      previousScrollTop,
+      currentScrollTop: el.scrollTop,
+    });
+    const { isAtBottom: atBottom } = nextState;
+    isDetachedFromBottomRef.current = nextState.isDetachedFromBottom;
+    previousScrollTopRef.current = el.scrollTop;
+
     if (atBottom !== prevIsAtBottomRef.current) {
       console.log('[Scroll] isAtBottom:', prevIsAtBottomRef.current, '→', atBottom,
-        `(scrollTop=${scrollRef.current?.scrollTop}, scrollHeight=${scrollRef.current?.scrollHeight}, clientHeight=${scrollRef.current?.clientHeight})`);
+        `(scrollTop=${el.scrollTop}, scrollHeight=${el.scrollHeight}, clientHeight=${el.clientHeight})`);
       prevIsAtBottomRef.current = atBottom;
     }
     setIsAtBottom(atBottom);
 
-    if (scrollRef.current && scrollRef.current.scrollTop <= 56) {
+    if (el.scrollTop <= 56) {
       void loadOlderHistory();
     }
   }, [checkAtBottom, loadOlderHistory]);
@@ -252,6 +275,8 @@ export function ChatPage() {
       console.log('[Scroll] 流式开始，重置 isAtBottom = true');
       setIsAtBottom(true);
       prevIsAtBottomRef.current = true;
+      isDetachedFromBottomRef.current = false;
+      previousScrollTopRef.current = scrollRef.current?.scrollTop ?? null;
     }
   }, [isStreaming]);
 
@@ -267,6 +292,12 @@ export function ChatPage() {
     console.log('[Scroll] 用户点击"滚动到底部"按钮');
     if (scrollRef.current) {
       cancelSmoothWheelScroll();
+      isDetachedFromBottomRef.current = false;
+      previousScrollTopRef.current = scrollRef.current.scrollTop;
+      if (checkAtBottom()) {
+        prevIsAtBottomRef.current = true;
+        setIsAtBottom(true);
+      }
       scrollRef.current.scrollTo({
         top: scrollRef.current.scrollHeight,
         behavior: 'smooth',
@@ -485,6 +516,7 @@ export function ChatPage() {
         {showDropdown && !isStreaming && (
           <ModelDropdown
             models={enabledModels}
+            providers={config?.providers || []}
             selectedId={config?.selected_model_id || ''}
             onSelect={(id) => {
               useConfigStore.getState().setDefaultModel(id);
