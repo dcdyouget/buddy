@@ -41,7 +41,7 @@ pub enum ToolSafety {
 #[derive(Debug, Clone, Default)]
 pub struct ToolContext {
     /// 当前 turn 是否处于"本次都允许"模式
-    /// (P4 实现审批状态机后由 commands::send_message 注入)
+    /// (由 `chat::ChatEngine::send_message` 注入)
     #[allow(dead_code)] // MCP tool 接入后会使用
     pub approve_all_for_turn: bool,
     /// 全局"停止生成"取消信号（watch channel 接收端）。
@@ -129,7 +129,7 @@ pub struct ToolDefinition {
     /// 安全分类(本地用,不发给 LLM)
     #[serde(skip)]
     #[allow(dead_code)]
-    // 供 Tool trait definition() 方法设置，commands 中通过 trait safety() 读取
+    // 供 Tool trait definition() 方法设置，编排层（chat.rs）中通过 trait safety() 读取
     pub safety: ToolSafety,
 }
 

@@ -274,7 +274,7 @@ pub struct StreamFailure {
 }
 
 /// `had_stream_error` 表示 Provider 流未正常结束。为 true 时 `terminal_error` 必须存在，
-/// 供 commands.rs 在收尾阶段发射唯一的 error 事件。
+/// 供编排层（`chat::ChatEngine::send_message`）在收尾阶段发射唯一的 error 事件。
 #[derive(Debug, Clone, Default)]
 pub struct StreamOutcome {
     /// 累积的完整文本(用于持久化 + UI 展示)
@@ -422,7 +422,7 @@ pub enum StreamEvent {
         is_error: bool,
     },
     /// 需要用户审批(只对 Write 类 tool 触发)
-    /// 前端弹 ApprovalModal,点击后 invoke('approve_tool_call', {id, approved})
+    /// UI 弹审批卡,点击后调用 `ChatEngine::approve_tool_call(id, approved, approve_all)`
     ToolApprovalRequired {
         id: String,
         name: String,
@@ -433,7 +433,7 @@ pub enum StreamEvent {
     },
     /// 模型调用了 ask_user tool — 需要用户在内联工具卡片中做出选择
     /// 前端在 AskUserCard 点击选项/输入自定义答案后
-    /// invoke('answer_tool_question', {id, selected, custom})
+    /// `ChatEngine::answer_tool_question(id, selected, inputs, custom)`
     ToolQuestionRequired {
         id: String,
         /// 始终是 "ask_user",保留字段便于前端过滤

@@ -37,8 +37,7 @@ pub async fn serve_sse_with_header_delay(
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let handle = tokio::spawn(async move {
-        let (mut sock, _) = listener.accept().await.unwrap();
-        let captured = read_request(&mut sock).await;
+        let (mut sock, captured) = accept_post(&listener).await;
         // 等待期间同时监听对端关闭：客户端取消会断开连接，read 返回 0 / Err 即结束
         let mut probe = [0u8; 1];
         tokio::select! {
@@ -72,12 +71,85 @@ pub async fn serve_sse_with_header_delay(
     (base_url, handle)
 }
 
-async fn read_request(sock: &mut tokio::net::TcpStream) -> CapturedRequest {
+/// 顺序接受 `scripts.len()` 个连接，第 i 个连接按 `scripts[i]` 应答（一次对话内的多轮请求）。
+/// 任务在最后一个连接应答完或在 `idle` 内无新连接时结束，返回实际收到的请求。
+pub async fn serve_sse_sequence(
+    scripts: Vec<Vec<Chunk>>,
+    idle: Duration,
+) -> (String, JoinHandle<Vec<CapturedRequest>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let handle = tokio::spawn(async move {
+        let mut captured = Vec::new();
+        for chunks in scripts {
+            let Ok((mut sock, request)) = tokio::time::timeout(idle, accept_post(&listener)).await
+            else {
+                break;
+            };
+            captured.push(request);
+            if sock
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n")
+                .await
+                .is_err()
+            {
+                continue;
+            }
+            for (delay, data) in chunks {
+                tokio::time::sleep(delay).await;
+                if sock.write_all(data.as_bytes()).await.is_err() {
+                    break;
+                }
+            }
+            let _ = sock.shutdown().await;
+        }
+        captured
+    });
+    (base_url, handle)
+}
+
+/// OpenAI 兼容协议：本轮返回若干 tool_call（`(id, name, arguments_json)`），finish_reason = tool_calls
+pub fn openai_tool_calls_script(calls: &[(&str, &str, serde_json::Value)]) -> Vec<Chunk> {
+    let mut v: Vec<Chunk> = calls
+        .iter()
+        .enumerate()
+        .map(|(i, (id, name, args))| {
+            let data = serde_json::json!({"choices":[{"index":0,"delta":{"tool_calls":[{
+                "index": i, "id": id, "type": "function",
+                "function": {"name": name, "arguments": args.to_string()}
+            }]}}]});
+            (Duration::ZERO, format!("data: {data}\n\n"))
+        })
+        .collect();
+    v.push((
+        Duration::ZERO,
+        "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n".into(),
+    ));
+    v.push((Duration::ZERO, "data: [DONE]\n\n".into()));
+    v
+}
+
+/// 接受下一个 **POST** 连接。
+///
+/// 本机有进程会探测本地监听端口（实测收到过 `HEAD / HTTP/1.1`），若把这类连接当作
+/// provider 请求，会占掉一个脚本应答位、让真正的请求落空 → 测试随机失败。非 POST 一律丢弃。
+async fn accept_post(listener: &TcpListener) -> (tokio::net::TcpStream, CapturedRequest) {
+    loop {
+        let (mut sock, _) = listener.accept().await.unwrap();
+        let Some(request) = read_request(&mut sock).await else { continue };
+        if request.request_line.starts_with("POST ") {
+            return (sock, request);
+        }
+    }
+}
+
+async fn read_request(sock: &mut tokio::net::TcpStream) -> Option<CapturedRequest> {
     let mut buf = Vec::new();
     let mut tmp = [0u8; 4096];
     let header_end = loop {
-        let n = sock.read(&mut tmp).await.unwrap();
-        assert!(n > 0, "客户端在发完请求头之前断开");
+        let n = sock.read(&mut tmp).await.ok()?;
+        if n == 0 {
+            return None; // 对端未发完请求头就断开（如端口探测）
+        }
         buf.extend_from_slice(&tmp[..n]);
         if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
             break pos + 4;
@@ -94,18 +166,18 @@ async fn read_request(sock: &mut tokio::net::TcpStream) -> CapturedRequest {
         })
         .unwrap_or(0);
     while buf.len() < header_end + content_length {
-        let n = sock.read(&mut tmp).await.unwrap();
+        let n = sock.read(&mut tmp).await.unwrap_or(0);
         if n == 0 {
             break;
         }
         buf.extend_from_slice(&tmp[..n]);
     }
-    let (request_line, headers) = head.split_once("\r\n").unwrap();
-    CapturedRequest {
+    let (request_line, headers) = head.split_once("\r\n")?;
+    Some(CapturedRequest {
         request_line: request_line.to_string(),
         headers: headers.to_string(),
         body: String::from_utf8_lossy(&buf[header_end..]).to_string(),
-    }
+    })
 }
 
 /// 构造一条 user 消息（`Message` 无 `Default`，经 serde 构造以免逐字段列举）

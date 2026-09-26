@@ -429,7 +429,7 @@ impl Tool for AppendFileTool {
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // 这个 tool 不在本地真正"执行"任何文件操作 — 它的作用是阻塞当前 turn 的
-// 工具循环,直到前端用户在内联问答卡里做出选择。命令 (commands.rs) 中
+// 工具循环,直到前端用户在内联问答卡里做出选择。编排层 (`chat::ChatEngine::send_message`) 中
 // 识别到 ask_user 调用时,会:
 //   1. 发射 ToolQuestionRequired 事件(让前端显示内联问答卡)
 //   2. 等待 answer_tool_question 命令 invoke,把答案作为 tool result 写回
@@ -438,7 +438,7 @@ impl Tool for AppendFileTool {
 // 返回 error 让 model 看到失败。
 //
 // ToolSafety 用 ReadOnly — 走完正常 tool 循环不会被 ApprovalModal 拦截,
-// 由 commands.rs 里的专门分支处理。
+// 由 `chat::ChatEngine::send_message` 里的专门分支处理。
 
 /// ask_user 的参数 schema(JSON,直接发给 LLM)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -562,10 +562,10 @@ impl Tool for AskUserTool {
     }
 
     async fn execute(&self, _args: Value, _ctx: ToolContext) -> Result<ToolOutput, ToolError> {
-        // ask_user 不走 execute — 由 commands.rs 的专门分支处理
+        // ask_user 不走 execute — 由 chat::ChatEngine::send_message 的专门分支处理
         // 如果走到这里,说明调用链出了 bug
         Err(ToolError::Other(
-            "ask_user.execute should not be called; handled by commands.rs".to_string(),
+            "ask_user.execute should not be called; handled by chat::ChatEngine::send_message".to_string(),
         ))
     }
 }

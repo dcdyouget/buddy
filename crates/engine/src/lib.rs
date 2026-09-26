@@ -27,13 +27,15 @@
 //! # 与 UI 的接口
 //!
 //! **没有 IPC 层**。UI 直接调用本 crate 的类型与方法
-//! （v1 的 `commands.rs` 那 1868 行 IPC 胶水整体不需要）。
+//! （v1 的 `commands.rs` 经 IPC 暴露的对话编排已迁入 `chat::ChatEngine`，IPC 胶水本身不再需要）。
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 // 以下模块自 v1（tag `v1-final`）原样移植，沿用其注释风格；
 // v1 未按 `missing_docs` 要求书写，逐项补文档不属于移植范围。
+#[allow(missing_docs)]
+pub mod chat;
 #[allow(missing_docs)]
 pub mod mcp;
 #[allow(missing_docs)]

@@ -618,7 +618,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                                         calls.len(),
                                         usage_log_summary(final_usage.as_ref()),
                                     );
-                                    // done 事件由 commands.rs 在整轮 tool 循环结束时统一发射
+                                    // done 事件由编排层 chat.rs 在整轮 tool 循环结束时统一发射
                                     return Ok(StreamOutcome::completed(
                                         full_response,
                                         thinking_response,
@@ -820,7 +820,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                             calls.len(),
                             usage_log_summary(final_usage.as_ref()),
                         );
-                        // done 事件由 commands.rs 在整轮 tool 循环结束时统一发射
+                        // done 事件由编排层 chat.rs 在整轮 tool 循环结束时统一发射
                         return Ok(StreamOutcome::completed(
                             full_response,
                             thinking_response,
