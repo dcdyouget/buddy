@@ -19,7 +19,7 @@
 | `buddy-design/colors_and_type.css` | **不存在**（`design-tokens.md` 与 `CONVENTIONS.md` 引用此路径） |
 | `.design/animation-preview/colors_and_type.css` | 曾存在，**已于 2026-09-10 删除**。Trae 工具生成的动效预览实验，非主项目令牌表，前缀 `--ap-`、主色 `#5B8DEF`（≠ 硬约束 2 的 `#5B5FE9`）。其动效令牌与 `src/styles/global.css` 完全重复且后者更完整，故零迁移成本 |
 
-**结论**：设计令牌的真值来源只有 `docs/design/design-tokens.md`；视觉验收基准改为 **v1 应用实机截图**（由 S01-06 采集）。
+**结论**：设计令牌的真值来源只有 `docs/design/design-tokens.md`；视觉验收基准改为 **用户对照运行中的 v1 目检**（2026-09-26 用户决策，不采集截图；v1 由 S01-05 退路 tag `v1-final` 保证可运行）。
 
 **另需确立的原则（用户明确要求）**：
 

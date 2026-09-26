@@ -26,7 +26,7 @@
 > **准入条件是必要条件而非充分条件**：具体以各 spec 自身的「依赖」列为准（`RULES.md` §9.2）。
 > 规范强制 **Phase 单调性**：Phase `NN` 的 spec 只能依赖 Phase ≤ `NN` 的 spec（`RULES.md` §9.1）。
 
-> **表格列说明**：Phase 00 / 01 已展开为详细文件，因此多一列「文件」；其余 Phase 在启动时展开并补上该列。
+> **表格列说明**：Phase 00 / 01 / 02 已展开为详细文件，因此多一列「文件」；其余 Phase 在启动时展开并补上该列。
 
 ---
 
@@ -69,17 +69,17 @@
 > 高复用、低风险。可与 Phase 07 并行。
 > 拆解依据：`docs/tasks/v2.0.0-gpui/02-engine.md`
 
-| ID | Spec | 依赖 | 状态 |
-|----|------|------|------|
-| S02-01 | providers 移植（openai_compatible / anthropic） | S01-01 | `todo` |
-| S02-02 | tools 移植（builtin / image_generation / websearch / file_tools） | S01-01 | `todo` |
-| S02-03 | models 移植 | S01-01 | `todo` |
-| S02-04 | storage 移植与数据目录兼容 | S01-01 | `todo` |
-| S02-05 | streaming 去 Tauri 化 | S02-01 | `todo` |
-| S02-06 | tokio / GPUI 执行器桥接 | S02-05 | `todo` |
-| S02-07 | 工具调用与审批的请求-响应配对 | S02-05 | `todo` |
-| S02-08 | IPC 层删除（commands.rs 作废） | S02-01..S02-07 | `todo` |
-| S02-09 | 引擎测试迁移与契约测试 | S02-01..S02-04 | `todo` |
+| ID | Spec | 依赖 | 状态 | 文件 |
+|----|------|------|------|------|
+| S02-01 | providers 移植（openai_compatible / anthropic） | S02-02, S02-03 | `todo` | `phase-02/S02-01-providers.md` |
+| S02-02 | tools 移植（builtin / image_generation / websearch / file_tools） | S02-03 | `todo` | `phase-02/S02-02-tools.md` |
+| S02-03 | models 与流式数据类型移植 | S01-01 | `doing` | `phase-02/S02-03-models.md` |
+| S02-04 | storage 移植与数据目录 | S02-03 | `todo` | `phase-02/S02-04-storage.md` |
+| S02-05 | 流式取消语义与事件契约 | S02-01 | `todo` | `phase-02/S02-05-stream-cancel.md` |
+| S02-06 | tokio / GPUI 执行器桥接 | S02-05 | `todo` | `phase-02/S02-06-executor-bridge.md` |
+| S02-07 | 工具调用与审批的请求-响应配对 | S02-05 | `todo` | `phase-02/S02-07-tool-approval.md` |
+| S02-08 | IPC 层作废（命令 → engine API 覆盖表） | S02-01..S02-07 | `todo` | `phase-02/S02-08-ipc-retire.md` |
+| S02-09 | 引擎测试迁移与契约测试 | S02-01..S02-04 | `todo` | `phase-02/S02-09-engine-tests.md` |
 
 ---
 
@@ -271,3 +271,4 @@
 | 2026-09-11 | S01-04 | `todo` → `doing` → `done` | `scripts/check-discipline.py`：**14 项检查全部通过 + 8 项拦截验证全部通过**。CI 集成（含拦截验证）。修正一处测试意图（注入 `gpui` 而非 `buddy-ui`，否则走循环依赖报错路径）。收窄文档路径检查到 `docs/`（附理由）。**顺带发现 `[patch.crates-io]` 5 项中 3 项未被使用**，已移除并注明何时加回。完整许可证扫描交接 `S08-09` |
 | 2026-09-26 | S01-06 | 范围调整（仍为 `todo`） | **用户决策：不截图、不录屏**，视觉/行为验收改为用户对照运行中的 v1 目检。取消 S01-06-4/5/6/7，保留清单、令牌、性能、长会话、数据快照。不可再生资产由截图转为「可运行的 v1」→ 由 S01-05 退路 tag 保证。S10-03 的比对基准相应改为「用户对照 v1 目检」，展开 Phase 10 时落实 |
 | 2026-09-26 | S01-05 | `todo` → `doing` | 用户选 (a)：v1 改动单独提交 `9cc244a` → tag `v1-final` + 分支 `v1-fallback`。回退演练通过（tsc / vite build / vitest 99 / cargo build / cargo test 166）。**待用户**：推送与分支保护、v1 运行目检。用户另决定不做历史数据迁移 |
+| 2026-09-26 | Phase 02 | 展开 9 个 spec 文件 + 依赖/范围修正 | 依源码实测修正依赖：`models/message.rs:16` ↔ `streaming.rs:22` 互相引用 → streaming 数据类型与 emitter 去 Tauri 并入 **S02-03**；S02-02/S02-04 依赖 S02-03；S02-01 依赖 S02-02+S02-03。**S02-05** 改名「流式取消语义与事件契约」（去 Tauri 已随 S02-03 完成，剩余真正未验证项是取消）。**S02-08** 改为「覆盖表 + 作废契约」，**不删 v1 的 `commands.rs`**（会破坏 v1）。S02-04 取消旧数据回归（用户决策） |

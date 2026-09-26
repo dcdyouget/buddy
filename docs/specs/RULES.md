@@ -223,7 +223,7 @@ Phase 文件中的工作项（D01、T01 等）是 spec 的**素材**，spec 是�
 
 **详细 spec 文件按 Phase 逐个展开**（对应「分段推进」）：Phase 启动时才创建该 Phase 的 `phase-NN/*.md`，避免为远期工作写会失效的细节。
 
-当前已展开：Phase 00、Phase 01。
+当前已展开：Phase 00、Phase 01、Phase 02。
 
 ---
 

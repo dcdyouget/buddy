@@ -1,5 +1,9 @@
 # Rust Data Models
 
+> **部分退役（RULES §7.2）**
+> 已实现：S02-03（`models/` 与 `streaming.rs` 已迁入 `crates/engine/src/`，与 v1 逐字节一致，仅 emitter 改为 channel）。
+> 未实现：S02-02（tools）、S02-01（providers）—— S02-01 完成后整份删除。
+
 > Rust 源：`src-tauri/src/models/`、`src-tauri/src/streaming.rs`；前端镜像：`src/types/index.ts`。
 
 ## AppConfig

@@ -32,5 +32,14 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+// 以下模块自 v1（tag `v1-final`）原样移植，沿用其注释风格；
+// v1 未按 `missing_docs` 要求书写，逐项补文档不属于移植范围。
+#[allow(missing_docs)]
+pub mod mcp;
+#[allow(missing_docs)]
+pub mod models;
+#[allow(missing_docs)]
+pub mod streaming;
+
 /// 引擎层版本（用于诊断输出）
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
