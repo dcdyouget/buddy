@@ -89,8 +89,8 @@
 
 | ID | Spec | 依赖 | 状态 | 文件 |
 |----|------|------|------|------|
-| S03-01 | Theme 结构、Appearance 与全局安装 | S01-01 | `todo` | `phase-03/S03-01-theme-structure.md` |
-| S03-02 | 颜色令牌迁移（品牌色 / 状态色 / 中性阶） | S03-01 | `todo` | `phase-03/S03-02-color-tokens.md` |
+| S03-01 | Theme 结构、Appearance 与全局安装 | S01-01 | `doing` | `phase-03/S03-01-theme-structure.md` |
+| S03-02 | 颜色令牌迁移（品牌色 / 状态色 / 中性阶） | S03-01 | `doing` | `phase-03/S03-02-color-tokens.md` |
 | S03-03 | 外观令牌迁移（不透明填充 + 圆角 + 阴影） | S03-01, S00-04 | `todo` | `phase-03/S03-03-appearance-tokens.md` |
 | S03-04 | 字体与排版令牌迁移 | S03-01 | `todo` | `phase-03/S03-04-typography-tokens.md` |
 | S03-05 | 平台字体栈与 TextRenderingMode | S03-04 | `todo` | `phase-03/S03-05-platform-fonts.md` |

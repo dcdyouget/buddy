@@ -1,6 +1,6 @@
 # S03-01 Theme 结构、Appearance 与全局安装
 
-> 状态: `todo`
+> 状态: `doing`
 > Phase: 03
 > 依赖: S01-01
 > 阻塞: —
