@@ -1,0 +1,21 @@
+[package]
+name = "buddy-ui"
+version.workspace = true
+edition.workspace = true
+publish = false
+# GPL-3.0-or-later —— 因为依赖 zed 的 theme / ui（其 license 字段如此声明）
+license = "GPL-3.0-or-later"
+description = "Buddy 界面层：GPUI 组件、主题、窗口外壳。"
+
+[dependencies]
+# GPUI 与 zed 的界面层（Apache-2.0 平台层 + GPL 主题/组件层）
+gpui.workspace = true
+gpui_platform.workspace = true
+theme.workspace = true
+ui.workspace = true
+gpui_tokio.workspace = true
+
+# 引擎层（MIT）—— 注意依赖方向：UI 依赖 engine，反向不允许
+buddy-engine.workspace = true
+
+log.workspace = true

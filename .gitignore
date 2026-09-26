@@ -9,6 +9,11 @@ node_modules/
 dist/
 dist-desktop/
 src-tauri/target/
+
+# v2.0.0-gpui workspace（根 Cargo.toml）
+/target/
+# ⚠️ Cargo.lock **必须入库**（见 S01-02-7）—— 应用类项目需要可复现构建。
+#    注意不要在此处忽略它。
 .release/
 .ossutil_checkpoint/
 ossutil_output/
@@ -18,6 +23,12 @@ ossutil_output/
 .reasonix/
 # Auto-generated icons (Tauri tauri icon command)
 src-tauri/gen/
+
+# v2.0.0-gpui 重构：Phase 00 可行性 Spike 的一次性验证产物
+# 属可弃材料，不入库（结论以 spec 的证据段为准）
+spikes/
+
+# 注意：docs/evidence/ 不要忽略 —— 它是 v1 视觉与行为基线，属不可再生的验收证据，必须入库
 src-tauri/icons/**
 # Dock / app icon PNG matrix (rasterized from buddy-app-icon.svg)
 !src-tauri/icons/icon.png
@@ -57,8 +68,12 @@ src-tauri/icons/**
 *.swp
 *.swo
 
-# Design & Docs (code only in git, except the release runbook shared by build machines)
-docs/**
-!docs/release-workflow.md
-README.md
-CLAUDE.md
+# Docs & Agent 入口 —— 全部入库
+#
+# 原策略为「code only in git」，即 `docs/**` 只留本地，仅 release-workflow.md 入库。
+# v2.0.0-gpui 重构改为 spec 驱动，文档是工作流的**必要组成**而非附属材料：
+#   - spec 注册表（docs/specs/）是唯一状态源，CI 需读取
+#   - 证据（docs/evidence/）不可再生，丢失即无法验收
+#   - agent 入口（CLAUDE.md / AGENTS.md 等）必须随仓库分发
+# 否则其他 agent、CI、克隆出来的仓库都无法工作。
+# 规则见 docs/specs/RULES.md §13。

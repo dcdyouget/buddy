@@ -1,0 +1,43 @@
+name: discipline
+
+# 守护架构边界与文档一致性。
+# 定义见 docs/specs/phase-01/S01-04-license-guard.md。
+#
+# ⚠️ 本 workflow 的价值取决于它**真的会失败**。
+#    对应检查都有拦截验证（`--self-test`），并在此 job 中一并执行。
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  check:
+    name: 架构边界与文档纪律
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+
+      - name: 缓存 cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+
+      # 注意：github 直连不可用，CI 侧无需代理（Actions 网络可达）；
+      # 本机开发需要代理，见 docs/dev-environment.md §2。
+      - name: 纪律检查（全部断言）
+        run: python3 scripts/check-discipline.py
+
+      # 关键：验证检查本身有效 —— 注入违规，确认会失败。
+      # 一个从未失败过的检查等于没有检查（S00-07 的教训）。
+      - name: 拦截验证（确认检查确实会失败）
+        run: python3 scripts/check-discipline.py --self-test

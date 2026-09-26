@@ -1,0 +1,7 @@
+# v2.0.0-gpui 工具链
+#
+# 对齐 zed 的 rust-toolchain.toml（channel = "1.95.0"）。
+# `edition = "2024"` 需要 Rust 1.85+，1.95.0 满足。
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]

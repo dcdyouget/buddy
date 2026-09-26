@@ -1,0 +1,22 @@
+[package]
+name = "buddy-app"
+version.workspace = true
+edition.workspace = true
+publish = false
+# GPL-3.0-or-later —— 链接了 GPL 的界面层
+license = "GPL-3.0-or-later"
+description = "Buddy 可执行入口（组装 engine + ui）。"
+
+[[bin]]
+name = "buddy"
+path = "src/main.rs"
+
+[dependencies]
+# ⚠️ app 只依赖两个分层 crate —— **不直接依赖 gpui / theme / ui**
+#    理由见 crates/ui/src/lib.rs 顶部的重导出说明：
+#    「UI 层是唯一接触 zed 的地方」。
+buddy-ui.workspace = true
+buddy-engine.workspace = true
+
+log.workspace = true
+env_logger.workspace = true

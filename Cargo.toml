@@ -1,0 +1,97 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/engine",
+    "crates/ui",
+    "apps/buddy",
+]
+# ⚠️ 必须 exclude v1 的 Tauri 工程。
+# 否则 src-tauri/Cargo.toml 会向上找到本 workspace，因不是成员而报错，
+# 导致 v1 无法构建 —— 而 v1 在 Phase 05 之前必须保持可用（S01-05 退路）。
+exclude = ["src-tauri"]
+
+[workspace.package]
+version = "2.0.0"
+edition = "2024"
+authors = ["Buddy"]
+# 注意：许可证是**分层**的，不能在此统一声明。
+#   crates/engine → MIT（零 GPL 链接）
+#   crates/ui、apps/buddy → GPL-3.0-or-later
+# 见 docs/specs/phase-01/S01-03-licensing.md
+
+[workspace.dependencies]
+# ── 分层内部 crate ──
+buddy-engine = { path = "crates/engine" }
+buddy-ui = { path = "crates/ui" }
+
+# ── GPUI 与 zed crate（S00-01 实测的组合）──
+#
+# ⚠️ **四个 crate 必须同一 rev**，否则类型不兼容。
+# rev 与日期记录于此，升级时同步修改（见 S01-02）。
+#   上游 = https://github.com/zed-industries/zed  (branch: main)
+#   实测基准 rev 见 docs/tasks/v2.0.0-gpui/research-log.md §9.1
+gpui = { git = "https://github.com/zed-industries/zed", rev = "290cbcb9cb6a5dcbe0060431a126ad19e743f2f4" }
+theme = { git = "https://github.com/zed-industries/zed", rev = "290cbcb9cb6a5dcbe0060431a126ad19e743f2f4" }
+ui = { git = "https://github.com/zed-industries/zed", rev = "290cbcb9cb6a5dcbe0060431a126ad19e743f2f4" }
+# tokio ↔ GPUI 桥接（S00-08 实测可用）
+gpui_tokio = { git = "https://github.com/zed-industries/zed", rev = "290cbcb9cb6a5dcbe0060431a126ad19e743f2f4" }
+
+# ── `gpui_platform` 的两个**必需** feature（S00-01 实测）──
+#
+# 缺任一即失败：
+#   ① `runtime_shaders` —— 否则 gpui_apple 的 build script 调用
+#      `xcrun metal`，而该编译器自 Xcode 16 起被拆为独立可下载组件
+#      （MetalToolchain），未被默认安装 → 构建失败。
+#      开启后着色器改由 Metal 驱动运行时编译。
+#   ② `font-kit` —— 否则**完全没有文字**，且只打一条 WARN 就静默退化
+#      （背景与组件照常绘制，唯独没有字形）。
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "290cbcb9cb6a5dcbe0060431a126ad19e743f2f4", features = ["runtime_shaders", "font-kit"] }
+
+# ── 第三方（版本对齐 zed workspace）──
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "native-tls-vendored", "gzip", "brotli"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+futures-util = "0.3"
+async-trait = "0.1"
+thiserror = "1"
+log = "0.4"
+chrono = "0.4"
+dom_query = "0.27"
+base64 = "0.22"
+parking_lot = "0.12"
+env_logger = "0.11"
+
+# ═══════════════════════════════════════════════════════════════
+# ⚠️ 必须复制 zed 的 `[patch.crates-io]`
+# ═══════════════════════════════════════════════════════════════
+#
+# **S00-06 阻碍级发现**：`[patch]` **不会传递给下游消费者**。
+# zed 的 `util` crate 依赖 `smol` → `async-process`，而 crates.io 版本缺
+# `Child::adopt_raw_pid`（zed 用自家 fork 补上了）。不复制就会编译失败：
+#
+#   error[E0599]: no function `adopt_raw_pid` found for `smol::async_process::Child`
+#
+# 这里只复制 macOS 侧 markdown 闭包实际需要的项。
+# 未复制及原因（完整清单见 docs/evidence/s00-06/README.md §1）：
+#   windows-capture      —— 仅 Windows
+#   calloop              —— 仅 Linux
+#   livekit / libwebrtc / webrtc-sys —— 协作音频，Buddy 不需要
+#   scratch              —— zed 的 corgi 构建工具本地 path 依赖，无法复制（不在闭包内）
+#
+# ⚠️ 只保留**实际被使用**的 patch。
+#
+# 实测：下列 3 项在 Phase 01 的闭包里未被使用，cargo 会警告
+#   "patch `X` was not used in the crate graph"
+# 保留它们只会制造噪音，故暂不声明：
+#
+#   tree-sitter-language  —— 引入 tree-sitter 语法时（S04-02）需要
+#                            { git = "https://github.com/tree-sitter/tree-sitter", rev = "43623ec9bf0eaaf7113285c46e8a09018f181b18" }
+#   notify / notify-types —— 引入 fs 监听时（S04-04 后台解析、S07 文件监听）需要
+#                            { git = "https://github.com/zed-industries/notify", rev = "d842f16b2716bd60f09caf3ae3a894237ab38f54" }
+#
+# ⚠️ 到那时**必须加回来**，否则会因 API 不匹配而编译失败。见
+#    docs/evidence/s00-06/README.md §1 与 THIRD_PARTY_NOTICES.md §5。
+[patch.crates-io]
+async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
+async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }

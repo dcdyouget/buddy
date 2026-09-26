@@ -1,0 +1,263 @@
+# 交接说明（v2.0.0-gpui 迁移）
+
+> ⚠️ **本文不是状态源。** 权威状态在 [`README.md`](./README.md)（spec 注册表）。
+> 本文只记录**权威文档里没有的东西**：当前在飞状态、未提交改动的归属划分、以及交接边界。
+>
+> 最近更新：2026-09-26（S01-05 执行、S01-06 范围调整）
+
+---
+
+## 1. 一句话状态
+
+**Phase 00（可行性 Spike）9/9 完成 → 决策 Go。Phase 01（工程骨架）4/6 完成。**
+**全栈闭包 770 包、毒性依赖零残留、完全不需要 fork GPUI、端到端已跑通（真实 API → SSE → markdown 渲染）。**
+
+```
+P00 可行性 Spike          9/9   ✅ 完成
+P01 工程骨架与分层         4/6   ← 进行中
+P02 引擎层移植            0/9
+P03 主题与设计令牌         0/7
+P04 Markdown 栈          0/9
+P05 聊天界面             0/18
+P06 设置界面              0/6
+P07 应用外壳与窗口行为      0/13
+P08 更新与发布            0/11
+P09 平台对齐（Windows）     0/9
+P10 测试与验收             0/7
+合计                    13/104
+```
+
+---
+
+## 2. 必读顺序（新 agent 从这开始）
+
+| 顺序 | 文件 | 为什么 |
+|------|------|--------|
+| 1 | `AGENTS.md` | 唯一权威入口：项目概览、**Agent 工作流**、Document Index、**Hard Constraints 1-10** |
+| 2 | `docs/specs/RULES.md` | **Spec 工作规则**：粒度、状态机、完成定义、证据要求、设计文档退役、文档卫生 |
+| 3 | `docs/specs/README.md` | **Spec 注册表与进度（唯一权威状态源）** |
+| 4 | `docs/dev-environment.md` | **环境前置**（代理、三个 GPUI 硬前置、`[patch.crates-io]`、不要破坏 v1） |
+| 5 | `docs/tasks/v2.0.0-gpui/research-log.md` | 调研证据（§9 环境配方、§10-§18 全部实测结论与风险登记） |
+| 6 | 当前要做的 spec 文件 | `docs/specs/phase-NN/S<NN>-<NN>-*.md` |
+
+**不要重读 `docs/design/*` 当前置真值** —— 它已被证明含两处「从未存在的意图」
+（见 §7 与 research-log §18.4）。
+
+---
+
+## 3. Phase 00 的产出（9 个 spec，全部含可复核证据）
+
+| Spec | 结论 | 产物 |
+|------|------|------|
+| S00-01 抽取 zed theme+ui | ✅ | 三个 GPUI 接入硬前置（research-log §10） |
+| S00-02 浮动面板 | ✅ | `docs/evidence/s00-02/window-patch.rs` |
+| S00-03 热键/tray/自启 | ✅ | `docs/evidence/s00-03/shell-integration.rs` |
+| S00-04 毛玻璃 | ✅ **决定不用** | `docs/evidence/s00-04/window-appearance.rs` |
+| S00-05 中文 IME | ✅ | `docs/evidence/s00-05/ime-input.rs` |
+| S00-06 markdown vendor | ✅ 闭包 +25 包 | `docs/evidence/s00-06/`（shim/stub + 配方手册） |
+| S00-07 大列表虚拟化 | ✅ 0.35% 行渲染/帧 | `docs/evidence/s00-07/list-integration.rs` |
+| S00-08 引擎层闭环 | ✅ 端到端跑通 | `docs/evidence/s00-08/engine-integration.md` |
+| S00-09 结论与决策 | ✅ **Go** | `docs/specs/phase-00/S00-09-decision.md` |
+
+### 风险登记最终状态（9 项中 4 项消除、1 项降级）
+
+| # | 风险 | 复评 |
+|---|------|------|
+| R1 | 窗口外壳 | **消除** |
+| R2 | Windows `Floating` 静默 no-op | 中（macOS 已定 `PopUp`；Windows 待 S09-04） |
+| R3 | **GPUI fork 维护成本** | **消除** |
+| R4 | Windows 字体/文字渲染差异 | 中高（不变） |
+| R5 | Win10 无 Mica | **消除** |
+| R6 | Windows IMM32 输入法 | 中（macOS 已过） |
+| R7 | **GPL 传染** | **可消除（已实证）** |
+| R8 | 无法回退 | 中（本 spec 正在处理） |
+| R9 | 设计资产丢失 | 低（但暴露了新问题类） |
+
+---
+
+## 4. Phase 01 的进度
+
+| Spec | 状态 | 说明 |
+|------|------|------|
+| S01-01 三层 workspace | ✅ `done` | 依赖方向机检通过；v1 未被破坏 |
+| S01-02 GPUI 依赖锁定 | ✅ `done` | 31 个 zed crate 同一 rev；不 fork；干净构建 442 crate / 28s |
+| S01-03 许可证分层 | ✅ `done` | GPL 全文入库；746 包许可统计 |
+| S01-04 CI 断言 | ✅ `done` | 14 项检查 + **8 项拦截验证**全通过 |
+| **S01-05 退路分支** | `doing` | tag/分支/演练已完成；待用户推送授权与运行目检，见 §5 |
+| S01-06 v1 基线采集 | `todo` | 范围已缩减，**不再需要屏幕权限**，见 §6 |
+
+### 已落地的工程骨架
+
+```
+Cargo.toml              ← workspace 根（resolver=2 + exclude src-tauri + [patch.crates-io]）
+Cargo.lock              ← 已入库（可复现构建）
+rust-toolchain.toml     ← channel = "1.95.0"
+LICENSE                 ← 分层说明
+LICENSE-GPL-3.0-or-later / LICENSE-APACHE-2.0   ← 全文
+THIRD_PARTY_NOTICES.md  ← 746 包许可清单
+docs/dev-environment.md ← 环境前置
+scripts/check-discipline.py  ← 14 项纪律检查 + 8 项拦截验证
+.github/workflows/discipline.yml
+
+crates/engine/          ← buddy-engine（MIT，零 GPUI/Tauri/GPL）
+crates/ui/              ← buddy-ui（GPL，重导出 gpui/theme 表面）
+apps/buddy/             ← buddy-app（GPL，只依赖两个分层 crate）
+```
+
+---
+
+## 5. S01-05 退路：已按选项 (a) 执行（2026-09-26）
+
+| 引用 | 指向 | 内容 |
+|------|------|------|
+| commit `9cc244a` | — | 用户的 v1 改动单独提交（仅 `src/` `src-tauri/` `README.md`） |
+| tag `v1-final` | `9cc244a` | 退路基准，不可移动 |
+| 分支 `v1-fallback` | `9cc244a` | v1 热修用 |
+
+回退演练已通过（证据见 `phase-01/S01-05-fallback.md`）。**剩余两项需用户**：推送 + GitHub 分支保护；v1 运行目检。
+
+`promo-video/out/buddy-promo-48s.mp4`（5.9 MB 渲染成品）未提交，待用户决定。
+
+## 6. S01-06 范围已调整（2026-09-26）
+
+> **2026-09-26 用户决策：不截图、不录屏。** 视觉/行为验收由用户对照运行中的 v1 目检并反馈。
+> 因此**不再需要屏幕录制权限**。
+
+S01-06 剩余范围（均无需屏幕权限）：页面×状态清单（供目检对照）、令牌实测值、
+性能基线、1000+ 消息长会话样本（构造数据，供性能对比）。
+**真实数据目录快照已取消**（用户决策：开发阶段，不保存历史、不做历史数据迁移）。
+
+**不可再生资产已转移**：视觉基准从「截图」变为「可构建运行的 v1」，
+由 `S01-05` 退路 tag 保证 —— 所以 S01-05 的回退演练是硬性的。
+
+---
+
+## 7. 必须知道的坑（Phase 00 实测得出，勿重踩）
+
+### 7.1 环境（三个硬前置，缺任一即失败）
+
+| # | 条件 | 缺失后果 |
+|---|------|---------|
+| 1 | `gpui_platform` 必含 **`runtime_shaders`** | 构建失败，需完整 Xcode 的 MetalToolchain |
+| 2 | `gpui_platform` 必含 **`font-kit`** | **完全没有文字**，且**静默**（只一条 WARN） |
+| 3 | 必须在 `theme::init` 后装 `ThemeSettingsProvider` | 开窗 panic |
+
+**另有**：github 必须走代理（直连 40min 未完成 vs 代理 865s）；必须复制 zed 的
+`[patch.crates-io]`（当前保留 2 项，另 3 项需在 `S04-02` / `S04-04` 加回）。
+**全部细节见 `docs/dev-environment.md`。**
+
+### 7.2 诊断纪律
+
+**任何 GPUI 显示异常，先 `RUST_LOG=debug` 看 gpui 自身日志。** 两个静默失败（无文字、渲染 0 行）都靠这个发现。
+
+### 7.3 「仪表盘可以在窗口空白时显示 PASS」
+
+S00-07 实测：自动化计数器显示「虚拟化 PASS / at_end=true」，而窗口**一片空白**。
+三个真 bug（`list()` 缺 `flex_grow_1`、回调内碰 `ListState`、没调 `scroll_to_end()`）
+都是**用户一句「我没看到内容」**才挖出来的。
+
+→ **需要眼睛的验收，不得仅凭自身仪表盘标 `done`。**
+→ 这正是 `S01-04` 要求「每项检查都要做拦截验证」的由来（8 项全部验证过）。
+
+### 7.4 官方示例不可信
+
+`crates/gpui/examples/input.rs` **自带 4 个缺陷**（2 个致命）。只能当骨架。
+详见 `docs/evidence/s00-05/ime-input.rs`。
+
+### 7.5 图层/属性探测必须延迟复探
+
+S00-04 首探在首次合成之前，得到「无 `CABackdropLayer`」的**错误结论**，
+差点误判为「macOS 26 打坏模糊、需要 fork」。延迟到 t≈1s 后图层才出现。
+→ 适用 `S07-12` / `S09-01` / `S09-04`。
+
+### 7.6 文档里的意图 ≠ 既成事实
+
+| 实例 | 真相 |
+|------|------|
+| `docs/design/prototypes/` | AGENTS.md + CLAUDE.md + tasks/v1.0.0 层层引用 → **路径从未存在** |
+| 「毛玻璃」 | AGENTS.md Design Philosophy 写着 → v1 `macos.rs:154` **明写不启用 vibrancy** |
+| 「`ThemeSettings` 需 patch 9 处」 | 实际 1 行 import + shim |
+| 「`acceptFirstMouse` 需手写」 | gpui 已硬编码 `YES` |
+| 「`theme`+`ui` 闭包 12 个」 | 实为 30 个 |
+
+→ 规则立于 `RULES.md` §11。**首次接触任何文档结论时，先验证再采用。**
+
+### 7.7 其他已知陷阱（详见 research-log 对应节）
+
+| 陷阱 | 位置 |
+|------|------|
+| `Done.full_text` 含 ` thinking` 标签（差 15 字符），不可当显示文本 | §17.5 |
+| 内联 think 字符数在 `StreamOutcome` 里拿不到 | §17.6 |
+| tokio 任务不能捕获 `Rc`/`Cell`；future 需 `'static` | §17.7 |
+| `ListState` 四个陷阱（`flex_grow` / 回调借用 / `measure_all` / `scroll_to_end`） | §16.3 |
+| `shape_line` 拒绝 `\n`，多行需拆逻辑行 | §14.2 |
+| Enter 三态由 gpui 平台层保证，前提是 `marked_text_range()` 正确 | §14.4 |
+| 渲染层 clamp 会掩盖语义层越界（`copy()` 会 panic） | §14.5 |
+| `WindowKind::Floating` 不给全工作区；`PopUp` 才是正解 | §11.1 |
+
+---
+
+## 8. 下一批任务（按可自动化程度排序）
+
+| 顺序 | Spec | 需要用户？ |
+|------|------|-----------|
+| 1 | **S01-05 退路分支** | 🟡 仅剩推送授权 + 运行目检（见 §5） |
+| 2 | **S01-06 v1 基线采集** | ❌ 剩余部分全自动（见 §6） |
+| 3 | `S02-01` providers 移植 | ❌ 全自动（可复用 `spikes/s00-08-engine/` 已验证的 4 处改动） |
+| 4 | `S02-02` tools 移植 | ❌ 全自动 |
+| 5 | `S02-03` models 移植 | ❌ 全自动 |
+| 6 | `S02-04` storage 移植 | ❌ 全自动 |
+| 7 | `S02-05` streaming 去 Tauri | ❌ 全自动（**取消能力未实测**，需补） |
+| 8 | `S02-06` tokio/GPUI 桥接 | ❌ 全自动 |
+| 9 | `S02-07` 工具调用与审批 | ❌ 全自动 |
+| 10 | `S02-09` 引擎测试迁移 | ❌ 全自动 |
+| 11 | `S03-01` ~ `S03-07` 主题 | 🟡 部分需视觉对照 |
+| 12 | `S04-*` markdown | 🟡 部分需视觉对照 |
+
+**Phase 02（9 个 spec）可完全自动化** —— S00-08 已证明引擎层可脱离 Tauri 独立工作，
+且 `providers/` / `models/` 的移植改动量已实测（4 处）。
+
+---
+
+## 9. 可直接复用的已验证代码
+
+**`spikes/` 目录被 `.gitignore` 排除，会被清理。** 但以下产物**已固化到仓库**：
+
+| 产物 | 内容 |
+|------|------|
+| `docs/evidence/s00-02/window-patch.rs` | 零装饰 / 去阴影 / 显隐 / 层级 / 全工作区（objc2） |
+| `docs/evidence/s00-03/shell-integration.rs` | 热键 + tray + autostart 集成（含 `TrayIcon` 非 `Send/Sync` 的处置） |
+| `docs/evidence/s00-04/window-appearance.rs` | 最终外观配置（不透明 + 16px 圆角） |
+| `docs/evidence/s00-05/ime-input.rs` | 官方 `input.rs` 的 4 个缺陷修法 + 多行 `MultiLine` 实现 |
+| `docs/evidence/s00-06/` | `theme_settings_shim.rs` / `language_stub.rs` / `mermaid.rs` + 完整 vendor 配方 |
+| `docs/evidence/s00-07/list-integration.rs` | `ListState` 四个陷阱 + 推荐骨架 |
+| `docs/evidence/s00-08/engine-integration.md` | 引擎去 Tauri 化规范 + 四个陷阱 |
+
+`S02-01` ~ `S02-05` 可直接从 `s00-08` 的产物出发（已实测的 4 处改动）。
+
+---
+
+## 10. 交接纪律（接手方必须遵守）
+
+1. **状态只在 `docs/specs/README.md` 维护。** 不另立状态源。
+2. **完成一个 spec 立即更新注册表**（不批量补记）。状态同时写在 spec 文件头与注册表，必须一致。
+3. **证据必须可复核**，不接受「OK」「已完成」。见 `RULES.md` §6。
+4. **设计文档实现完成后必须删除**并登记 `docs/specs/design-deletions.md`。见 `RULES.md` §7。
+5. **同一时刻最多 2 个 spec 处于 `doing`。**
+6. **不允许跳过 `doing` 直接 `done`。**
+7. **改动后跑** `python3 scripts/check-discipline.py`（14 项）**与** `--self-test`（8 项拦截验证）。
+8. **不要破坏 v1**：改 workspace 后必须 `cd src-tauri && cargo check` 验证
+   （根 `Cargo.toml` 的 `exclude = ["src-tauri"]` 是必需的）。
+9. **需要眼睛验收的，停下来问用户。** 见 §7.3。
+
+---
+
+## 11. 文档规模概览（供接手方判断信息密度）
+
+| 目录 | 文件数 | 行数 |
+|------|-------|------|
+| `docs/specs/` | 19 | 3654 |
+| `docs/tasks/v2.0.0-gpui/` | 13 | 2632 |
+| `docs/evidence/` | 10 | 2341 |
+| `crates/` + `apps/` | 7 | 398 |
+| `scripts/` | 4 | 1103 |
