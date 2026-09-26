@@ -745,6 +745,8 @@ dependencies = [
  "buddy-ui",
  "env_logger",
  "log",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -777,6 +779,7 @@ dependencies = [
  "gpui_tokio",
  "log",
  "theme",
+ "tokio",
  "ui",
 ]
 

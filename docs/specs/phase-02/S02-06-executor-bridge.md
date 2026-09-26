@@ -1,6 +1,6 @@
 # S02-06 tokio / GPUI 执行器桥接
 
-> 状态: `todo`
+> 状态: `doing`
 > Phase: 02
 > 依赖: S02-05
 > 阻塞: —

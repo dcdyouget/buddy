@@ -26,6 +26,7 @@
 //! - `markdown` —— vendored markdown（`S04-*`）
 //! - `chat` / `settings` —— 页面（`S05-*` / `S06-*`）
 //! - `shell` —— 窗口外壳（`S07-*`）
+//! - [`chat_bridge`] —— tokio（engine）↔ GPUI 前台的事件桥接（`S02-06`）
 
 #![warn(missing_docs)]
 
@@ -41,6 +42,8 @@
 pub use gpui;
 pub use gpui_platform;
 pub use theme::{self, ActiveTheme};
+
+pub mod chat_bridge;
 
 use gpui::{App, Font, Pixels};
 use theme::{LoadThemes, ThemeSettingsProvider, UiDensity};

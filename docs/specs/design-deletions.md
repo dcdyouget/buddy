@@ -37,7 +37,6 @@
 
 | 设计文档 | 退役于 spec | why 迁移要求 |
 |---------|------------|-------------|
-| `docs/design/sse-and-api.md` | S02-05, S02-06, S02-07 | 流式取消语义需迁移到代码注释；编排层（工具循环上限、上下文 70% 裁剪、终态发射）归 S02-07（2026-09-26 补登：该文档大半是 `send_message` 编排）。usage 在 v1 仅记日志，无需迁移 |
 | `docs/design/rust-architecture.md` | S02-*, S07-01 | 模块职责边界的理由需迁移到 crate 级文档注释 |
 | `docs/design/design-tokens.md` | S03-02, S03-03, S03-04, S03-05 | 品牌色 `#5B5FE9` 与圆角刻度 `4/8/12/16/9999` 的约束 —— **已确认由 `AGENTS.md` 硬约束 2、3 覆盖**，无需额外迁移 |
 | `docs/design/pages-and-states.md` | S05-18, S10-03 | 状态机的转换条件理由需迁移 |
@@ -72,5 +71,7 @@
 | 2026-09-26 | `docs/design/storage-design.md`（整份） | S02-04（`crates/engine/src/storage.rs` + `storage/`） | 数据目录兼容性 → `storage.rs` `APP_IDENTIFIER` 注释（「不要改」）+ `default_data_dir()` 与 Tauri `app_data_dir()` 同算法；**无跨进程锁、v1/v2 同时写会丢消息** → `APP_IDENTIFIER` 注释；附件被外部删除后保留原路径、UI 显示「图片已删除」→ `store_image_bytes` 注释；持久化归属（`send_message` 由后端写一轮消息）→ S02-07-6；分块 100 条 → 测试 `chunk_rotation_at_100`；损坏分块/manifest 回退为空 → 代码 `warn!` 与注释。明文 `api_key` → AGENTS.md 硬约束 9。「非原子写」「前端只加载首批 100 条」为过时 / v1 前端事实，不迁 |
 
 | 2026-09-27 | `docs/design/ipc-contract.md`（整份） | S02-08（v2 无 IPC；v1 命令 → `chat::ChatEngine` 方法，覆盖表见 `phase-02/S02-08-ipc-retire.md`） | 能力整体移除，逐条核对：camelCase↔snake_case 映射为 Tauri 专属，作废；`save_config` 重注册热键 → `ChatEngine::save_config` 注释（热键归 Phase 07）；模型 ID 规则 → `models/model_identity.rs`；`send_message` 持久化归属 → S02-07-6；`approveAll` 只在当次有效 → `chat.rs` 在开始/结束时重置 `approve_all_for_turn`；隐藏窗口不取消 → AGENTS.md 硬约束 7；StreamEvent 联合类型 → `streaming.rs` `StreamEvent`（代码即契约）。**文档与代码不符之处**：称「Rust 当前没有发射 `thinking_end`」，实际 `streaming.rs` `thinking_end()` 会发；命令表漏列 `get_message_count` 与 3 个图片命令 |
+
+| 2026-09-27 | `docs/design/sse-and-api.md`（整份） | S02-01（Provider / Compatibility）、S02-05（Provider 层取消）、S02-07（编排：`crates/engine/src/chat.rs`）、S02-06（UI 消费：`crates/ui/src/chat_bridge.rs`） | 工具循环上限 20 / 连续 3 轮失败、上下文 70% 预算、图片只随当前提问与工具轮携带 → `chat.rs` 常量与注释（v1 原样）；终态事件晚于持久化与释放占用 → `chat.rs` 注释 + `streaming.rs` `StreamFailure` 注释；Esc/失焦/托盘隐藏不取消 → AGENTS.md 硬约束 7 + `chat_bridge.rs` 模块文档（禁止 `Tokio::spawn` 的理由）；生图工具只对 openai_compatible 注册 → `chat.rs` 注释；未知模型 128000 → 测试锁定。v1 前端「文本增量 rAF 平滑消费」属渲染细节 → 交 S04-06（流式渐显）。**文档与代码不符**：称「当前无 system prompt」，实际 `providers/mod.rs` `BUDDY_SYSTEM_PROMPT` 每次注入 |
 
 > **注**：`.design/` 未被 git 跟踪，删除不产生 git 记录，仅在此登记以保留删除事实。

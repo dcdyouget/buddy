@@ -20,3 +20,8 @@ buddy-engine.workspace = true
 
 log.workspace = true
 env_logger.workspace = true
+
+[dev-dependencies]
+# examples/chat_bridge.rs（S02-06 驱动程序）：mock SSE 与配置构造
+tokio.workspace = true
+serde_json.workspace = true
