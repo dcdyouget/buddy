@@ -106,7 +106,7 @@ Buddy is a cross-platform (macOS / Windows) AI chat tool. Press a global hotkey 
 | `docs/specs/README.md` | **Spec 注册表与进度（唯一权威状态源）** | **Always** — 参与重构必读 |
 | `docs/specs/handoff.md` | **交接说明**（在飞状态、未提交改动归属、阻塞点、Phase 00 全部坑） | **接手项目时先读** |
 | `docs/specs/design-deletions.md` | 设计文档退役台账 | 删除设计文档时 |
-| `docs/evidence/v1-baseline/` | **v1 基线**：页面×状态目检清单、令牌实测值、性能、长会话样本（待创建，由 S01-06 产出；不含截图，视觉验收由用户对照运行中的 v1 目检） | 做验收时 |
+| `docs/evidence/v1-baseline/` | **v1 基线**：页面×状态目检清单、令牌实测值、性能、长会话样本（S01-06 产出；不含截图，视觉验收由用户对照运行中的 v1 目检） | 做验收时 |
 | `docs/design/overview.md` | Architecture overview & key decisions | When needing context |
 | `docs/design/design-tokens.md` | Colors, fonts, spacing, shadows | When writing UI code |
 | `docs/design/pages-and-states.md` | 7 page specs + state machine | When building pages |

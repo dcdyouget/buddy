@@ -101,3 +101,18 @@ fn default_data_dir_matches_v1() {
     );
     println!("default_data_dir = {}", dir.display());
 }
+
+/// S01-06-10：长会话样本（`scripts/v1-baseline/gen_long_session.py` 生成）可被 v1 格式的 storage 完整读回。
+/// 手动运行：先生成样本，再 `cargo test -p buddy-engine --test storage_roundtrip -- --ignored --nocapture`
+#[test]
+#[ignore = "需先运行 scripts/v1-baseline/gen_long_session.py"]
+fn long_session_sample_loads() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/v1-baseline/long-session");
+    let count = storage::message_count(&dir).unwrap();
+    let all = storage::load_messages(&dir, 0, u64::MAX).unwrap();
+    println!("long-session: manifest total={count} loaded={}", all.len());
+    assert!(count >= 1000);
+    assert_eq!(all.len() as u64, count, "每条消息都应能按 v1 格式反序列化");
+    assert!(all.iter().any(|m| m.tool_calls.is_some()) && all.iter().any(|m| m.blocks.is_some()));
+}
+

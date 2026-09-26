@@ -60,7 +60,7 @@
 | S01-03 | 许可证分层声明与 NOTICE | S01-01 | `done` | `phase-01/S01-03-licensing.md` |
 | S01-04 | 防 GPL 污染 CI 断言 | S01-03 | `done` | `phase-01/S01-04-license-guard.md` |
 | S01-05 | 迁移期目录与退路分支 | S01-01 | `done` | `phase-01/S01-05-fallback.md` |
-| S01-06 | 建立 v1 视觉与行为基线 | S01-01 | `todo` | `phase-01/S01-06-v1-baseline.md` |
+| S01-06 | 建立 v1 视觉与行为基线 | S01-01 | `doing` | `phase-01/S01-06-v1-baseline.md` |
 
 ---
 
@@ -283,3 +283,4 @@
 | 2026-09-27 | S02-09 | `todo` → `doing` → `done` | v1 174 测试 vs engine 165 + 新增集成 20，差 9 全为窗口类（→ Phase 07）。真实契约 openai_compatible 通过（MiniMax-M3），anthropic 无配置未验证。联网用例失败集合与 v1 相同（v1 既有问题）。CI 加入引擎测试。commit `755fc44` |
 | 2026-09-27 | S02-08 | `todo` → `doing` → `done` | v1 16 命令：14 → `ChatEngine` 方法（编译期检查），2 窗口类 → Phase 07；外壳事件与插件能力逐项归属。退役 `ipc-contract.md`（发现其与代码不符 2 处）。v1 `commands.rs` 保留。commit `ff52929` |
 | 2026-09-27 | S02-06 | `todo` → `doing` → `done` | 桥接落在 `crates/ui/src/chat_bridge.rs`；驱动程序 4 场景 PASS（首批事件 12–16 ms、关窗不断流、占用释放、停止）。两个陷阱：`Tokio::spawn` drop 即 abort（反证：场景 2/3/4 FAIL）；engine async 方法须在 tokio 上执行。退役 `sse-and-api.md`。**Phase 02 完成（9/9）**。commit `b1aaab3` |
+| 2026-09-27 | S01-06 | `todo` → `doing`（**补记**） | 开工时再次漏改状态，随产物提交时补记。已同步改进做法：每个 spec 的第一个动作即改状态 |
