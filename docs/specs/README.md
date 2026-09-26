@@ -75,7 +75,7 @@
 | S02-02 | tools 移植（builtin / image_generation / websearch / file_tools） | S02-03 | `done` | `phase-02/S02-02-tools.md` |
 | S02-03 | models 与流式数据类型移植 | S01-01 | `done` | `phase-02/S02-03-models.md` |
 | S02-04 | storage 移植与数据目录 | S02-03 | `done` | `phase-02/S02-04-storage.md` |
-| S02-05 | 流式取消语义与事件契约 | S02-01 | `todo` | `phase-02/S02-05-stream-cancel.md` |
+| S02-05 | 流式取消语义与事件契约 | S02-01 | `doing` | `phase-02/S02-05-stream-cancel.md` |
 | S02-06 | tokio / GPUI 执行器桥接 | S02-05 | `todo` | `phase-02/S02-06-executor-bridge.md` |
 | S02-07 | 工具调用与审批的请求-响应配对 | S02-05 | `todo` | `phase-02/S02-07-tool-approval.md` |
 | S02-08 | IPC 层作废（命令 → engine API 覆盖表） | S02-01..S02-07 | `todo` | `phase-02/S02-08-ipc-retire.md` |

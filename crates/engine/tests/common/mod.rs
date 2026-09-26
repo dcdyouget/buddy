@@ -26,16 +26,38 @@ pub type Chunk = (Duration, String);
 
 /// 启动 mock 服务端，返回 base_url 与服务端任务句柄
 pub async fn serve_sse(chunks: Vec<Chunk>) -> (String, JoinHandle<CapturedRequest>) {
+    serve_sse_with_header_delay(Duration::ZERO, chunks).await
+}
+
+/// 同上，但读完请求后先等待 `header_delay` 再发响应头（模拟慢首包）
+pub async fn serve_sse_with_header_delay(
+    header_delay: Duration,
+    chunks: Vec<Chunk>,
+) -> (String, JoinHandle<CapturedRequest>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let handle = tokio::spawn(async move {
         let (mut sock, _) = listener.accept().await.unwrap();
         let captured = read_request(&mut sock).await;
-        sock.write_all(
+        // 等待期间同时监听对端关闭：客户端取消会断开连接，read 返回 0 / Err 即结束
+        let mut probe = [0u8; 1];
+        tokio::select! {
+            _ = tokio::time::sleep(header_delay) => {}
+            r = sock.read(&mut probe) => {
+                if matches!(r, Ok(0) | Err(_)) {
+                    return captured;
+                }
+            }
+        }
+        // 客户端在等响应头时取消会断开连接，写失败即结束
+        if sock.write_all(
             b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\n",
         )
         .await
-        .unwrap();
+        .is_err()
+        {
+            return captured;
+        }
         for (delay, data) in chunks {
             tokio::time::sleep(delay).await;
             // 客户端取消后会断开连接，写失败即停止

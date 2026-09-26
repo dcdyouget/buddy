@@ -1,5 +1,9 @@
 # Streaming & Provider Integration
 
+> **部分退役（RULES §7.2）**
+> 已实现：S02-01（Provider Model / Compatibility / 两协议解析，`crates/engine/src/providers/`）；S02-05（Provider 层取消：响应头等待与读流两处，测试 `crates/engine/tests/stream_cancel.rs`）。
+> 未实现：Streaming Flow 编排、工具循环上限、Context Policy、图片随工具轮携带、审批/提问/工具边界的取消、Error Model 的终态发射 → **S02-07**；Unified Events 的 UI 消费 → **S02-06**。三者完成后整份删除。
+
 ## Provider Model
 
 后端通过 `LlmProvider` 统一两类协议：

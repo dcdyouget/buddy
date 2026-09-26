@@ -38,7 +38,7 @@
 | 设计文档 | 退役于 spec | why 迁移要求 |
 |---------|------------|-------------|
 | `docs/design/ipc-contract.md` | S02-08 | 不适用（能力被整体移除） |
-| `docs/design/sse-and-api.md` | S02-05, S02-06 | 流式取消语义、usage 计数要求需迁移到代码注释 |
+| `docs/design/sse-and-api.md` | S02-05, S02-06, S02-07 | 流式取消语义需迁移到代码注释；编排层（工具循环上限、上下文 70% 裁剪、终态发射）归 S02-07（2026-09-26 补登：该文档大半是 `send_message` 编排）。usage 在 v1 仅记日志，无需迁移 |
 | `docs/design/rust-architecture.md` | S02-*, S07-01 | 模块职责边界的理由需迁移到 crate 级文档注释 |
 | `docs/design/design-tokens.md` | S03-02, S03-03, S03-04, S03-05 | 品牌色 `#5B5FE9` 与圆角刻度 `4/8/12/16/9999` 的约束 —— **已确认由 `AGENTS.md` 硬约束 2、3 覆盖**，无需额外迁移 |
 | `docs/design/pages-and-states.md` | S05-18, S10-03 | 状态机的转换条件理由需迁移 |

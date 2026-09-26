@@ -4,7 +4,7 @@
 > Phase: 02
 > 依赖: S02-05
 > 阻塞: —
-> 退役设计文档: `docs/design/sse-and-api.md`（与 S02-05 共同负责，后完成者删除）
+> 退役设计文档: `docs/design/sse-and-api.md`（与 S02-05、S02-07 共同负责，最后完成者删除）
 
 ## 目标
 
