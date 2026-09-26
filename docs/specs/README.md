@@ -77,7 +77,7 @@
 | S02-04 | storage 移植与数据目录 | S02-03 | `done` | `phase-02/S02-04-storage.md` |
 | S02-05 | 流式取消语义与事件契约 | S02-01 | `done` | `phase-02/S02-05-stream-cancel.md` |
 | S02-06 | tokio / GPUI 执行器桥接 | S02-05 | `todo` | `phase-02/S02-06-executor-bridge.md` |
-| S02-07 | 工具调用与审批的请求-响应配对 | S02-05 | `todo` | `phase-02/S02-07-tool-approval.md` |
+| S02-07 | 对话编排迁入（工具循环 / 审批 / 提问 / 持久化 / 终态事件） | S02-05 | `doing` | `phase-02/S02-07-tool-approval.md` |
 | S02-08 | IPC 层作废（命令 → engine API 覆盖表） | S02-01..S02-07 | `todo` | `phase-02/S02-08-ipc-retire.md` |
 | S02-09 | 引擎测试迁移与契约测试 | S02-01..S02-04 | `todo` | `phase-02/S02-09-engine-tests.md` |
 
@@ -278,3 +278,4 @@
 | 2026-09-26 | S02-04 | `todo` → `doing` → `done` | storage 11 测试与 v1 一致；`AppHandle` → `data_dir: &Path`；默认目录与 Tauri 同算法（实测 `~/Library/Application Support/com.buddy.chat`）；往返测试 4 个。退役 `storage-design.md`。**风险**：v1/v2 同时写无跨进程锁。commit `66a6314` |
 | 2026-09-26 | S02-05 | `todo` → `doing` → `done` | 取消语义首次实测：两 provider × 读流中 / 等响应头，取消→返回 15–85 µs，连接随之断开。usage 在 v1 仅记日志（验收项不适用）。`sse-and-api.md` 编排段落改归 S02-07。commit `596b441` |
 | 2026-09-26 | S01-05 | `doing` → `done` | 用户实机运行 tag 版本确认可用。用户决策：先只提交不推送 → 远端推送与分支保护暂缓（已在 spec 完成记录注明）。演练工作树与宣传视频成品按用户要求删除 |
+| 2026-09-27 | S02-07 | `todo` → `doing`（**补记**） | 实现（`039ed86`）开始时漏改状态，提交后发现并补记；同时改名：原「工具调用与审批的请求-响应配对」实为整个 `send_message` 编排迁移（S02-01 发现终态事件在编排层） |
