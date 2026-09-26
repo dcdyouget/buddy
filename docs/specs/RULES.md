@@ -223,7 +223,7 @@ Phase 文件中的工作项（D01、T01 等）是 spec 的**素材**，spec 是�
 
 **详细 spec 文件按 Phase 逐个展开**（对应「分段推进」）：Phase 启动时才创建该 Phase 的 `phase-NN/*.md`，避免为远期工作写会失效的细节。
 
-当前已展开：Phase 00、Phase 01、Phase 02。
+当前已展开：Phase 00、Phase 01、Phase 02、Phase 03。
 
 ---
 
@@ -252,7 +252,7 @@ Phase 文件中的工作项（D01、T01 等）是 spec 的**素材**，spec 是�
 | 调研证据与风险登记 | `docs/tasks/v2.0.0-gpui/research-log.md` |
 | 硬约束 | `AGENTS.md` |
 | 编码规则 | `docs/CONVENTIONS.md` |
-| 设计令牌真值 | `docs/design/design-tokens.md`（v1 视觉以 `src/styles/global.css` 为准） |
+| 设计令牌真值 | v1：`src/styles/global.css`（`v1-final`）；v2：由其生成的 `crates/ui/src/theme_system/tokens.rs`（S03-02 起）。`design-tokens.md` 与代码不一致 8 处（S01-06），不作真值 |
 | 视觉与动效真值 | **代码本身**（v1: `src/styles/global.css`；v2: `crates/ui` 的 `Theme`） |
 
 ### 11.3 不改历史

@@ -38,7 +38,7 @@
 | 设计文档 | 退役于 spec | why 迁移要求 |
 |---------|------------|-------------|
 | `docs/design/rust-architecture.md` | S02-*, S07-01 | 模块职责边界的理由需迁移到 crate 级文档注释 |
-| `docs/design/design-tokens.md` | S03-02, S03-03, S03-04, S03-05 | 品牌色 `#5B5FE9` 与圆角刻度 `4/8/12/16/9999` 的约束 —— **已确认由 `AGENTS.md` 硬约束 2、3 覆盖**，无需额外迁移 |
+| `docs/design/design-tokens.md` | S03-02, S03-03, S03-04（2026-09-27：曾同时列于「不退役」表，自相矛盾；S01-06 证实其与代码有 8 处不符，且 Phase 03 起令牌由 `global.css` 生成为代码 → 退役） | 品牌色 `#5B5FE9` 与圆角刻度 `4/8/12/16/9999` 的约束 —— **已确认由 `AGENTS.md` 硬约束 2、3 覆盖**，无需额外迁移 |
 | `docs/design/pages-and-states.md` | S05-18, S10-03 | 状态机的转换条件理由需迁移 |
 | `docs/design/component-mapping.md` | S05-*, S06-* | 组件拆分的理由需迁移 |
 | `docs/design/overview.md` | 最后 | 架构约束需先迁移到 `AGENTS.md` 后再删 |
@@ -56,7 +56,6 @@
 | `docs/CONVENTIONS.md` | 持续生效的编码规则 |
 | `docs/release-workflow.md` | 持续生效的操作手册 |
 | `AGENTS.md` | 项目权威入口 |
-| `docs/design/design-tokens.md` | 设计令牌唯一真值（辅以 `src/styles/global.css`） |
 
 ## 退役记录
 
