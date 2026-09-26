@@ -12,7 +12,7 @@
 |-------|------|--------|------|---------|
 | 00 | 可行性 Spike | **9** | **9** | — |
 | 01 | 工程骨架与分层 | 6 | 4 | **Phase 00 Go ✅ 已满足** |
-| 02 | 引擎层移植 | 9 | 4 | S01-01 |
+| 02 | 引擎层移植 | 9 | 5 | S01-01 |
 | 03 | 主题与设计令牌 | 7 | 0 | S01-01 |
 | 04 | Markdown 栈 | 9 | 0 | S01-01 |
 | 05 | 聊天界面 | 18 | 0 | S03-*, S04-* |
@@ -21,7 +21,7 @@
 | 08 | 更新与发布 | 11 | 0 | S07-* |
 | 09 | 平台对齐（Windows） | 9 | 0 | macOS 全链路验收 |
 | 10 | 测试与验收 | 7 | 0 | 与 02-09 并行 |
-| | **合计** | **104** | **17** | |
+| | **合计** | **104** | **18** | |
 
 > **准入条件是必要条件而非充分条件**：具体以各 spec 自身的「依赖」列为准（`RULES.md` §9.2）。
 > 规范强制 **Phase 单调性**：Phase `NN` 的 spec 只能依赖 Phase ≤ `NN` 的 spec（`RULES.md` §9.1）。
@@ -75,7 +75,7 @@
 | S02-02 | tools 移植（builtin / image_generation / websearch / file_tools） | S02-03 | `done` | `phase-02/S02-02-tools.md` |
 | S02-03 | models 与流式数据类型移植 | S01-01 | `done` | `phase-02/S02-03-models.md` |
 | S02-04 | storage 移植与数据目录 | S02-03 | `done` | `phase-02/S02-04-storage.md` |
-| S02-05 | 流式取消语义与事件契约 | S02-01 | `doing` | `phase-02/S02-05-stream-cancel.md` |
+| S02-05 | 流式取消语义与事件契约 | S02-01 | `done` | `phase-02/S02-05-stream-cancel.md` |
 | S02-06 | tokio / GPUI 执行器桥接 | S02-05 | `todo` | `phase-02/S02-06-executor-bridge.md` |
 | S02-07 | 工具调用与审批的请求-响应配对 | S02-05 | `todo` | `phase-02/S02-07-tool-approval.md` |
 | S02-08 | IPC 层作废（命令 → engine API 覆盖表） | S02-01..S02-07 | `todo` | `phase-02/S02-08-ipc-retire.md` |
@@ -276,3 +276,4 @@
 | 2026-09-26 | S02-02 | `todo` → `doing` → `done` | tools 15 文件与 v1 逐字节一致；测试 81（ignored 8）与 v1 一致。commit `32204d8` |
 | 2026-09-26 | S02-01 | `todo` → `doing` → `done` | providers 26 测试与 v1 一致；源码仅 1 处 edition 2024 修正。mock SSE 两个 provider 通过。**发现**：终态 `Done`/`Error` 由编排层发射（→ S02-07-5）；本机代理使回环 502（→ `.cargo/config.toml`）。首次退役设计文档 `rust-data-models.md`，并修正纪律脚本 3 处缺陷（S01-04 事后修正）。commit `89f92b8` |
 | 2026-09-26 | S02-04 | `todo` → `doing` → `done` | storage 11 测试与 v1 一致；`AppHandle` → `data_dir: &Path`；默认目录与 Tauri 同算法（实测 `~/Library/Application Support/com.buddy.chat`）；往返测试 4 个。退役 `storage-design.md`。**风险**：v1/v2 同时写无跨进程锁。commit `66a6314` |
+| 2026-09-26 | S02-05 | `todo` → `doing` → `done` | 取消语义首次实测：两 provider × 读流中 / 等响应头，取消→返回 15–85 µs，连接随之断开。usage 在 v1 仅记日志（验收项不适用）。`sse-and-api.md` 编排段落改归 S02-07。commit `596b441` |
