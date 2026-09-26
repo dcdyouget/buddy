@@ -756,6 +756,7 @@ dependencies = [
  "chrono",
  "dom_query",
  "futures-util",
+ "gpui",
  "log",
  "parking_lot",
  "reqwest",

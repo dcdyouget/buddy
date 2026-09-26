@@ -40,7 +40,6 @@
 | `docs/design/ipc-contract.md` | S02-08 | 不适用（能力被整体移除） |
 | `docs/design/sse-and-api.md` | S02-05, S02-06 | 流式取消语义、usage 计数要求需迁移到代码注释 |
 | `docs/design/storage-design.md` | S02-04 | **数据目录兼容性**必须迁移到代码注释（半年后改路径会破坏用户数据） |
-| `docs/design/rust-data-models.md` | S02-01, S02-02, S02-03 | 字段语义的隐式约定需迁移 |
 | `docs/design/rust-architecture.md` | S02-*, S07-01 | 模块职责边界的理由需迁移到 crate 级文档注释 |
 | `docs/design/design-tokens.md` | S03-02, S03-03, S03-04, S03-05 | 品牌色 `#5B5FE9` 与圆角刻度 `4/8/12/16/9999` 的约束 —— **已确认由 `AGENTS.md` 硬约束 2、3 覆盖**，无需额外迁移 |
 | `docs/design/pages-and-states.md` | S05-18, S10-03 | 状态机的转换条件理由需迁移 |
@@ -69,5 +68,7 @@
 | 日期 | 文件/段落 | 替代它的 spec | why 迁移去向 |
 |------|----------|-------------|-------------|
 | 2026-09-10 | `.design/`（整目录，7 文件） | 无（冗余产物） | 无需迁移：动效令牌与 `src/styles/global.css` 完全重复；用户明确「代码实现就是前端设计」 |
+
+| 2026-09-26 | `docs/design/rust-data-models.md`（整份） | S02-03, S02-02, S02-01（代码在 `crates/engine/src/models/`、`streaming.rs`） | 字段语义已在代码注释：模型 ID 规则与「不按 `::` 猜测」→ `models/model_identity.rs:4,12-13,20`；`ImageAttachment.path` 持久化 / `data_url` 临时 → `models/message.rs` 结构体注释；`parent_message_id` 仅影响嵌套显示 → `message.rs` 字段注释；时间戳为 Unix 秒 → `created_at` 注释；`QuestionOption` camelCase → `streaming.rs:245`；**ID 并非全为 UUID → 本次新增于 `Message.id`**；未知模型上下文回退 128000 → 测试 `test_unknown_model_defaults_to_128k` 锁定。「保存时 `selected_model_id` 必须能在 `models` 中找到」的校验在 v1 `commands.rs`，移交 S02-08 覆盖表。前端 `supports_long_cache_retention` 为 v1 TS 专属，不迁 |
 
 > **注**：`.design/` 未被 git 跟踪，删除不产生 git 记录，仅在此登记以保留删除事实。

@@ -259,6 +259,37 @@ def check_hard_constraints(rep: Reporter) -> None:
         rep.ok("S01-04-5c 无 emoji 图标", "源码中无 emoji")
 
 
+# ── 退役台账解析（检查 6 / 10 共用）───────────────────────────
+
+
+LEDGER_PATH_RE = re.compile(r"`(docs/(?:design|tasks)/[^`]+?)`")
+
+
+def ledger_sections() -> tuple[set[str], set[str]]:
+    """返回 (retired, others)：「## 退役记录」段登记的路径，与其余各段的路径。
+
+    退役记录登记的是**已删除**的文档，所以不能按「必须存在」校验（S02-01 首次删除设计文档时发现）。
+    """
+    ledger = SPECS / "design-deletions.md"
+    retired: set[str] = set()
+    others: set[str] = set()
+    if not ledger.exists():
+        return retired, others
+    section = ""
+    for line in ledger.read_text(encoding="utf-8").splitlines():
+        if line.startswith("## "):
+            section = line
+        for m in LEDGER_PATH_RE.finditer(line):
+            (retired if "退役记录" in section else others).add(m.group(1).rstrip("/"))
+    return retired, others
+
+
+def in_git_history(path: str) -> bool:
+    """路径是否曾被 git 跟踪（区分「真实删除」与「凭空编造」）。CI 需 fetch-depth: 0。"""
+    rc, out = run(["git", "log", "--all", "--format=%h", "-1", "--", path], cwd=ROOT)
+    return rc == 0 and bool(out.strip())
+
+
 # ── 检查 6：文档路径引用必须存在（S01-04-9）─────────────────────
 
 # 审计记录中「故意列举的不存在路径」——这些是**记录缺陷**，不是缺陷本身
@@ -301,6 +332,10 @@ def check_doc_paths(rep: Reporter, docs: list[Path] | None = None) -> None:
     # 因此把检查收窄到 `docs/`，既覆盖了真实缺陷类型，又不产生误报。
     pattern = re.compile(r"`((?:docs)/[^`\s]+?)`")
     bad: list[str] = []
+    # 已退役（登记于台账「退役记录」）的路径：spec / tasks 中作为历史记录引用是合法的；
+    # 但 agent 入口（Document Index）必须同步移除（RULES §7.5）
+    retired, _ = ledger_sections()
+    entry_files = {ROOT / "AGENTS.md", ROOT / "CLAUDE.md"}
 
     for f in docs:
         for i, line in enumerate(f.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
@@ -310,6 +345,8 @@ def check_doc_paths(rep: Reporter, docs: list[Path] | None = None) -> None:
                     continue
                 cand = raw.split(":")[0].rstrip("/")
                 if cand in KNOWN_NONEXISTENT:
+                    continue
+                if cand in retired and f not in entry_files:
                     continue
                 if (ROOT / cand).exists():
                     continue
@@ -491,22 +528,28 @@ def check_deletion_ledger(rep: Reporter) -> None:
     if not ledger.exists():
         rep.fail("S01-04-13 退役台账", "docs/specs/design-deletions.md 不存在")
         return
-    text = ledger.read_text(encoding="utf-8")
-    # 只取「待退役清单」与「退役记录」两段中的路径
+    retired, others = ledger_sections()
+    skip = lambda p: "*" in p or "prototypes" in p or "colors_and_type" in p  # 审计记录中列举的「从未存在」路径
     bad = []
-    for m in re.finditer(r"`(docs/(?:design|tasks)/[^`]+?)`", text):
-        p = m.group(1).rstrip("/")
-        if "*" in p or "prototypes" in p or "colors_and_type" in p:
-            continue  # 审计记录中列举的「从未存在」路径
-        if not (ROOT / p).exists():
-            bad.append(p)
+    # 待退役 / 不退役：必须存在
+    for p in sorted(others - retired):
+        if not skip(p) and not (ROOT / p).exists():
+            bad.append(f"{p}（登记为现存文档，但不存在）")
+    # 退役记录：必须已删除，且确曾存在于 git 历史（否则是幽灵路径）
+    for p in sorted(retired):
+        if skip(p):
+            continue
+        if (ROOT / p).exists():
+            bad.append(f"{p}（登记为已退役，但文件仍在）")
+        elif not in_git_history(p):
+            bad.append(f"{p}（登记为已退役，但 git 历史中从未存在）")
     if bad:
         rep.fail(
             "S01-04-13 退役台账",
-            "台账登记了不存在的路径：\n" + "\n".join(f"  {b}" for b in sorted(set(bad))),
+            "台账路径与文件系统不一致：\n" + "\n".join(f"  {b}" for b in bad),
         )
     else:
-        rep.ok("S01-04-13 退役台账", "登记路径均存在")
+        rep.ok("S01-04-13 退役台账", f"现存 {len(others - retired)} 条存在；已退役 {len(retired)} 条均已删除且有 git 历史")
 
 
 # ── 检查 11：agent 入口完整性（S01-04-14）───────────────────────
@@ -544,7 +587,9 @@ def check_docs_tracked(rep: Reporter) -> None:
         if not p.exists():
             bad.append(f"{path}: 不存在")
             continue
-        rc, out = run(["git", "check-ignore", path])
+        # --no-index：路径已被跟踪时，默认模式不报告忽略规则；但新增文件（如新 spec）
+        # 仍会被该规则吞掉。文档首次入库后（e91bbc3）不加此参数会漏检（拦截验证 7 发现）
+        rc, out = run(["git", "check-ignore", "--no-index", path])
         if rc == 0:
             bad.append(f"{path}: 被 .gitignore 排除（规则: {out.strip()}）")
     if bad:
@@ -739,11 +784,49 @@ def self_test() -> int:
     else:
         print("  \033[33mSKIP\033[0m 拦截验证 8：缺少 S01-01")
 
+    # ── 验证 9：已退役路径不得残留在 agent 入口（S02-01 放宽检查 6 后补） ──
+    retired, _ = ledger_sections()
+    agents = ROOT / "AGENTS.md"
+    if retired:
+        victim = sorted(retired)[0]
+        backup = agents.read_text(encoding="utf-8")
+        try:
+            agents.write_text(backup + f"\n| `{victim}` | 已退役文档残留 | — |\n", encoding="utf-8")
+            rep = Reporter()
+            check_doc_paths(rep)
+            if rep.failures:
+                print("  \033[32mOK  \033[0m 拦截验证 9：AGENTS.md 引用已退役文档 → 检查报 FAIL ✅")
+            else:
+                print("  \033[31mFAIL\033[0m 拦截验证 9：已退役文档残留在入口未检出")
+                failures += 1
+        finally:
+            agents.write_text(backup, encoding="utf-8")
+    else:
+        print("  \033[33mSKIP\033[0m 拦截验证 9：台账尚无退役记录")
+
+    # ── 验证 10：登记为已退役但文件仍在 → 必须失败 ─────────────────
+    ledger = SPECS / "design-deletions.md"
+    backup = ledger.read_text(encoding="utf-8")
+    try:
+        ledger.write_text(
+            backup + "\n| 2099-01-01 | `docs/design/overview.md` | S99-99 | 自测注入 |\n",
+            encoding="utf-8",
+        )
+        rep = Reporter()
+        check_deletion_ledger(rep)
+        if rep.failures:
+            print("  \033[32mOK  \033[0m 拦截验证 10：登记退役但文件仍在 → 检查报 FAIL ✅")
+        else:
+            print("  \033[31mFAIL\033[0m 拦截验证 10：未删除的「已退役」文档未检出")
+            failures += 1
+    finally:
+        ledger.write_text(backup, encoding="utf-8")
+
     print()
     if failures:
         print(f"\033[31m拦截验证失败 {failures} 项 —— 相关检查不可信\033[0m\n")
         return 1
-    print("\033[32m拦截验证全部 8 项通过 —— 检查确实有效\033[0m\n")
+    print("\033[32m拦截验证全部 10 项通过 —— 检查确实有效\033[0m\n")
     return 0
 
 

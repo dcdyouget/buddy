@@ -87,6 +87,8 @@ pub struct ImageAttachment {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Message {
+    /// user 消息由 UI 生成；编排层持久化的多轮 assistant/tool 消息用时间戳组合 ID，
+    /// 因此不能假定所有 ID 都是 UUID。
     pub id: String,
     pub role: MessageRole,
     pub content: String,

@@ -1,6 +1,6 @@
 # S02-01 providers 移植（openai_compatible / anthropic）
 
-> 状态: `todo`
+> 状态: `doing`
 > Phase: 02
 > 依赖: S02-02, S02-03
 > 阻塞: —

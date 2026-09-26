@@ -71,7 +71,7 @@
 
 | ID | Spec | 依赖 | 状态 | 文件 |
 |----|------|------|------|------|
-| S02-01 | providers 移植（openai_compatible / anthropic） | S02-02, S02-03 | `todo` | `phase-02/S02-01-providers.md` |
+| S02-01 | providers 移植（openai_compatible / anthropic） | S02-02, S02-03 | `doing` | `phase-02/S02-01-providers.md` |
 | S02-02 | tools 移植（builtin / image_generation / websearch / file_tools） | S02-03 | `done` | `phase-02/S02-02-tools.md` |
 | S02-03 | models 与流式数据类型移植 | S01-01 | `done` | `phase-02/S02-03-models.md` |
 | S02-04 | storage 移植与数据目录 | S02-03 | `todo` | `phase-02/S02-04-storage.md` |

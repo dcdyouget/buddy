@@ -17,6 +17,9 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # S01-04-13 用 git 历史区分「已退役」与「幽灵路径」，浅克隆会误报
+          fetch-depth: 0
 
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@master

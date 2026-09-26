@@ -39,6 +39,8 @@ pub mod mcp;
 #[allow(missing_docs)]
 pub mod models;
 #[allow(missing_docs)]
+pub mod providers;
+#[allow(missing_docs)]
 pub mod streaming;
 #[allow(missing_docs)]
 pub mod tools;
