@@ -40,6 +40,11 @@ jobs:
       - name: 纪律检查（全部断言）
         run: python3 scripts/check-discipline.py
 
+      # 引擎层测试（S02-09）：单测 + mock SSE 集成测试；
+      # 联网 / 真实 API Key 的用例标记为 #[ignore]，不在 CI 运行
+      - name: 引擎测试
+        run: cargo test -p buddy-engine
+
       # 关键：验证检查本身有效 —— 注入违规，确认会失败。
       # 一个从未失败过的检查等于没有检查（S00-07 的教训）。
       - name: 拦截验证（确认检查确实会失败）

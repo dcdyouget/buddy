@@ -79,7 +79,7 @@
 | S02-06 | tokio / GPUI 执行器桥接 | S02-05 | `todo` | `phase-02/S02-06-executor-bridge.md` |
 | S02-07 | 对话编排迁入（工具循环 / 审批 / 提问 / 持久化 / 终态事件） | S02-05 | `done` | `phase-02/S02-07-tool-approval.md` |
 | S02-08 | IPC 层作废（命令 → engine API 覆盖表） | S02-01..S02-07 | `todo` | `phase-02/S02-08-ipc-retire.md` |
-| S02-09 | 引擎测试迁移与契约测试 | S02-01..S02-04 | `todo` | `phase-02/S02-09-engine-tests.md` |
+| S02-09 | 引擎测试迁移与契约测试 | S02-01..S02-04 | `doing` | `phase-02/S02-09-engine-tests.md` |
 
 ---
 
