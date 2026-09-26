@@ -12,7 +12,7 @@
 |-------|------|--------|------|---------|
 | 00 | 可行性 Spike | **9** | **9** | — |
 | 01 | 工程骨架与分层 | 6 | 4 | **Phase 00 Go ✅ 已满足** |
-| 02 | 引擎层移植 | 9 | 0 | S01-01 |
+| 02 | 引擎层移植 | 9 | 1 | S01-01 |
 | 03 | 主题与设计令牌 | 7 | 0 | S01-01 |
 | 04 | Markdown 栈 | 9 | 0 | S01-01 |
 | 05 | 聊天界面 | 18 | 0 | S03-*, S04-* |
@@ -21,7 +21,7 @@
 | 08 | 更新与发布 | 11 | 0 | S07-* |
 | 09 | 平台对齐（Windows） | 9 | 0 | macOS 全链路验收 |
 | 10 | 测试与验收 | 7 | 0 | 与 02-09 并行 |
-| | **合计** | **104** | **13** | |
+| | **合计** | **104** | **14** | |
 
 > **准入条件是必要条件而非充分条件**：具体以各 spec 自身的「依赖」列为准（`RULES.md` §9.2）。
 > 规范强制 **Phase 单调性**：Phase `NN` 的 spec 只能依赖 Phase ≤ `NN` 的 spec（`RULES.md` §9.1）。
@@ -73,7 +73,7 @@
 |----|------|------|------|------|
 | S02-01 | providers 移植（openai_compatible / anthropic） | S02-02, S02-03 | `todo` | `phase-02/S02-01-providers.md` |
 | S02-02 | tools 移植（builtin / image_generation / websearch / file_tools） | S02-03 | `todo` | `phase-02/S02-02-tools.md` |
-| S02-03 | models 与流式数据类型移植 | S01-01 | `doing` | `phase-02/S02-03-models.md` |
+| S02-03 | models 与流式数据类型移植 | S01-01 | `done` | `phase-02/S02-03-models.md` |
 | S02-04 | storage 移植与数据目录 | S02-03 | `todo` | `phase-02/S02-04-storage.md` |
 | S02-05 | 流式取消语义与事件契约 | S02-01 | `todo` | `phase-02/S02-05-stream-cancel.md` |
 | S02-06 | tokio / GPUI 执行器桥接 | S02-05 | `todo` | `phase-02/S02-06-executor-bridge.md` |
@@ -272,3 +272,4 @@
 | 2026-09-26 | S01-06 | 范围调整（仍为 `todo`） | **用户决策：不截图、不录屏**，视觉/行为验收改为用户对照运行中的 v1 目检。取消 S01-06-4/5/6/7，保留清单、令牌、性能、长会话、数据快照。不可再生资产由截图转为「可运行的 v1」→ 由 S01-05 退路 tag 保证。S10-03 的比对基准相应改为「用户对照 v1 目检」，展开 Phase 10 时落实 |
 | 2026-09-26 | S01-05 | `todo` → `doing` | 用户选 (a)：v1 改动单独提交 `9cc244a` → tag `v1-final` + 分支 `v1-fallback`。回退演练通过（tsc / vite build / vitest 99 / cargo build / cargo test 166）。**待用户**：推送与分支保护、v1 运行目检。用户另决定不做历史数据迁移 |
 | 2026-09-26 | Phase 02 | 展开 9 个 spec 文件 + 依赖/范围修正 | 依源码实测修正依赖：`models/message.rs:16` ↔ `streaming.rs:22` 互相引用 → streaming 数据类型与 emitter 去 Tauri 并入 **S02-03**；S02-02/S02-04 依赖 S02-03；S02-01 依赖 S02-02+S02-03。**S02-05** 改名「流式取消语义与事件契约」（去 Tauri 已随 S02-03 完成，剩余真正未验证项是取消）。**S02-08** 改为「覆盖表 + 作废契约」，**不删 v1 的 `commands.rs`**（会破坏 v1）。S02-04 取消旧数据回归（用户决策） |
+| 2026-09-26 | S02-03 | `todo` → `doing` → `done` | models/mcp 与 v1 逐字节一致；streaming 仅 emitter 改 channel（25 行差异）。测试 29/29，与 v1 同模块数量一致。engine 0 warning、0 处 tauri/gpui。commit `1f50d80` |
