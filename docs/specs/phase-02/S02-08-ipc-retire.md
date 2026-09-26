@@ -22,6 +22,7 @@
 | S02-08-1 | 覆盖表 | 逐条列出 v1 命令 → engine 函数 / 归属 spec（如窗口类归 Phase 07） |
 | S02-08-2 | **不删除 v1 的 `commands.rs`** | v1 在 Phase 05 前必须可用（S01-05 决策）；物理删除随 v1 整体清理进行 |
 | S02-08-3 | DTO 合并 | 仅为 IPC 存在、与 model 重复的类型不迁入 engine（D25） |
+| S02-08-4 | 配置保存校验 | 「保存时 `selected_model_id` 非空则必须能在 `models` 中找到」在 v1 `commands.rs`（`model_identity.rs:82` 注释称「交给命令层校验」），覆盖表须标出其 engine 去向（原 `rust-data-models.md` 的约定，S02-01 移交） |
 
 ## 验收标准
 

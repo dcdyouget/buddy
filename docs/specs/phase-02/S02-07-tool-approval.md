@@ -22,7 +22,8 @@
 | S02-07-1 | 先读后写 | 先把 v1 的循环、审批、提问逻辑逐段定位并记录行号，再迁移 |
 | S02-07-2 | 配对机制 | `oneshot` 按请求 id 配对；UI 未响应时的超时/取消语义与 v1 一致 |
 | S02-07-3 | 安全等级 | `ToolSafety` 决定是否需要审批，规则原样保留 |
-| S02-07-4 | 测试 | 用 mock provider 返回 tool_call → 审批通过 / 拒绝 两条路径各一测试 |
+| S02-07-4 | 测试 | 用 mock provider 返回 tool_call → 审批通过 / 拒绝 两条路径各一测试（可复用 `crates/engine/tests/common/`） |
+| S02-07-5 | **终态事件由编排层发射** | S02-01 实测：provider 事件流以 `TurnEnd` 结束，`Done` / `Error` 由 v1 `commands.rs:642-660` 的 `TerminalStreamEvent` 依 `StreamOutcome` 发射。**必须随工具循环一并迁入 engine**，否则 v2 UI 永远收不到 `Done` |
 
 ## 验收标准
 

@@ -223,3 +223,14 @@ warning: patch `tree-sitter-language v0.1.8 (…)` was not used in the crate gra
 | 品牌色逐值校验（硬约束 2） | `S03-02`（拿到实际色值后） |
 | `crates/` 路径引用的校验 | 依赖编译器；若将来需要，可加 `cargo metadata` 交叉检查 |
 | Windows / Linux 侧的 CI matrix | `S08-09` / `S09-*` |
+
+## 事后修正（2026-09-26，随 S02-01 `89f92b8`）
+
+| 缺陷 | 发现方式 | 修正 |
+|------|---------|------|
+| S01-04-13 要求台账**所有**路径存在，但「退役记录」段登记的恰是已删除文件 → 第一次真实退役（`rust-data-models.md`）即报错 | S02-01 删除设计文档 | 按段校验：现存段须存在；「退役记录」段须**已删除且在 git 历史中出现过**（后者保住拦截验证 6 对幽灵路径的拦截） |
+| S01-04-9 对已退役路径的历史引用（spec 头 `退役设计文档` 字段）误报 | 同上 | 已退役路径在 spec / tasks 中豁免；在 `AGENTS.md` / `CLAUDE.md` 中仍报错（RULES §7.5） |
+| S01-04-15 `git check-ignore` 不报告**已跟踪**路径 → 文档入库（`e91bbc3`）后，往 `.gitignore` 加 `docs/specs` 不再被拦（新 spec 文件会被静默忽略） | **拦截验证 7 由 OK 变 FAIL** | 加 `--no-index` |
+| CI 浅克隆无 git 历史 | 推理（新检查依赖 `git log`） | workflow `fetch-depth: 0` |
+
+新增拦截验证 9（入口残留已退役路径）、10（登记退役但文件仍在），**共 10 项全部通过**。

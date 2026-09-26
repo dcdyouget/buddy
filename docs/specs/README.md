@@ -12,7 +12,7 @@
 |-------|------|--------|------|---------|
 | 00 | 可行性 Spike | **9** | **9** | — |
 | 01 | 工程骨架与分层 | 6 | 4 | **Phase 00 Go ✅ 已满足** |
-| 02 | 引擎层移植 | 9 | 2 | S01-01 |
+| 02 | 引擎层移植 | 9 | 3 | S01-01 |
 | 03 | 主题与设计令牌 | 7 | 0 | S01-01 |
 | 04 | Markdown 栈 | 9 | 0 | S01-01 |
 | 05 | 聊天界面 | 18 | 0 | S03-*, S04-* |
@@ -21,7 +21,7 @@
 | 08 | 更新与发布 | 11 | 0 | S07-* |
 | 09 | 平台对齐（Windows） | 9 | 0 | macOS 全链路验收 |
 | 10 | 测试与验收 | 7 | 0 | 与 02-09 并行 |
-| | **合计** | **104** | **15** | |
+| | **合计** | **104** | **16** | |
 
 > **准入条件是必要条件而非充分条件**：具体以各 spec 自身的「依赖」列为准（`RULES.md` §9.2）。
 > 规范强制 **Phase 单调性**：Phase `NN` 的 spec 只能依赖 Phase ≤ `NN` 的 spec（`RULES.md` §9.1）。
@@ -71,7 +71,7 @@
 
 | ID | Spec | 依赖 | 状态 | 文件 |
 |----|------|------|------|------|
-| S02-01 | providers 移植（openai_compatible / anthropic） | S02-02, S02-03 | `doing` | `phase-02/S02-01-providers.md` |
+| S02-01 | providers 移植（openai_compatible / anthropic） | S02-02, S02-03 | `done` | `phase-02/S02-01-providers.md` |
 | S02-02 | tools 移植（builtin / image_generation / websearch / file_tools） | S02-03 | `done` | `phase-02/S02-02-tools.md` |
 | S02-03 | models 与流式数据类型移植 | S01-01 | `done` | `phase-02/S02-03-models.md` |
 | S02-04 | storage 移植与数据目录 | S02-03 | `todo` | `phase-02/S02-04-storage.md` |
@@ -274,3 +274,4 @@
 | 2026-09-26 | Phase 02 | 展开 9 个 spec 文件 + 依赖/范围修正 | 依源码实测修正依赖：`models/message.rs:16` ↔ `streaming.rs:22` 互相引用 → streaming 数据类型与 emitter 去 Tauri 并入 **S02-03**；S02-02/S02-04 依赖 S02-03；S02-01 依赖 S02-02+S02-03。**S02-05** 改名「流式取消语义与事件契约」（去 Tauri 已随 S02-03 完成，剩余真正未验证项是取消）。**S02-08** 改为「覆盖表 + 作废契约」，**不删 v1 的 `commands.rs`**（会破坏 v1）。S02-04 取消旧数据回归（用户决策） |
 | 2026-09-26 | S02-03 | `todo` → `doing` → `done` | models/mcp 与 v1 逐字节一致；streaming 仅 emitter 改 channel（25 行差异）。测试 29/29，与 v1 同模块数量一致。engine 0 warning、0 处 tauri/gpui。commit `1f50d80` |
 | 2026-09-26 | S02-02 | `todo` → `doing` → `done` | tools 15 文件与 v1 逐字节一致；测试 81（ignored 8）与 v1 一致。commit `32204d8` |
+| 2026-09-26 | S02-01 | `todo` → `doing` → `done` | providers 26 测试与 v1 一致；源码仅 1 处 edition 2024 修正。mock SSE 两个 provider 通过。**发现**：终态 `Done`/`Error` 由编排层发射（→ S02-07-5）；本机代理使回环 502（→ `.cargo/config.toml`）。首次退役设计文档 `rust-data-models.md`，并修正纪律脚本 3 处缺陷（S01-04 事后修正）。commit `89f92b8` |
