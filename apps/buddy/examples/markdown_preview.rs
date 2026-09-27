@@ -348,6 +348,63 @@ async fn selftest_t06(handle: WindowHandle<Preview>, md: &Entity<Markdown>, cx: 
     ok
 }
 
+/// S04-09 复制用例（与 v1 测量共用，见 docs/evidence/s04-09/）
+const COPY_SAMPLE: &str = include_str!("../../../docs/evidence/s04-09/copy-sample.md");
+const V1_SELECTION: &str = include_str!("../../../docs/evidence/s04-09/v1-selection.json");
+
+/// 模拟真实鼠标拖选整段消息 + Copy 动作，读剪贴板（结束后恢复用户原剪贴板）
+async fn selftest_t07(handle: WindowHandle<Preview>, md: &Entity<Markdown>, cx: &mut AsyncApp) -> bool {
+    use buddy_ui::gpui::{Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PlatformInput, point};
+    let src = markdown::normalize::normalize_markdown(COPY_SAMPLE);
+    md.update(cx, |m, cx| m.replace(src.clone(), cx));
+    wait_parsed(md, src.len(), cx).await;
+    let draw = |cx: &mut AsyncApp| {
+        let _ = cx.update_window(handle.into(), |_, window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+    };
+    draw(cx);
+    let saved = cx.update(|cx| cx.read_from_clipboard());
+    let (from, to) = (point(px(17.), px(62.)), point(px(630.), px(810.)));
+    // 与真实操作一致：每个事件后画一帧（GPUI 的命中测试用上一帧的悬停状态）
+    let m = Modifiers::default();
+    let events = [
+        PlatformInput::MouseMove(MouseMoveEvent { position: from, pressed_button: None, modifiers: m }),
+        PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Left, position: from, modifiers: m, click_count: 1, first_mouse: false }),
+        PlatformInput::MouseMove(MouseMoveEvent { position: to, pressed_button: Some(MouseButton::Left), modifiers: m }),
+        PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Left, position: to, modifiers: m, click_count: 1 }),
+    ];
+    for event in events {
+        let _ = cx.update_window(handle.into(), |_, window, cx| window.dispatch_event(event, cx));
+        draw(cx);
+    }
+    let sel = md.read_with(cx, |m, _| (m.has_selection(), m.selected_source().map(|s| s.len())));
+    println!("T07: 选区 {sel:?}");
+    let _ = cx.update_window(handle.into(), |_, window, cx| window.dispatch_action(Box::new(buddy_ui::markdown::zed_markdown::Copy), cx));
+    let copied = cx.update(|cx| cx.read_from_clipboard()).and_then(|c| c.text()).unwrap_or_default();
+    if let Some(saved) = saved {
+        cx.update(|cx| cx.write_to_clipboard(saved));
+    }
+    let v1: String = serde_json::from_str(V1_SELECTION.trim()).expect("v1 选区 JSON");
+    println!("T07: v2 复制 {}", serde_json::to_string(&copied).unwrap());
+    println!("T07: v1 选区 {}", serde_json::to_string(&v1).unwrap());
+    // 期望 = v1 实测去掉两处界面控件文字（有意不同，见 markdown::copy 模块文档）；先断言它们确实存在
+    let chrome = ["rust\n\n复制\n", "\n 任务项"];
+    let mut want = v1.clone();
+    let mut ok = true;
+    for c in chrome {
+        ok &= want.contains(c);
+        want = want.replacen(c, if c.starts_with("\n ") { "\n任务项" } else { "" }, 1);
+    }
+    ok &= copied == want && !copied.contains(markdown::normalize::EMPHASIS_GUARD);
+    if copied != want {
+        println!("T07: 期望   {}", serde_json::to_string(&want).unwrap());
+    }
+    println!("{} S04-09 T07 真实拖选 + 复制，结果与 v1 选区文本一致（除代码块头部与复选框空格）", if ok { "PASS" } else { "FAIL" });
+    ok
+}
+
 /// v1 复制内容的对照：CommonMark 代码块文本去掉一个末尾换行
 fn expected_copies(doc: &str) -> Vec<String> {
     use pulldown_cmark::{Event, Parser, Tag, TagEnd};
@@ -429,7 +486,8 @@ fn selftest_t04(handle: WindowHandle<Preview>, cx: &mut App) {
         println!("T05: 期望     {want:?}");
         println!("{} S04-08 T05 每个 GFM 块元素都经过 Buddy 装饰（逐类计数一致，覆盖 {} 类）", if t05 { "PASS" } else { "FAIL" }, want.len());
         let t06 = selftest_t06(handle, &md, cx).await;
-        std::process::exit(if ok && t05 && t06 { 0 } else { 1 });
+        let t07 = selftest_t07(handle, &md, cx).await;
+        std::process::exit(if ok && t05 && t06 && t07 { 0 } else { 1 });
     })
     .detach();
 }

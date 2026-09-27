@@ -169,7 +169,13 @@ pub struct MarkdownDecorations {
     pub strikethrough: Option<TextStyleRefinement>,
     /// Replaces the text style of table header cells
     pub table_head: Option<TextStyleRefinement>,
+    /// Builds the clipboard text for the `Copy` action from the selected rendered lines
+    /// (each with the source range it covers), instead of joining them with `\n`
+    pub copy_text: Option<CopyTextFn>,
 }
+
+/// Buddy patch: see [`MarkdownDecorations::copy_text`]
+pub type CopyTextFn = Arc<dyn Fn(&[(String, Range<usize>)], &ParsedMarkdown) -> String>;
 
 #[derive(Clone, Default)]
 pub struct HeadingLevelStyles {
@@ -1209,11 +1215,21 @@ impl Markdown {
         self.active_search_highlight
     }
 
-    fn copy(&self, text: &RenderedText, _: &mut Window, cx: &mut Context<Self>) {
+    fn copy(
+        &self,
+        text: &RenderedText,
+        transform: Option<&CopyTextFn>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.selection.end <= self.selection.start {
             return;
         }
-        let text = text.text_for_range(self.selection.start..self.selection.end);
+        let range = self.selection.start..self.selection.end;
+        let text = match transform {
+            Some(transform) => transform(&text.lines_for_range(range), &self.parsed_markdown),
+            None => text.text_for_range(range),
+        };
         cx.write_to_clipboard(ClipboardItem::new_string(text));
     }
 
@@ -3515,10 +3531,13 @@ impl Element for MarkdownElement {
         window.on_action(std::any::TypeId::of::<crate::Copy>(), {
             let entity = self.markdown.clone();
             let text = rendered_markdown.text.clone();
+            let transform = self.style.decorations.copy_text.clone();
             move |_, phase, window, cx| {
                 let text = text.clone();
                 if phase == DispatchPhase::Bubble {
-                    entity.update(cx, move |this, cx| this.copy(&text, window, cx))
+                    entity.update(cx, |this, cx| {
+                        this.copy(&text, transform.as_ref(), window, cx)
+                    })
                 }
             }
         });
@@ -5008,6 +5027,37 @@ impl RenderedText {
         }
 
         source_index..source_index
+    }
+
+    /// Buddy patch: the pieces [`Self::text_for_range`] joins, with the source range of each
+    fn lines_for_range(&self, range: Range<usize>) -> Vec<(String, Range<usize>)> {
+        let mut out = Vec::new();
+        for line in self.lines.iter() {
+            if range.start > line.source_end {
+                continue;
+            }
+            let line_source_start = line.source_mappings.first().unwrap().source_index;
+            if range.end < line_source_start {
+                break;
+            }
+            let text = line.layout.text();
+            let start = if range.start < line_source_start {
+                0
+            } else {
+                line.rendered_index_for_source_index(range.start)
+            };
+            let end = if range.end > line.source_end {
+                line.rendered_index_for_source_index(line.source_end)
+            } else {
+                line.rendered_index_for_source_index(range.end)
+            }
+            .min(text.len());
+            out.push((
+                text[start..end].to_string(),
+                line_source_start.max(range.start)..line.source_end.min(range.end),
+            ));
+        }
+        out
     }
 
     fn text_for_range(&self, range: Range<usize>) -> String {

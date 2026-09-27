@@ -15,6 +15,7 @@
 | `markdown.rs` | `language` / `settings` / `theme_settings` 的 4 处 `use` 改指本地模块；新增 `mod` 声明、`install_theme_settings`、`pub mod syntax` 重导出（共 43 行差异） | 去掉会拖入 zed settings 框架与需 cmake 的 `language`；向 buddy-ui 暴露高亮类别与语言注册表 |
 | `markdown.rs`（S04-07） | **接通 `CodeBlockRenderer::Custom`**：上游本 rev 该分支为空实现（`render` / `transform` 从不调用，全仓无调用方），缩进代码块也强制走 Default。改为：`render` 产出外层容器、代码作为其子节点并套 `style.code_block`，结束时调用 `transform` | Buddy 代码块需 v1 的头部栏（语言标签 + 「复制」文字按钮），Default 只有悬浮图标按钮 |
 | `markdown.rs` / `html/html_rendering.rs`（S04-08） | **新增 `MarkdownStyle::decorations`（`MarkdownDecorations`）**：标题 / 引用 / 列表 / 项目符号 / 表格 / 单元格 / 分隔线的可选回调，以及加粗 / 删除线 / 表头的文本样式覆盖；全部默认 `None` = 上游行为。`push_markdown_heading` / `push_markdown_block_quote` 增加 `cx` 参数（HTML 渲染路径同步传入） | 上游在这些位置直接读 zed 主题色（表格边框、表头底色、加粗颜色）且结构固定，做不出 v1 的标题竖条、圆点 / 序号徽章、引用渐变等 |
+| `markdown.rs`（S04-09） | `MarkdownDecorations::copy_text`：`Copy` 动作改由回调根据「选中的渲染行 + 各自源区间」生成剪贴板文本；新增 `RenderedText::lines_for_range`（与 `text_for_range` 同逻辑，保留源区间） | v1 复制为 WebKit 选区纯文本（段落后空行、表格制表符分隔、去掉加粗守卫），上游只按行 `\n` 连接 |
 | `theme_settings_shim.rs` | **新增**（Buddy 编写） | 提供与 `theme_settings::ThemeSettings` 同名同 API 的替代；字体 / 字号由 buddy-ui 按 Buddy 令牌传入 |
 | `language_stub.rs` | **新增**（Buddy 编写） | 替代 `language`：S04-02 起经 `buddy-syntax`（Comet，MIT）做 tree-sitter 高亮，只放行 v1 有高亮的语言，类别归并为 9 类（`SYNTAX_CATEGORIES`） |
 | `mermaid.rs` | **整体替换为 stub**（原 1836 行 → 100 行） | 原实现依赖 node / wasm；Buddy（v1）无 mermaid 功能 |

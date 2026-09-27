@@ -19,6 +19,7 @@
 /// 显示与复制加粗文本时须 [`normalize::strip_guards`]（守卫为零宽空格，复制时会被带出）→ S04-09 / S05-08。
 pub mod normalize;
 pub mod code_block;
+pub mod copy;
 pub mod gfm;
 pub use zed_markdown;
 
@@ -85,6 +86,9 @@ pub fn message_style(window: &Window, cx: &App) -> MarkdownStyle {
         rule_color: c.markdown_accent_line.into(),
         block_quote_border_color: c.markdown_accent.into(),
         syntax: syntax_theme(&theme),
+        // v1 无 `::selection` 规则，WebKit 用系统高亮色；GPUI 无对应接口，暂用品牌色（待用户决定，S04-09）。
+        // 上游把选区色块画在文字**之上**，必须半透明，否则遮住文字
+        selection_background_color: Hsla::from(c.buddy_primary).opacity(SELECTION_ALPHA),
         heading_level_styles: Some(HeadingLevelStyles {
             h1: heading(1),
             h2: heading(2),
@@ -101,6 +105,9 @@ pub fn message_style(window: &Window, cx: &App) -> MarkdownStyle {
         ..Default::default()
     }
 }
+
+/// 选区色的不透明度（叠在文字上，需保证文字可读）
+pub const SELECTION_ALPHA: f32 = 0.25;
 
 /// 助手消息正文行高（v1 写死值，见模块文档表格）
 pub const ASSISTANT_LINE_HEIGHT: f32 = 1.6;

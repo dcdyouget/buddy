@@ -164,6 +164,8 @@ pub fn decorations(theme: &Theme) -> MarkdownDecorations {
             color: Some(c.markdown_accent_strong.into()),
             ..Default::default()
         }),
+        // 与 v1（WebKit）选区纯文本一致，并去掉加粗守卫（S04-09）
+        copy_text: Some(Arc::new(super::copy::copy_text)),
     }
 }
 
