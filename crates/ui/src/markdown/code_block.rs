@@ -19,10 +19,10 @@ use super::zed_markdown::{
     parser::{CodeBlockKind, CodeBlockMetadata, MarkdownEvent, MarkdownTag, MarkdownTagEnd},
 };
 use crate::icons::{IconName, icon};
-use crate::theme_system::{BuddyTheme, Theme, box_shadows, fonts, tokens::metrics as m};
+use crate::theme_system::{BuddyTheme, Theme, box_shadows, easing::cubic_bezier, fonts, tokens::{metrics as m, motion}};
 use gpui::{
-    App, ClipboardItem, Div, EntityId, FontWeight, Global, Hsla, SharedString, StyleRefinement,
-    TextStyleRefinement, WeakEntity, div, prelude::*, px, relative,
+    Animation, AnimationExt, AnyElement, App, ClipboardItem, Div, EntityId, FontWeight, Global, Hsla, SharedString,
+    StyleRefinement, TextStyleRefinement, Transformation, WeakEntity, div, prelude::*, px, relative, size,
 };
 use std::collections::HashSet;
 use std::ops::Range;
@@ -135,6 +135,32 @@ pub fn renderer(markdown: WeakEntity<Markdown>) -> CodeBlockRenderer {
     }
 }
 
+/// 复制按钮图标；变为对勾时播放 v1 的 `markdown-copy-success`：
+/// 缩放 0.72 → 1.12（70%）→ 1，时长 `--duration-normal`，每段 `--ease-spring`
+///
+/// 减弱动效：v1 在 `prefers-reduced-motion` 下关闭此动画；v2 的系统设置查询随 S04-06-2 提供后接入。
+fn copy_icon(copied: bool, block_start: usize) -> AnyElement {
+    if !copied {
+        return icon(IconName::Copy, px(12.)).into_any_element();
+    }
+    let spring = cubic_bezier(motion::EASE_SPRING);
+    icon(IconName::Check, px(12.))
+        .with_animation(
+            ("buddy-code-copied", block_start),
+            Animation::new(std::time::Duration::from_millis(motion::DURATION_NORMAL as u64)),
+            move |svg, t| svg.with_transformation(Transformation::scale(size(copied_scale(t, &spring), copied_scale(t, &spring)))),
+        )
+        .into_any_element()
+}
+
+/// CSS 关键帧逐段插值：缓动作用于每段（与浏览器一致）
+fn copied_scale(t: f32, ease: &impl Fn(f32) -> f32) -> f32 {
+    const FRAMES: [(f32, f32); 3] = [(0.0, 0.72), (0.7, 1.12), (1.0, 1.0)];
+    let i = if t < FRAMES[1].0 { 0 } else { 1 };
+    let ((t0, s0), (t1, s1)) = (FRAMES[i], FRAMES[i + 1]);
+    s0 + (s1 - s0) * ease(((t - t0) / (t1 - t0)).clamp(0.0, 1.0))
+}
+
 fn render_container(
     markdown: &WeakEntity<Markdown>,
     kind: &CodeBlockKind,
@@ -189,7 +215,7 @@ fn render_container(
         .font_weight(FontWeight(m::FONT_WEIGHT_REGULAR))
         .text_color(if copied { c.state_success } else { c.text_muted })
         .when(!copied, |b| b.hover(|s| s.text_color(c.code_syntax_keyword).bg(info(0.08))))
-        .child(icon(if copied { IconName::Check } else { IconName::Copy }, px(12.)))
+        .child(copy_icon(copied, block_start))
         .child(if copied { "已复制" } else { "复制" })
         .on_click({
             let markdown = markdown.clone();
@@ -219,4 +245,38 @@ fn render_container(
         .shadow(shadows)
         .line_height(relative(if plain { 1.75 } else { m::LINE_HEIGHT_BASE }))
         .child(header)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copied_scale_follows_v1_keyframes() {
+        let spring = cubic_bezier(motion::EASE_SPRING);
+        assert!((copied_scale(0.0, &spring) - 0.72).abs() < 1e-6);
+        assert!((copied_scale(0.7, &spring) - 1.12).abs() < 1e-4);
+        assert!((copied_scale(1.0, &spring) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn v1_language_rules() {
+        let blocks = ["```TypeScript {1,2}\nx\n```\n", "```c++\nx\n```\n", "```\nx\n```\n", "~~~ py\nx\n~~~\n"];
+        let src = blocks.concat();
+        let mut at = 0;
+        let ranges: Vec<Range<usize>> = blocks
+            .iter()
+            .map(|b| {
+                at += b.len();
+                at - b.len()..at
+            })
+            .collect();
+        let lang = |i: usize| v1_language(&src, &ranges[i], &CodeBlockKind::Fenced);
+        assert_eq!(lang(0), "TypeScript"); // 显示时转小写（v1 `textTransform: lowercase`）
+        assert_eq!(lang(1), "c"); // v1 正则 `[\w-]+` 截断
+        assert_eq!(lang(2), "text");
+        assert_eq!(lang(3), "py");
+        assert_eq!(v1_language(&src, &(0..1), &CodeBlockKind::Indented), "text");
+        assert!(is_plain_language("TXT") && is_plain_language("plaintext") && !is_plain_language("bash"));
+    }
 }
