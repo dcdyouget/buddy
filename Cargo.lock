@@ -848,6 +848,7 @@ dependencies = [
 name = "buddy-ui"
 version = "2.0.0"
 dependencies = [
+ "anyhow",
  "buddy-engine",
  "buddy-markdown",
  "gpui",
@@ -855,6 +856,7 @@ dependencies = [
  "gpui_tokio",
  "log",
  "pulldown-cmark",
+ "reqwest",
  "theme",
  "tokio",
  "ui",

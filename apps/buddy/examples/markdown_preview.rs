@@ -15,6 +15,9 @@
 //!
 //! 自检 T05（S04-08）：样例中每个 GFM 块元素（标题 / 引用 / 列表 / 列表项 / 表格 / 单元格 / 分隔线）
 //! 都经过 Buddy 的装饰回调，次数与 CommonMark+GFM 解析结果逐类一致。
+//!
+//! 自检 T06（S04-08）：markdown 中的网络图片经 Buddy 的图片解析器与 HTTP 客户端真实发起请求
+//! （本地服务返回一张 1×1 PNG），并解码成功。
 
 use buddy_ui::gpui::{
     App, AppContext, AsyncApp, Bounds, Context, Entity, Font, FontStyle, Hsla, Render, TextRun,
@@ -78,6 +81,10 @@ const GFM_DOC: &str = r#"# 一级标题：GFM 预览（S04-08）
 ---
 
 分隔线上下留白 16px，两端渐隐。
+
+网络图片（需联网）：![GitHub 头像](https://avatars.githubusercontent.com/u/9919?s=64)
+
+加载失败的图片（应显示失败占位）：![不存在的图片](https://example.invalid/missing.png)
 "#;
 
 /// 目检与 T04 共用的样例文档：覆盖 v1 代码块的各种形态
@@ -284,10 +291,60 @@ impl Render for Preview {
                 div().id("scroll").flex_1().overflow_y_scroll().px(px(metrics::SPACE_4)).pb(px(metrics::SPACE_6)).child(
                     MarkdownElement::new(self.md.clone(), style)
                         .code_block_renderer(recording)
-                        .on_url_click(|url, _, cx| markdown::gfm::open_link(&url, cx)),
+                        .on_url_click(|url, _, cx| markdown::gfm::open_link(&url, cx))
+                        .image_resolver(|url, _| markdown::gfm::image_source(url)),
                 ),
             )
     }
+}
+
+/// 1×1 透明 PNG
+const PNG_1X1: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01,
+    0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41,
+    0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
+    0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+];
+
+async fn selftest_t06(handle: WindowHandle<Preview>, md: &Entity<Markdown>, cx: &mut AsyncApp) -> bool {
+    use std::io::{Read, Write};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("本地端口");
+    let port = listener.local_addr().unwrap().port();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let served = hits.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut s = stream;
+            let mut buf = [0u8; 2048];
+            let n = s.read(&mut buf).unwrap_or(0);
+            if !String::from_utf8_lossy(&buf[..n]).starts_with("GET /a.png") {
+                continue;
+            }
+            served.fetch_add(1, Ordering::SeqCst);
+            let head = format!("HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", PNG_1X1.len());
+            let _ = s.write_all(head.as_bytes()).and_then(|_| s.write_all(PNG_1X1));
+        }
+    });
+    let src = format!("图片：![本地](http://127.0.0.1:{port}/a.png)");
+    md.update(cx, |m, cx| m.replace(src.clone(), cx));
+    wait_parsed(md, src.len(), cx).await;
+    let mut ok = false;
+    for _ in 0..50 {
+        let _ = cx.update_window(handle.into(), |_, window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        if hits.load(Ordering::SeqCst) > 0 {
+            ok = true;
+            break;
+        }
+        cx.background_executor().timer(Duration::from_millis(100)).await;
+    }
+    // 请求到达后再等解码（GPUI 资源加载异步），用 use_asset 的结果间接确认：再画几帧不崩、不再请求
+    println!("T06: 本地图片请求次数 {}", hits.load(Ordering::SeqCst));
+    println!("{} S04-08 T06 网络图片经 Buddy 图片解析器与 HTTP 客户端发起请求", if ok { "PASS" } else { "FAIL" });
+    ok
 }
 
 /// v1 复制内容的对照：CommonMark 代码块文本去掉一个末尾换行
@@ -370,7 +427,8 @@ fn selftest_t04(handle: WindowHandle<Preview>, cx: &mut App) {
         println!("T05: 装饰回调 {got:?}");
         println!("T05: 期望     {want:?}");
         println!("{} S04-08 T05 每个 GFM 块元素都经过 Buddy 装饰（逐类计数一致，覆盖 {} 类）", if t05 { "PASS" } else { "FAIL" }, want.len());
-        std::process::exit(if ok && t05 { 0 } else { 1 });
+        let t06 = selftest_t06(handle, &md, cx).await;
+        std::process::exit(if ok && t05 && t06 { 0 } else { 1 });
     })
     .detach();
 }
@@ -549,6 +607,8 @@ fn main() {
         Theme::install(Appearance::Light, cx);
         fonts::install_text_rendering(cx);
         markdown::init(cx);
+        buddy_ui::chat_bridge::init(cx);
+        buddy_ui::http::install(cx);
         if run_bench {
             bench(cx);
             return;

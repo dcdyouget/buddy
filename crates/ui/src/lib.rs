@@ -27,6 +27,7 @@
 //! - `chat` / `settings` —— 页面（`S05-*` / `S06-*`）
 //! - `shell` —— 窗口外壳（`S07-*`）
 //! - [`icons`] —— SVG 图标与资源源（`S04-07` 起）
+//! - [`http`] —— GPUI 图片加载用的 HTTP 客户端（`S04-08`）
 //! - [`chat_bridge`] —— tokio（engine）↔ GPUI 前台的事件桥接（`S02-06`）
 
 #![warn(missing_docs)]
@@ -45,6 +46,7 @@ pub use gpui_platform;
 pub use theme::{self, ActiveTheme};
 
 pub mod chat_bridge;
+pub mod http;
 pub mod icons;
 pub mod markdown;
 pub mod theme_system;

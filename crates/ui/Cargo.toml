@@ -24,6 +24,9 @@ buddy-engine.workspace = true
 log.workspace = true
 # chat_bridge：engine 事件通道（tokio mpsc）
 tokio.workspace = true
+# http：GPUI 图片加载的 HTTP 客户端（与 engine 同一 reqwest，不新增包）
+reqwest.workspace = true
+anyhow.workspace = true
 
 [dev-dependencies]
 # markdown::normalize 测试：用与 vendored parser 相同的解析器验证规范化效果

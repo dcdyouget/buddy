@@ -260,6 +260,15 @@ pub fn link_target(href: &str) -> Option<String> {
     })
 }
 
+/// markdown 图片的来源（`MarkdownElement::image_resolver`）
+///
+/// 只加载 `http(s)` 网络图片（需 [`crate::http::install`]），失败时显示上游的失败占位；
+/// `data:` 图片由上游自行解码。其他地址（相对路径、`file:`）v1 的 webview 中同样无法显示 → 不加载。
+pub fn image_source(url: &str) -> Option<gpui::ImageSource> {
+    let lower = url.to_ascii_lowercase();
+    (lower.starts_with("https://") || lower.starts_with("http://")).then(|| gpui::ImageSource::Resource(gpui::Resource::Uri(url.to_string().into())))
+}
+
 /// 用系统默认应用打开链接（v1 经 Tauri shell `open`）
 pub fn open_link(href: &str, cx: &mut App) {
     if let Some(url) = link_target(href).filter(|u| !u.is_empty()) {
@@ -281,6 +290,14 @@ mod tests {
         // v1 正则 `^[a-z][a-z0-9+.-]*:`：数字开头不算 scheme
         assert_eq!(link_target("1password:x").as_deref(), Some("https://1password:x"));
         assert_eq!(link_target("localhost:3000").as_deref(), Some("localhost:3000"));
+    }
+
+    #[test]
+    fn only_network_images_are_resolved() {
+        assert!(image_source("https://example.com/a.png").is_some());
+        assert!(image_source("HTTP://example.com/a.png").is_some());
+        assert!(image_source("file:///etc/passwd").is_none());
+        assert!(image_source("images/a.png").is_none());
     }
 
     #[test]
