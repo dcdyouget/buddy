@@ -18,10 +18,12 @@
 /// 上游每次追加本就全量重解析（S04-04），`replace` 不增加成本。
 /// 显示与复制加粗文本时须 [`normalize::strip_guards`]（守卫为零宽空格，复制时会被带出）→ S04-09 / S05-08。
 pub mod normalize;
+pub mod code_block;
 pub use zed_markdown;
 
-use crate::theme_system::{Theme, fonts, tokens::metrics};
-use gpui::{App, FontStyle, FontWeight, HighlightStyle, Hsla, px};
+use crate::theme_system::{BuddyTheme, Theme, fonts, tokens::metrics};
+use gpui::{App, FontStyle, FontWeight, HighlightStyle, Hsla, Refineable, TextStyleRefinement, Window, px, relative};
+use zed_markdown::MarkdownStyle;
 use std::sync::Arc;
 use theme::SyntaxTheme;
 use zed_markdown::syntax::SYNTAX_CATEGORIES;
@@ -38,6 +40,38 @@ pub fn init(cx: &mut App) {
         px(metrics::FONT_SIZE_BASE),
     );
 }
+
+/// 助手消息的 markdown 样式（v1 `.ai-message-content`）
+///
+/// S04-07 起：正文基础字体 + 代码块；GFM 元素（标题 / 列表 / 引用 / 表格 / 链接 / 行内代码）由 S04-08 补齐。
+/// 使用时配合 [`code_block::renderer`]：
+/// `MarkdownElement::new(md.clone(), message_style(window, cx)).code_block_renderer(code_block::renderer(md.downgrade()))`
+pub fn message_style(window: &Window, cx: &App) -> MarkdownStyle {
+    let theme = *cx.buddy_theme();
+    let c = theme.colors;
+    let mut base_text_style = window.text_style();
+    base_text_style.refine(&TextStyleRefinement {
+        font_family: Some(fonts::ui_font(cx).family),
+        font_features: Some(fonts::ui_font(cx).features),
+        font_size: Some(px(metrics::FONT_SIZE_MD).into()),
+        font_weight: Some(FontWeight(metrics::FONT_WEIGHT_REGULAR)),
+        color: Some(c.text_primary.into()),
+        // v1 `MessageBubble.tsx:234-235` 写死 1.6（非令牌）
+        line_height: Some(relative(ASSISTANT_LINE_HEIGHT)),
+        ..Default::default()
+    });
+    MarkdownStyle {
+        base_text_style,
+        code_block: code_block::code_area_style(&theme, cx),
+        code_block_overflow_x_scroll: true,
+        syntax: syntax_theme(&theme),
+        paragraph_line_height: relative(ASSISTANT_LINE_HEIGHT),
+        ..Default::default()
+    }
+}
+
+/// 助手消息正文行高（v1 写死值，见模块文档表格）
+pub const ASSISTANT_LINE_HEIGHT: f32 = 1.6;
 
 /// 按当前主题构造代码高亮配色（S04-02）
 ///

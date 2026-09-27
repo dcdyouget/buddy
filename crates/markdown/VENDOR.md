@@ -13,6 +13,7 @@
 | 文件 | 修改 | 原因 |
 |------|------|------|
 | `markdown.rs` | `language` / `settings` / `theme_settings` 的 4 处 `use` 改指本地模块；新增 `mod` 声明、`install_theme_settings`、`pub mod syntax` 重导出（共 43 行差异） | 去掉会拖入 zed settings 框架与需 cmake 的 `language`；向 buddy-ui 暴露高亮类别与语言注册表 |
+| `markdown.rs`（S04-07） | **接通 `CodeBlockRenderer::Custom`**：上游本 rev 该分支为空实现（`render` / `transform` 从不调用，全仓无调用方），缩进代码块也强制走 Default。改为：`render` 产出外层容器、代码作为其子节点并套 `style.code_block`，结束时调用 `transform` | Buddy 代码块需 v1 的头部栏（语言标签 + 「复制」文字按钮），Default 只有悬浮图标按钮 |
 | `theme_settings_shim.rs` | **新增**（Buddy 编写） | 提供与 `theme_settings::ThemeSettings` 同名同 API 的替代；字体 / 字号由 buddy-ui 按 Buddy 令牌传入 |
 | `language_stub.rs` | **新增**（Buddy 编写） | 替代 `language`：S04-02 起经 `buddy-syntax`（Comet，MIT）做 tree-sitter 高亮，只放行 v1 有高亮的语言，类别归并为 9 类（`SYNTAX_CATEGORIES`） |
 | `mermaid.rs` | **整体替换为 stub**（原 1836 行 → 100 行） | 原实现依赖 node / wasm；Buddy（v1）无 mermaid 功能 |

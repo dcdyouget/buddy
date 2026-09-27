@@ -2647,6 +2647,8 @@ impl Element for MarkdownElement {
         let mut current_img_block_range: Option<Range<usize>> = None;
         let mut handled_html_block = false;
         let mut rendered_mermaid_block = false;
+        // Buddy patch: metadata of the code block being rendered by `CodeBlockRenderer::Custom`
+        let mut custom_code_block: Option<CodeBlockMetadata> = None;
         let mut rendered_metadata_block = false;
         for (index, (range, event)) in parsed_markdown.events.iter().enumerate() {
             // Skip alt text for images that rendered
@@ -2761,7 +2763,7 @@ impl Element for MarkdownElement {
                                 markdown_end,
                             );
                         }
-                        MarkdownTag::CodeBlock { kind, .. } => {
+                        MarkdownTag::CodeBlock { kind, metadata } => {
                             if render_mermaid_diagrams
                                 && let Some(mermaid_diagram) =
                                     parsed_markdown.mermaid_diagrams.get(&range.start)
@@ -2815,7 +2817,7 @@ impl Element for MarkdownElement {
                             }
 
                             match (&self.code_block_renderer, is_indented) {
-                                (CodeBlockRenderer::Default { .. }, _) | (_, true) => {
+                                (CodeBlockRenderer::Default { .. }, _) => {
                                     // This is a parent container that we can position the copy button inside.
                                     let parent_container =
                                         div().group("code_block").relative().w_full();
@@ -2871,7 +2873,40 @@ impl Element for MarkdownElement {
                                     builder.push_code_block(language);
                                     builder.push_div(code_block, range, markdown_end);
                                 }
-                                (CodeBlockRenderer::Custom { .. }, _) => {}
+                                // Buddy patch: upstream never invokes `render` at this rev.
+                                // `render` builds the outer container (e.g. a header row); the
+                                // code itself is appended as its child, styled by `style.code_block`.
+                                (CodeBlockRenderer::Custom { render, .. }, _) => {
+                                    let parent_container = render(
+                                        kind,
+                                        &parsed_markdown,
+                                        range.clone(),
+                                        metadata.clone(),
+                                        window,
+                                        cx,
+                                    );
+                                    builder.push_div(parent_container, range, markdown_end);
+                                    custom_code_block = Some(metadata.clone());
+
+                                    let mut code_block = div()
+                                        .id(("code-block", range.start))
+                                        .map(|code_block| {
+                                            if let Some(scroll_handle) = scroll_handle.as_ref() {
+                                                code_block
+                                                    .flex()
+                                                    .overflow_x_scroll()
+                                                    .restrict_scroll_to_axis()
+                                                    .track_scroll(scroll_handle)
+                                            } else {
+                                                code_block.w_full()
+                                            }
+                                        });
+                                    code_block.style().refine(&self.style.code_block);
+
+                                    builder.push_text_style(self.style.code_block.text.to_owned());
+                                    builder.push_code_block(language);
+                                    builder.push_div(code_block, range, markdown_end);
+                                }
                             }
                         }
                         MarkdownTag::HtmlBlock => {
@@ -3181,6 +3216,18 @@ impl Element for MarkdownElement {
                                     );
 
                                 el.child(button_row)
+                            });
+                        }
+
+                        // Buddy patch: apply the custom transform, if any
+                        if let Some(metadata) = custom_code_block.take()
+                            && let CodeBlockRenderer::Custom {
+                                transform: Some(transform),
+                                ..
+                            } = &self.code_block_renderer
+                        {
+                            builder.modify_current_div(|el| {
+                                transform(el, range.clone(), metadata, window, cx)
                             });
                         }
 

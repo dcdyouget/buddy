@@ -25,3 +25,5 @@ env_logger.workspace = true
 # examples/chat_bridge.rs（S02-06 驱动程序）：mock SSE 与配置构造
 tokio.workspace = true
 serde_json.workspace = true
+# examples/markdown_preview.rs（S04-07 T04）：以 CommonMark 解析结果为 v1 复制内容的对照
+pulldown-cmark.workspace = true

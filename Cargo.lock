@@ -755,6 +755,7 @@ dependencies = [
  "buddy-ui",
  "env_logger",
  "log",
+ "pulldown-cmark",
  "serde_json",
  "tokio",
 ]

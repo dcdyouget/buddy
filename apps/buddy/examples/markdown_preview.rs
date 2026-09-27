@@ -1,23 +1,31 @@
 //! Phase 04 markdown 预览与自检。
 //!
 //! ```text
+//! cargo run -p buddy-app --example markdown_preview                  # 目检窗口（S04-07 代码块）
 //! cargo run -p buddy-app --example markdown_preview -- --selftest   # 自检后退出
 //! cargo run --release -p buddy-app --example markdown_preview -- --bench  # S04-04 解析耗时测量
 //! ```
 //!
 //! 自检 T03（S04-02）：代码高亮不改变布局 —— 同一行代码按「带高亮样式」与「不带」各排版一次，
 //! 宽度与行高必须完全相同（v1 的关键字字重 600、注释斜体在等宽字体下不改变字宽）。
+//!
+//! 自检 T04（S04-07）：代码块确实经 Buddy 渲染器绘制（每块调用一次），且复制内容与 v1 逐字节一致 ——
+//! v1 复制的是 react-markdown（CommonMark）给出的代码文本去掉一个末尾换行，这里以 pulldown-cmark 的
+//! 同一语义结果为对照；并反证「直接切源码」在列表内 / 缩进代码块上会复制出错误内容。
 
 use buddy_ui::gpui::{
     App, AppContext, AsyncApp, Bounds, Context, Entity, Font, FontStyle, Hsla, Render, TextRun,
-    Window, WindowBounds, WindowOptions, div, prelude::*, px, size,
+    Window, WindowBounds, WindowHandle, WindowOptions, div, prelude::*, px, size,
 };
-use buddy_ui::markdown::zed_markdown::{Markdown, syntax::LanguageRegistry};
+use buddy_ui::markdown::zed_markdown::{CodeBlockRenderer, Markdown, MarkdownElement, syntax::LanguageRegistry};
+use buddy_ui::markdown::code_block;
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use buddy_ui::gpui_platform::application;
 use buddy_ui::markdown::{self, zed_markdown::syntax::{Rope, language_for_tag}};
-use buddy_ui::theme_system::{Appearance, BuddyTheme, Theme, fonts, tokens::metrics};
+use buddy_ui::theme_system::{Appearance, BuddyTheme, Theme, fonts, set_appearance, tokens::metrics};
 
 const SAMPLES: &[(&str, &str)] = &[
     ("rust", "fn main() {\n    let answer: u32 = 42; // 注释 comment\n    println!(\"{answer}\");\n}"),
@@ -27,11 +35,178 @@ const SAMPLES: &[(&str, &str)] = &[
     ("css", ".a > b:hover { color: #5B5FE9; margin: 0 4px !important; }"),
 ];
 
-struct Empty;
-impl Render for Empty {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+/// 目检与 T04 共用的样例文档：覆盖 v1 代码块的各种形态
+const CODE_DOC: &str = r#"## 代码块预览（S04-07）
+
+Rust（有高亮，右上角「复制」，点击后 2 秒内变绿显示「已复制」）：
+
+```rust
+fn main() {
+    let answer: u32 = 42; // 注释 comment
+    println!("{answer}");
+}
+```
+
+TypeScript，含超长行（**不换行**，横向滚动）：
+
+```ts
+export const veryLongFunctionName = (alpha: number, beta: number, gamma: string): string => `${alpha + beta} ${gamma} ${"0123456789".repeat(8)}`;
+```
+
+无语言的围栏（纯文本块：**无语言标签**、行高更松 1.75）：
+
+```
+三公级 ──── 御史大夫
+              ↓
+顾问/显职 ── 光禄大夫
+```
+
+bash（v1 无高亮，但显示语言标签）：
+
+```bash
+cargo run -p buddy-app --example markdown_preview
+```
+
+列表里的代码块：
+
+1. 第一步
+   ```python
+   def greet(name: str) -> None:
+       print(f"hi {name}")
+   ```
+2. 第二步
+
+缩进式代码块：
+
+    indented line 1
+        still indented
+
+结尾段落。
+"#;
+
+type Recorded = Rc<RefCell<Vec<String>>>;
+
+struct Preview {
+    md: Entity<Markdown>,
+    /// T04：记录渲染器每次被调用时算出的复制内容
+    recorded: Recorded,
+}
+
+impl Render for Preview {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = *cx.buddy_theme();
+        let CodeBlockRenderer::Custom { render, transform } = code_block::renderer(self.md.downgrade()) else {
+            unreachable!("Buddy 代码块渲染器为 Custom")
+        };
+        let recorded = self.recorded.clone();
+        let recording = CodeBlockRenderer::Custom {
+            render: Arc::new(move |kind, parsed, range, metadata, window, cx| {
+                recorded.borrow_mut().push(code_block::code_text(parsed, &range));
+                render(kind, parsed, range, metadata, window, cx)
+            }),
+            transform,
+        };
+        let next = match theme.appearance {
+            Appearance::Light => Appearance::Dark,
+            Appearance::Dark => Appearance::Light,
+        };
         div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(theme.colors.bg_surface)
+            .child(
+                div()
+                    .id("toggle")
+                    .m(px(metrics::SPACE_3))
+                    .px(px(metrics::SPACE_3))
+                    .py(px(metrics::SPACE_1))
+                    .rounded(px(metrics::RADIUS_SM))
+                    .border_1()
+                    .border_color(theme.colors.border_default)
+                    .text_color(theme.colors.text_primary)
+                    .cursor_pointer()
+                    .child(if next == Appearance::Dark { "切换到深色" } else { "切换到浅色" })
+                    .on_click(move |_, _, cx| set_appearance(next, cx)),
+            )
+            .child(
+                div().id("scroll").flex_1().overflow_y_scroll().px(px(metrics::SPACE_4)).pb(px(metrics::SPACE_6)).child(
+                    MarkdownElement::new(self.md.clone(), markdown::message_style(window, cx)).code_block_renderer(recording),
+                ),
+            )
     }
+}
+
+/// v1 复制内容的对照：CommonMark 代码块文本去掉一个末尾换行
+fn expected_copies(doc: &str) -> Vec<String> {
+    use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+    let mut out = Vec::new();
+    let mut cur: Option<String> = None;
+    for ev in Parser::new(doc) {
+        match ev {
+            Event::Start(Tag::CodeBlock(_)) => cur = Some(String::new()),
+            Event::Text(t) => {
+                if let Some(c) = cur.as_mut() {
+                    c.push_str(&t)
+                }
+            }
+            Event::End(TagEnd::CodeBlock) => {
+                let mut c = cur.take().unwrap();
+                if c.ends_with('\n') {
+                    c.pop();
+                }
+                out.push(c);
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// 反证用：直接切源码（去掉首尾围栏行）得到的「复制内容」
+fn naive_copies(doc: &str) -> Vec<String> {
+    use pulldown_cmark::{Event, Parser, Tag};
+    Parser::new(doc)
+        .into_offset_iter()
+        .filter_map(|(ev, r)| matches!(ev, Event::Start(Tag::CodeBlock(_))).then(|| doc[r].to_string()))
+        .map(|block| {
+            let lines: Vec<&str> = block.trim_end_matches('\n').split('\n').collect();
+            let fenced = lines[0].trim_start().starts_with("```");
+            if fenced { lines[1..lines.len() - 1].join("\n") } else { lines.join("\n") }
+        })
+        .collect()
+}
+
+fn selftest_t04(handle: WindowHandle<Preview>, cx: &mut App) {
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let md = handle.read_with(cx, |p, _| p.md.clone()).expect("窗口根视图");
+        wait_parsed(&md, CODE_DOC.len(), cx).await;
+        // 显式画一帧：不依赖窗口是否在前台出帧（后台窗口可能没有 display link 回调）
+        handle.update(cx, |p, _, _| p.recorded.borrow_mut().clear()).expect("窗口根视图");
+        // 须经 AnyWindowHandle：`handle.update` 会占用根视图，绘制时再渲染它会重入
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        })
+        .expect("绘制");
+        let got = handle.read_with(cx, |p, _| p.recorded.borrow().clone()).expect("窗口根视图");
+        let want = expected_copies(CODE_DOC);
+        let naive = naive_copies(CODE_DOC);
+        let mut ok = got.len() == want.len() && !want.is_empty(); // 一帧内每块恰好调用一次
+        for (i, w) in want.iter().enumerate() {
+            let g = got.get(i).map(String::as_str).unwrap_or("<缺失>");
+            if g != w {
+                println!("FAIL T04 块 {i}: 复制内容不一致\n  得到 {g:?}\n  期望 {w:?}");
+                ok = false;
+            }
+        }
+        let naive_wrong = naive.iter().zip(&want).filter(|(n, w)| n != w).count();
+        println!("T04: 代码块 {} 个，渲染器调用 {} 次；直接切源码会出错的块 {naive_wrong} 个（反证，应 ≥ 2：列表内、缩进式）", want.len(), got.len());
+        ok &= naive_wrong >= 2;
+        println!("{} S04-07 T04 代码块经 Buddy 渲染器绘制且复制内容与 v1 逐字节一致", if ok { "PASS" } else { "FAIL" });
+        std::process::exit(if ok { 0 } else { 1 });
+    })
+    .detach();
 }
 
 /// 把一行代码按高亮结果切成 TextRun（与 markdown 渲染时的做法一致：高亮样式叠加在代码基础字体上）
@@ -203,7 +378,7 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let self_test = std::env::args().any(|a| a == "--selftest");
     let run_bench = std::env::args().any(|a| a == "--bench");
-    application().run(move |cx: &mut App| {
+    application().with_assets(buddy_ui::icons::Assets).run(move |cx: &mut App| {
         buddy_ui::init_theme(cx);
         Theme::install(Appearance::Light, cx);
         fonts::install_text_rendering(cx);
@@ -212,17 +387,24 @@ fn main() {
             bench(cx);
             return;
         }
-        let bounds = Bounds::centered(None, size(px(400.0), px(200.0)), cx);
+        let bounds = Bounds::centered(None, size(px(640.0), px(820.0)), cx);
         let handle = cx
             .open_window(
                 WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() },
-                |_, cx| cx.new(|_| Empty),
+                |_, cx| {
+                    let registry = Arc::new(LanguageRegistry::default());
+                    let md = cx.new(|cx| Markdown::new(CODE_DOC.into(), Some(registry), None, cx));
+                    cx.new(|_| Preview { md, recorded: Rc::default() })
+                },
             )
             .expect("open_window 失败");
         if self_test {
             let ok = handle.update(cx, |_, window, cx| selftest(window, cx)).unwrap_or(false);
-            println!("RESULT: {}", if ok { "PASS" } else { "FAIL" });
-            std::process::exit(if ok { 0 } else { 1 });
+            if !ok {
+                println!("RESULT: FAIL");
+                std::process::exit(1);
+            }
+            selftest_t04(handle, cx);
         }
     });
 }
