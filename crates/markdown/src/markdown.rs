@@ -128,6 +128,49 @@ impl BlockQuoteKindColors {
     }
 }
 
+/// Buddy patch: list bullet kinds passed to [`MarkdownDecorations::list_bullet`]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListBulletKind {
+    Unordered,
+    Ordered(u64),
+    Task { checked: bool },
+}
+
+/// Buddy patch: table cell position passed to [`MarkdownDecorations::table_cell`]
+#[derive(Clone, Copy, Debug)]
+pub struct TableCellInfo {
+    pub is_header: bool,
+    pub row_index: usize,
+    pub col_index: usize,
+}
+
+/// Buddy patch: optional hooks applied **after** upstream styling of each element,
+/// so an embedding app can restyle blocks without touching the renderer again.
+/// Every hook defaults to `None` (upstream behaviour).
+#[derive(Clone, Default)]
+pub struct MarkdownDecorations {
+    /// Heading container; level is 1..=6
+    pub heading: Option<Arc<dyn Fn(Div, u8, &App) -> Div>>,
+    /// Block quote container
+    pub block_quote: Option<Arc<dyn Fn(Div, &App) -> Div>>,
+    /// List container; `bool` = top level
+    pub list: Option<Arc<dyn Fn(Div, bool, &App) -> Div>>,
+    /// Replaces the bullet element of a list item (including task checkboxes)
+    pub list_bullet: Option<Arc<dyn Fn(ListBulletKind, &App) -> AnyElement>>,
+    /// Table grid container
+    pub table: Option<Arc<dyn Fn(Div, &App) -> Div>>,
+    /// Table cell
+    pub table_cell: Option<Arc<dyn Fn(Div, TableCellInfo, &App) -> Div>>,
+    /// Replaces the horizontal rule element
+    pub rule: Option<Arc<dyn Fn(&App) -> AnyElement>>,
+    /// Replaces the text style of `**strong**`
+    pub strong: Option<TextStyleRefinement>,
+    /// Replaces the text style of `~~strikethrough~~`
+    pub strikethrough: Option<TextStyleRefinement>,
+    /// Replaces the text style of table header cells
+    pub table_head: Option<TextStyleRefinement>,
+}
+
 #[derive(Clone, Default)]
 pub struct HeadingLevelStyles {
     pub h1: Option<TextStyleRefinement>,
@@ -166,6 +209,8 @@ pub struct MarkdownStyle {
     pub prevent_mouse_interaction: bool,
     pub table_columns_min_size: bool,
     pub soft_break_as_hard_break: bool,
+    /// Buddy patch: per-element restyling hooks
+    pub decorations: MarkdownDecorations,
 }
 
 impl Default for MarkdownStyle {
@@ -195,6 +240,7 @@ impl Default for MarkdownStyle {
             prevent_mouse_interaction: false,
             table_columns_min_size: false,
             soft_break_as_hard_break: false,
+            decorations: Default::default(),
         }
     }
 }
@@ -2049,6 +2095,7 @@ impl MarkdownElement {
         range: &Range<usize>,
         markdown_end: usize,
         text_align_override: Option<TextAlign>,
+        cx: &App,
     ) {
         let align = text_align_override.unwrap_or(self.style.base_text_style.text_align);
         let mut heading = div().mt_4().mb_2();
@@ -2068,6 +2115,9 @@ impl MarkdownElement {
         let mut heading_style = self.style.heading.clone();
         let mut heading_text_style = heading_style.text_style().clone();
         heading.style().refine(&heading_style);
+        if let Some(decorate) = &self.style.decorations.heading {
+            heading = decorate(heading, level as u8, cx);
+        }
 
         if let Some(level_style) =
             heading_level_style(level, self.style.heading_level_styles.as_ref())
@@ -2093,6 +2143,7 @@ impl MarkdownElement {
         kind: Option<pulldown_cmark::BlockQuoteKind>,
         range: &Range<usize>,
         markdown_end: usize,
+        cx: &App,
     ) {
         let border_color = self
             .style
@@ -2131,6 +2182,10 @@ impl MarkdownElement {
             .border_color(border_color);
         let block_div = match header {
             Some(header) => block_div.child(header),
+            None => block_div,
+        };
+        let block_div = match &self.style.decorations.block_quote {
+            Some(decorate) => decorate(block_div, cx),
             None => block_div,
         };
 
@@ -2753,6 +2808,7 @@ impl Element for MarkdownElement {
                                 range,
                                 markdown_end,
                                 text_align_override,
+                                cx,
                             );
                         }
                         MarkdownTag::BlockQuote(kind) => {
@@ -2761,6 +2817,7 @@ impl Element for MarkdownElement {
                                 *kind,
                                 range,
                                 markdown_end,
+                                cx,
                             );
                         }
                         MarkdownTag::CodeBlock { kind, metadata } => {
@@ -2919,16 +2976,29 @@ impl Element for MarkdownElement {
                         MarkdownTag::List(bullet_index) => {
                             builder.push_list(*bullet_index);
                             let is_top_level = builder.list_stack.len() == 1;
-                            builder.push_div(
-                                div()
-                                    .pl_2p5()
-                                    .when(is_top_level, |this| this.mb(self.style.list_spacing)),
-                                range,
-                                markdown_end,
-                            );
+                            let mut list = div()
+                                .pl_2p5()
+                                .when(is_top_level, |this| this.mb(self.style.list_spacing));
+                            if let Some(decorate) = &self.style.decorations.list {
+                                list = decorate(list, is_top_level, cx);
+                            }
+                            builder.push_div(list, range, markdown_end);
                         }
                         MarkdownTag::Item => {
-                            let bullet = if let Some((task_range, checked)) =
+                            let bullet = if let Some(decorate) =
+                                &self.style.decorations.list_bullet
+                            {
+                                let kind = if let Some((_, checked)) =
+                                    task_list_marker_for_item(&parsed_markdown.events, index)
+                                {
+                                    ListBulletKind::Task { checked }
+                                } else if let Some(bullet_index) = builder.next_bullet_index() {
+                                    ListBulletKind::Ordered(bullet_index as u64)
+                                } else {
+                                    ListBulletKind::Unordered
+                                };
+                                decorate(kind, cx)
+                            } else if let Some((task_range, checked)) =
                                 task_list_marker_for_item(&parsed_markdown.events, index)
                             {
                                 let source = &parsed_markdown.source()[range.clone()];
@@ -2964,20 +3034,26 @@ impl Element for MarkdownElement {
                             font_style: Some(FontStyle::Italic),
                             ..Default::default()
                         }),
-                        MarkdownTag::Strong => builder.push_text_style(TextStyleRefinement {
-                            font_weight: Some(FontWeight::BOLD),
-                            color: Some(cx.theme().colors().text),
-                            ..Default::default()
-                        }),
-                        MarkdownTag::Strikethrough => {
-                            builder.push_text_style(TextStyleRefinement {
-                                strikethrough: Some(StrikethroughStyle {
-                                    thickness: px(1.),
-                                    color: None,
-                                }),
-                                ..Default::default()
-                            })
-                        }
+                        MarkdownTag::Strong => builder.push_text_style(
+                            self.style.decorations.strong.clone().unwrap_or_else(|| {
+                                TextStyleRefinement {
+                                    font_weight: Some(FontWeight::BOLD),
+                                    color: Some(cx.theme().colors().text),
+                                    ..Default::default()
+                                }
+                            }),
+                        ),
+                        MarkdownTag::Strikethrough => builder.push_text_style(
+                            self.style.decorations.strikethrough.clone().unwrap_or_else(|| {
+                                TextStyleRefinement {
+                                    strikethrough: Some(StrikethroughStyle {
+                                        thickness: px(1.),
+                                        color: None,
+                                    }),
+                                    ..Default::default()
+                                }
+                            }),
+                        ),
                         MarkdownTag::Link { dest_url, .. } => {
                             if builder.code_block_stack.is_empty() {
                                 builder.link_depth += 1;
@@ -3040,22 +3116,26 @@ impl Element for MarkdownElement {
 
                             let column_count = alignments.len();
                             builder.push_div(div().flex(), range, markdown_end);
+                            let mut table = div()
+                                .min_w_0()
+                                .grid()
+                                .when(self.style.table_columns_min_size, |this| {
+                                    this.w_full().grid_cols_min_content(column_count as u16)
+                                })
+                                .when(!self.style.table_columns_min_size, |this| {
+                                    this.grid_cols_max_content(column_count as u16)
+                                })
+                                .mb_2()
+                                .border(px(1.5))
+                                .border_color(cx.theme().colors().border)
+                                .rounded_sm();
+                            if let Some(decorate) = &self.style.decorations.table {
+                                table = decorate(table, cx);
+                            }
                             builder.push_div(
-                                div()
+                                table
                                     .id(("table", range.start))
                                     .debug_selector(|| "markdown_table".into())
-                                    .min_w_0()
-                                    .grid()
-                                    .when(self.style.table_columns_min_size, |this| {
-                                        this.w_full().grid_cols_min_content(column_count as u16)
-                                    })
-                                    .when(!self.style.table_columns_min_size, |this| {
-                                        this.grid_cols_max_content(column_count as u16)
-                                    })
-                                    .mb_2()
-                                    .border(px(1.5))
-                                    .border_color(cx.theme().colors().border)
-                                    .rounded_sm()
                                     .restrict_scroll_to_axis()
                                     .custom_scrollbars(
                                         Scrollbars::new(ScrollAxes::Horizontal)
@@ -3070,10 +3150,14 @@ impl Element for MarkdownElement {
                         }
                         MarkdownTag::TableHead => {
                             builder.table.start_head();
-                            builder.push_text_style(TextStyleRefinement {
-                                font_weight: Some(FontWeight::SEMIBOLD),
-                                ..Default::default()
-                            });
+                            builder.push_text_style(
+                                self.style.decorations.table_head.clone().unwrap_or_else(|| {
+                                    TextStyleRefinement {
+                                        font_weight: Some(FontWeight::SEMIBOLD),
+                                        ..Default::default()
+                                    }
+                                }),
+                            );
                         }
                         MarkdownTag::TableRow => {
                             builder.table.start_row();
@@ -3108,6 +3192,17 @@ impl Element for MarkdownElement {
                                 Some(Alignment::Right) => cell_div.items_end(),
                                 _ => cell_div,
                             };
+                            if let Some(decorate) = &self.style.decorations.table_cell {
+                                cell_div = decorate(
+                                    cell_div,
+                                    TableCellInfo {
+                                        is_header,
+                                        row_index,
+                                        col_index,
+                                    },
+                                    cx,
+                                );
+                            }
 
                             builder.push_text_style(TextStyleRefinement {
                                 text_align: Some(text_align),
@@ -3332,6 +3427,11 @@ impl Element for MarkdownElement {
                         continue;
                     }
                     builder.push_text(&parsed_markdown.source[range.clone()], range.clone());
+                }
+                MarkdownEvent::Rule if self.style.decorations.rule.is_some() => {
+                    let rule = self.style.decorations.rule.as_ref().unwrap()(cx);
+                    builder.push_div(div().w_full().child(rule), range, markdown_end);
+                    builder.pop_div()
                 }
                 MarkdownEvent::Rule => {
                     builder.push_div(

@@ -103,6 +103,7 @@ impl MarkdownElement {
                     &heading.source_range,
                     markdown_end,
                     heading.text_align,
+                    cx,
                 );
                 self.render_html_paragraph(
                     &heading.contents,
@@ -122,6 +123,7 @@ impl MarkdownElement {
                     None,
                     &block_quote.source_range,
                     markdown_end,
+                    cx,
                 );
                 self.render_html_elements(
                     &block_quote.children,

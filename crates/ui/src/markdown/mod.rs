@@ -19,11 +19,12 @@
 /// 显示与复制加粗文本时须 [`normalize::strip_guards`]（守卫为零宽空格，复制时会被带出）→ S04-09 / S05-08。
 pub mod normalize;
 pub mod code_block;
+pub mod gfm;
 pub use zed_markdown;
 
 use crate::theme_system::{BuddyTheme, Theme, fonts, tokens::metrics};
 use gpui::{App, FontStyle, FontWeight, HighlightStyle, Hsla, Refineable, TextStyleRefinement, Window, px, relative};
-use zed_markdown::MarkdownStyle;
+use zed_markdown::{HeadingLevelStyles, MarkdownStyle};
 use std::sync::Arc;
 use theme::SyntaxTheme;
 use zed_markdown::syntax::SYNTAX_CATEGORIES;
@@ -43,8 +44,7 @@ pub fn init(cx: &mut App) {
 
 /// 助手消息的 markdown 样式（v1 `.ai-message-content`）
 ///
-/// S04-07 起：正文基础字体 + 代码块；GFM 元素（标题 / 列表 / 引用 / 表格 / 链接 / 行内代码）由 S04-08 补齐。
-/// 使用时配合 [`code_block::renderer`]：
+/// 正文基础字体、代码块（S04-07）、GFM 元素（S04-08，见 [`gfm`]）。使用时配合 [`code_block::renderer`]：
 /// `MarkdownElement::new(md.clone(), message_style(window, cx)).code_block_renderer(code_block::renderer(md.downgrade()))`
 pub fn message_style(window: &Window, cx: &App) -> MarkdownStyle {
     let theme = *cx.buddy_theme();
@@ -60,12 +60,44 @@ pub fn message_style(window: &Window, cx: &App) -> MarkdownStyle {
         line_height: Some(relative(ASSISTANT_LINE_HEIGHT)),
         ..Default::default()
     });
+    let heading = |level: u8| {
+        Some(TextStyleRefinement {
+            font_size: Some(px(metrics::FONT_SIZE_MD * gfm::heading_scale(level)).into()),
+            font_weight: Some(FontWeight(gfm::heading_weight(level))),
+            line_height: Some(relative(metrics::LINE_HEIGHT_TIGHT)),
+            ..Default::default()
+        })
+    };
     MarkdownStyle {
         base_text_style,
         code_block: code_block::code_area_style(&theme, cx),
         code_block_overflow_x_scroll: true,
+        // v1 `.markdown-inline-code`：淡色底 + 主色字、等宽。上游以圆角色块绘制底色
+        inline_code: TextStyleRefinement {
+            font_family: Some(fonts::mono_font(cx).family),
+            font_features: Some(fonts::mono_font(cx).features),
+            color: Some(c.markdown_accent_strong.into()),
+            background_color: Some(c.markdown_accent_soft.into()),
+            ..Default::default()
+        },
+        block_quote: TextStyleRefinement { color: Some(c.text_muted.into()), ..Default::default() },
+        link: TextStyleRefinement { color: Some(c.markdown_accent_strong.into()), ..Default::default() },
+        rule_color: c.markdown_accent_line.into(),
+        block_quote_border_color: c.markdown_accent.into(),
         syntax: syntax_theme(&theme),
+        heading_level_styles: Some(HeadingLevelStyles {
+            h1: heading(1),
+            h2: heading(2),
+            h3: heading(3),
+            h4: heading(4),
+            h5: heading(5),
+            h6: heading(6),
+        }),
+        // v1 `p { margin: 0 0 var(--space-2) 0 }`
+        paragraph_spacing: px(metrics::SPACE_2),
         paragraph_line_height: relative(ASSISTANT_LINE_HEIGHT),
+        table_columns_min_size: true,
+        decorations: gfm::decorations(&theme),
         ..Default::default()
     }
 }

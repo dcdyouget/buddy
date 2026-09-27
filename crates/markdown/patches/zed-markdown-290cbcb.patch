@@ -1,6 +1,25 @@
+diff --color --color=never -ruN md-orig/html/html_rendering.rs md-ours/html/html_rendering.rs
+--- md-orig/html/html_rendering.rs	2026-09-27 23:10:32
++++ md-ours/html/html_rendering.rs	2026-09-27 23:10:32
+@@ -103,6 +103,7 @@
+                     &heading.source_range,
+                     markdown_end,
+                     heading.text_align,
++                    cx,
+                 );
+                 self.render_html_paragraph(
+                     &heading.contents,
+@@ -122,6 +123,7 @@
+                     None,
+                     &block_quote.source_range,
+                     markdown_end,
++                    cx,
+                 );
+                 self.render_html_elements(
+                     &block_quote.children,
 diff --color --color=never -ruN md-orig/language_stub.rs md-ours/language_stub.rs
 --- md-orig/language_stub.rs	1970-01-01 08:00:00
-+++ md-ours/language_stub.rs	2026-09-27 18:07:18
++++ md-ours/language_stub.rs	2026-09-27 23:10:32
 @@ -0,0 +1,390 @@
 +//! S00-06 产物：`language` 模块 **stub**（去掉语法高亮的极简版）
 +//!
@@ -393,8 +412,8 @@ diff --color --color=never -ruN md-orig/language_stub.rs md-ours/language_stub.r
 +    }
 +}
 diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
---- md-orig/markdown.rs	2026-09-27 18:07:18
-+++ md-ours/markdown.rs	2026-09-27 18:07:18
+--- md-orig/markdown.rs	2026-09-27 23:10:32
++++ md-ours/markdown.rs	2026-09-27 23:10:32
 @@ -1,5 +1,34 @@
  pub mod html;
  mod mermaid;
@@ -465,7 +484,112 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
  use parser::CodeBlockMetadata;
  use parser::{
      MarkdownEvent, MarkdownTag, MarkdownTagEnd, ParsedMetadataBlock, parse_links_only,
-@@ -2612,6 +2647,8 @@
+@@ -93,7 +128,50 @@
+     }
+ }
+ 
++/// Buddy patch: list bullet kinds passed to [`MarkdownDecorations::list_bullet`]
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum ListBulletKind {
++    Unordered,
++    Ordered(u64),
++    Task { checked: bool },
++}
++
++/// Buddy patch: table cell position passed to [`MarkdownDecorations::table_cell`]
++#[derive(Clone, Copy, Debug)]
++pub struct TableCellInfo {
++    pub is_header: bool,
++    pub row_index: usize,
++    pub col_index: usize,
++}
++
++/// Buddy patch: optional hooks applied **after** upstream styling of each element,
++/// so an embedding app can restyle blocks without touching the renderer again.
++/// Every hook defaults to `None` (upstream behaviour).
+ #[derive(Clone, Default)]
++pub struct MarkdownDecorations {
++    /// Heading container; level is 1..=6
++    pub heading: Option<Arc<dyn Fn(Div, u8, &App) -> Div>>,
++    /// Block quote container
++    pub block_quote: Option<Arc<dyn Fn(Div, &App) -> Div>>,
++    /// List container; `bool` = top level
++    pub list: Option<Arc<dyn Fn(Div, bool, &App) -> Div>>,
++    /// Replaces the bullet element of a list item (including task checkboxes)
++    pub list_bullet: Option<Arc<dyn Fn(ListBulletKind, &App) -> AnyElement>>,
++    /// Table grid container
++    pub table: Option<Arc<dyn Fn(Div, &App) -> Div>>,
++    /// Table cell
++    pub table_cell: Option<Arc<dyn Fn(Div, TableCellInfo, &App) -> Div>>,
++    /// Replaces the horizontal rule element
++    pub rule: Option<Arc<dyn Fn(&App) -> AnyElement>>,
++    /// Replaces the text style of `**strong**`
++    pub strong: Option<TextStyleRefinement>,
++    /// Replaces the text style of `~~strikethrough~~`
++    pub strikethrough: Option<TextStyleRefinement>,
++    /// Replaces the text style of table header cells
++    pub table_head: Option<TextStyleRefinement>,
++}
++
++#[derive(Clone, Default)]
+ pub struct HeadingLevelStyles {
+     pub h1: Option<TextStyleRefinement>,
+     pub h2: Option<TextStyleRefinement>,
+@@ -131,6 +209,8 @@
+     pub prevent_mouse_interaction: bool,
+     pub table_columns_min_size: bool,
+     pub soft_break_as_hard_break: bool,
++    /// Buddy patch: per-element restyling hooks
++    pub decorations: MarkdownDecorations,
+ }
+ 
+ impl Default for MarkdownStyle {
+@@ -160,6 +240,7 @@
+             prevent_mouse_interaction: false,
+             table_columns_min_size: false,
+             soft_break_as_hard_break: false,
++            decorations: Default::default(),
+         }
+     }
+ }
+@@ -2014,6 +2095,7 @@
+         range: &Range<usize>,
+         markdown_end: usize,
+         text_align_override: Option<TextAlign>,
++        cx: &App,
+     ) {
+         let align = text_align_override.unwrap_or(self.style.base_text_style.text_align);
+         let mut heading = div().mt_4().mb_2();
+@@ -2033,6 +2115,9 @@
+         let mut heading_style = self.style.heading.clone();
+         let mut heading_text_style = heading_style.text_style().clone();
+         heading.style().refine(&heading_style);
++        if let Some(decorate) = &self.style.decorations.heading {
++            heading = decorate(heading, level as u8, cx);
++        }
+ 
+         if let Some(level_style) =
+             heading_level_style(level, self.style.heading_level_styles.as_ref())
+@@ -2058,6 +2143,7 @@
+         kind: Option<pulldown_cmark::BlockQuoteKind>,
+         range: &Range<usize>,
+         markdown_end: usize,
++        cx: &App,
+     ) {
+         let border_color = self
+             .style
+@@ -2098,6 +2184,10 @@
+             Some(header) => block_div.child(header),
+             None => block_div,
+         };
++        let block_div = match &self.style.decorations.block_quote {
++            Some(decorate) => decorate(block_div, cx),
++            None => block_div,
++        };
+ 
+         builder.push_text_style(self.style.block_quote.clone());
+         builder.push_div(block_div, range, markdown_end);
+@@ -2612,6 +2702,8 @@
          let mut current_img_block_range: Option<Range<usize>> = None;
          let mut handled_html_block = false;
          let mut rendered_mermaid_block = false;
@@ -474,8 +598,19 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
          let mut rendered_metadata_block = false;
          for (index, (range, event)) in parsed_markdown.events.iter().enumerate() {
              // Skip alt text for images that rendered
-@@ -2726,7 +2763,7 @@
+@@ -2716,6 +2808,7 @@
+                                 range,
                                  markdown_end,
+                                 text_align_override,
++                                cx,
+                             );
+                         }
+                         MarkdownTag::BlockQuote(kind) => {
+@@ -2724,9 +2817,10 @@
+                                 *kind,
+                                 range,
+                                 markdown_end,
++                                cx,
                              );
                          }
 -                        MarkdownTag::CodeBlock { kind, .. } => {
@@ -483,7 +618,7 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
                              if render_mermaid_diagrams
                                  && let Some(mermaid_diagram) =
                                      parsed_markdown.mermaid_diagrams.get(&range.start)
-@@ -2780,7 +2817,7 @@
+@@ -2780,7 +2874,7 @@
                              }
  
                              match (&self.code_block_renderer, is_indented) {
@@ -492,7 +627,7 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
                                      // This is a parent container that we can position the copy button inside.
                                      let parent_container =
                                          div().group("code_block").relative().w_full();
-@@ -2836,7 +2873,40 @@
+@@ -2836,7 +2930,40 @@
                                      builder.push_code_block(language);
                                      builder.push_div(code_block, range, markdown_end);
                                  }
@@ -534,13 +669,166 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
                              }
                          }
                          MarkdownTag::HtmlBlock => {
-@@ -3146,6 +3216,18 @@
-                                     );
+@@ -2849,16 +2976,29 @@
+                         MarkdownTag::List(bullet_index) => {
+                             builder.push_list(*bullet_index);
+                             let is_top_level = builder.list_stack.len() == 1;
+-                            builder.push_div(
+-                                div()
+-                                    .pl_2p5()
+-                                    .when(is_top_level, |this| this.mb(self.style.list_spacing)),
+-                                range,
+-                                markdown_end,
+-                            );
++                            let mut list = div()
++                                .pl_2p5()
++                                .when(is_top_level, |this| this.mb(self.style.list_spacing));
++                            if let Some(decorate) = &self.style.decorations.list {
++                                list = decorate(list, is_top_level, cx);
++                            }
++                            builder.push_div(list, range, markdown_end);
+                         }
+                         MarkdownTag::Item => {
+-                            let bullet = if let Some((task_range, checked)) =
++                            let bullet = if let Some(decorate) =
++                                &self.style.decorations.list_bullet
++                            {
++                                let kind = if let Some((_, checked)) =
++                                    task_list_marker_for_item(&parsed_markdown.events, index)
++                                {
++                                    ListBulletKind::Task { checked }
++                                } else if let Some(bullet_index) = builder.next_bullet_index() {
++                                    ListBulletKind::Ordered(bullet_index as u64)
++                                } else {
++                                    ListBulletKind::Unordered
++                                };
++                                decorate(kind, cx)
++                            } else if let Some((task_range, checked)) =
+                                 task_list_marker_for_item(&parsed_markdown.events, index)
+                             {
+                                 let source = &parsed_markdown.source()[range.clone()];
+@@ -2894,20 +3034,26 @@
+                             font_style: Some(FontStyle::Italic),
+                             ..Default::default()
+                         }),
+-                        MarkdownTag::Strong => builder.push_text_style(TextStyleRefinement {
+-                            font_weight: Some(FontWeight::BOLD),
+-                            color: Some(cx.theme().colors().text),
+-                            ..Default::default()
+-                        }),
+-                        MarkdownTag::Strikethrough => {
+-                            builder.push_text_style(TextStyleRefinement {
+-                                strikethrough: Some(StrikethroughStyle {
+-                                    thickness: px(1.),
+-                                    color: None,
+-                                }),
+-                                ..Default::default()
+-                            })
+-                        }
++                        MarkdownTag::Strong => builder.push_text_style(
++                            self.style.decorations.strong.clone().unwrap_or_else(|| {
++                                TextStyleRefinement {
++                                    font_weight: Some(FontWeight::BOLD),
++                                    color: Some(cx.theme().colors().text),
++                                    ..Default::default()
++                                }
++                            }),
++                        ),
++                        MarkdownTag::Strikethrough => builder.push_text_style(
++                            self.style.decorations.strikethrough.clone().unwrap_or_else(|| {
++                                TextStyleRefinement {
++                                    strikethrough: Some(StrikethroughStyle {
++                                        thickness: px(1.),
++                                        color: None,
++                                    }),
++                                    ..Default::default()
++                                }
++                            }),
++                        ),
+                         MarkdownTag::Link { dest_url, .. } => {
+                             if builder.code_block_stack.is_empty() {
+                                 builder.link_depth += 1;
+@@ -2970,22 +3116,26 @@
  
-                                 el.child(button_row)
-+                            });
-+                        }
-+
+                             let column_count = alignments.len();
+                             builder.push_div(div().flex(), range, markdown_end);
++                            let mut table = div()
++                                .min_w_0()
++                                .grid()
++                                .when(self.style.table_columns_min_size, |this| {
++                                    this.w_full().grid_cols_min_content(column_count as u16)
++                                })
++                                .when(!self.style.table_columns_min_size, |this| {
++                                    this.grid_cols_max_content(column_count as u16)
++                                })
++                                .mb_2()
++                                .border(px(1.5))
++                                .border_color(cx.theme().colors().border)
++                                .rounded_sm();
++                            if let Some(decorate) = &self.style.decorations.table {
++                                table = decorate(table, cx);
++                            }
+                             builder.push_div(
+-                                div()
++                                table
+                                     .id(("table", range.start))
+                                     .debug_selector(|| "markdown_table".into())
+-                                    .min_w_0()
+-                                    .grid()
+-                                    .when(self.style.table_columns_min_size, |this| {
+-                                        this.w_full().grid_cols_min_content(column_count as u16)
+-                                    })
+-                                    .when(!self.style.table_columns_min_size, |this| {
+-                                        this.grid_cols_max_content(column_count as u16)
+-                                    })
+-                                    .mb_2()
+-                                    .border(px(1.5))
+-                                    .border_color(cx.theme().colors().border)
+-                                    .rounded_sm()
+                                     .restrict_scroll_to_axis()
+                                     .custom_scrollbars(
+                                         Scrollbars::new(ScrollAxes::Horizontal)
+@@ -3000,10 +3150,14 @@
+                         }
+                         MarkdownTag::TableHead => {
+                             builder.table.start_head();
+-                            builder.push_text_style(TextStyleRefinement {
+-                                font_weight: Some(FontWeight::SEMIBOLD),
+-                                ..Default::default()
+-                            });
++                            builder.push_text_style(
++                                self.style.decorations.table_head.clone().unwrap_or_else(|| {
++                                    TextStyleRefinement {
++                                        font_weight: Some(FontWeight::SEMIBOLD),
++                                        ..Default::default()
++                                    }
++                                }),
++                            );
+                         }
+                         MarkdownTag::TableRow => {
+                             builder.table.start_row();
+@@ -3038,6 +3192,17 @@
+                                 Some(Alignment::Right) => cell_div.items_end(),
+                                 _ => cell_div,
+                             };
++                            if let Some(decorate) = &self.style.decorations.table_cell {
++                                cell_div = decorate(
++                                    cell_div,
++                                    TableCellInfo {
++                                        is_header,
++                                        row_index,
++                                        col_index,
++                                    },
++                                    cx,
++                                );
++                            }
+ 
+                             builder.push_text_style(TextStyleRefinement {
+                                 text_align: Some(text_align),
+@@ -3149,6 +3314,18 @@
+                             });
+                         }
+ 
 +                        // Buddy patch: apply the custom transform, if any
 +                        if let Some(metadata) = custom_code_block.take()
 +                            && let CodeBlockRenderer::Custom {
@@ -550,12 +838,27 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
 +                        {
 +                            builder.modify_current_div(|el| {
 +                                transform(el, range.clone(), metadata, window, cx)
-                             });
-                         }
- 
++                            });
++                        }
++
+                         // Pop the parent container.
+                         builder.pop_div();
+                     }
+@@ -3250,6 +3427,11 @@
+                         continue;
+                     }
+                     builder.push_text(&parsed_markdown.source[range.clone()], range.clone());
++                }
++                MarkdownEvent::Rule if self.style.decorations.rule.is_some() => {
++                    let rule = self.style.decorations.rule.as_ref().unwrap()(cx);
++                    builder.push_div(div().w_full().child(rule), range, markdown_end);
++                    builder.pop_div()
+                 }
+                 MarkdownEvent::Rule => {
+                     builder.push_div(
 diff --color --color=never -ruN md-orig/mermaid.rs md-ours/mermaid.rs
---- md-orig/mermaid.rs	2026-09-27 18:07:18
-+++ md-ours/mermaid.rs	2026-09-27 18:07:18
+--- md-orig/mermaid.rs	2026-09-27 23:10:32
++++ md-ours/mermaid.rs	2026-09-27 23:10:32
 @@ -1,1836 +1,100 @@
 -use collections::HashMap;
 -use gpui::{
@@ -2457,7 +2760,7 @@ diff --color --color=never -ruN md-orig/mermaid.rs md-ours/mermaid.rs
  }
 diff --color --color=never -ruN md-orig/theme_settings_shim.rs md-ours/theme_settings_shim.rs
 --- md-orig/theme_settings_shim.rs	1970-01-01 08:00:00
-+++ md-ours/theme_settings_shim.rs	2026-09-27 18:07:18
++++ md-ours/theme_settings_shim.rs	2026-09-27 23:10:32
 @@ -0,0 +1,148 @@
 +//! S00-06 产物：`ThemeSettings` **shim**
 +//!

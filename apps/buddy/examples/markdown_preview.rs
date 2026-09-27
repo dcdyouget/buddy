@@ -1,7 +1,7 @@
 //! Phase 04 markdown 预览与自检。
 //!
 //! ```text
-//! cargo run -p buddy-app --example markdown_preview                  # 目检窗口（S04-07 代码块）
+//! cargo run -p buddy-app --example markdown_preview                  # 目检窗口（S04-07 代码块 / S04-08 GFM）
 //! cargo run -p buddy-app --example markdown_preview -- --selftest   # 自检后退出
 //! cargo run --release -p buddy-app --example markdown_preview -- --bench  # S04-04 解析耗时测量
 //! ```
@@ -12,12 +12,18 @@
 //! 自检 T04（S04-07）：代码块确实经 Buddy 渲染器绘制（每块调用一次），且复制内容与 v1 逐字节一致 ——
 //! v1 复制的是 react-markdown（CommonMark）给出的代码文本去掉一个末尾换行，这里以 pulldown-cmark 的
 //! 同一语义结果为对照；并反证「直接切源码」在列表内 / 缩进代码块上会复制出错误内容。
+//!
+//! 自检 T05（S04-08）：样例中每个 GFM 块元素（标题 / 引用 / 列表 / 列表项 / 表格 / 单元格 / 分隔线）
+//! 都经过 Buddy 的装饰回调，次数与 CommonMark+GFM 解析结果逐类一致。
 
 use buddy_ui::gpui::{
     App, AppContext, AsyncApp, Bounds, Context, Entity, Font, FontStyle, Hsla, Render, TextRun,
     Window, WindowBounds, WindowHandle, WindowOptions, div, prelude::*, px, size,
 };
-use buddy_ui::markdown::zed_markdown::{CodeBlockRenderer, Markdown, MarkdownElement, syntax::LanguageRegistry};
+use buddy_ui::markdown::zed_markdown::{
+    CodeBlockRenderer, ListBulletKind, Markdown, MarkdownDecorations, MarkdownElement, syntax::LanguageRegistry,
+};
+use std::collections::BTreeMap;
 use buddy_ui::markdown::code_block;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -34,6 +40,45 @@ const SAMPLES: &[(&str, &str)] = &[
     ("json", "{\"key\": [1, 2.5, true, null, \"值\"]}"),
     ("css", ".a > b:hover { color: #5B5FE9; margin: 0 4px !important; }"),
 ];
+
+/// 目检与 T05 共用的 GFM 样例
+const GFM_DOC: &str = r#"# 一级标题：GFM 预览（S04-08）
+
+正文段落，含 **加粗**、*斜体*、~~删除线~~、`行内代码` 与 [链接文字](https://v2.tauri.app/)，
+以及裸网址 https://example.com 和无 scheme 的 [相对链接](example.com/path)。
+
+## 二级标题
+
+### 三级标题
+
+#### 四级标题（无竖条）
+
+- 无序列表第一项
+- 第二项，较长的文字用于观察换行时第二行是否与第一行文字左对齐，而不是与圆点对齐
+  - 嵌套项
+  - 嵌套项二
+- 第三项
+
+1. 有序列表
+2. 第二项
+10. 第十项（两位数序号）
+
+- [x] 已完成的任务
+- [ ] 未完成的任务
+
+> 引用块：左侧主色竖边，其余细边，底色为淡色渐变，文字弱化。
+>
+> 第二段引用。
+
+| 名称 | 说明 | 数值 |
+|------|:----:|----:|
+| Buddy | 居中列 | 42 |
+| GPUI | 较长的单元格内容，观察换行 | 3.14 |
+
+---
+
+分隔线上下留白 16px，两端渐隐。
+"#;
 
 /// 目检与 T04 共用的样例文档：覆盖 v1 代码块的各种形态
 const CODE_DOC: &str = r#"## 代码块预览（S04-07）
@@ -85,11 +130,115 @@ cargo run -p buddy-app --example markdown_preview
 "#;
 
 type Recorded = Rc<RefCell<Vec<String>>>;
+type Counts = Rc<RefCell<BTreeMap<&'static str, usize>>>;
 
 struct Preview {
     md: Entity<Markdown>,
     /// T04：记录渲染器每次被调用时算出的复制内容
     recorded: Recorded,
+    /// T05：各装饰回调的调用次数
+    counts: Counts,
+}
+
+fn doc() -> String {
+    format!("{GFM_DOC}\n{CODE_DOC}")
+}
+
+/// 给每个装饰回调包一层计数（只观察，不改变结果）
+fn counting(mut d: MarkdownDecorations, counts: &Counts) -> MarkdownDecorations {
+    fn bump(counts: &Counts, key: &'static str) {
+        *counts.borrow_mut().entry(key).or_default() += 1;
+    }
+    if let Some(f) = d.heading.take() {
+        let n = counts.clone();
+        d.heading = Some(Arc::new(move |div, level, cx| {
+            bump(&n, if level <= 3 { "heading(1-3)" } else { "heading(4-6)" });
+            f(div, level, cx)
+        }));
+    }
+    if let Some(f) = d.block_quote.take() {
+        let n = counts.clone();
+        d.block_quote = Some(Arc::new(move |div, cx| {
+            bump(&n, "block_quote");
+            f(div, cx)
+        }));
+    }
+    if let Some(f) = d.list.take() {
+        let n = counts.clone();
+        d.list = Some(Arc::new(move |div, top, cx| {
+            bump(&n, if top { "list(top)" } else { "list(nested)" });
+            f(div, top, cx)
+        }));
+    }
+    if let Some(f) = d.list_bullet.take() {
+        let n = counts.clone();
+        d.list_bullet = Some(Arc::new(move |kind, cx| {
+            bump(&n, match kind {
+                ListBulletKind::Unordered => "bullet(unordered)",
+                ListBulletKind::Ordered(_) => "bullet(ordered)",
+                ListBulletKind::Task { .. } => "bullet(task)",
+            });
+            f(kind, cx)
+        }));
+    }
+    if let Some(f) = d.table.take() {
+        let n = counts.clone();
+        d.table = Some(Arc::new(move |div, cx| {
+            bump(&n, "table");
+            f(div, cx)
+        }));
+    }
+    if let Some(f) = d.table_cell.take() {
+        let n = counts.clone();
+        d.table_cell = Some(Arc::new(move |div, info, cx| {
+            bump(&n, if info.is_header { "cell(head)" } else { "cell(body)" });
+            f(div, info, cx)
+        }));
+    }
+    if let Some(f) = d.rule.take() {
+        let n = counts.clone();
+        d.rule = Some(Arc::new(move |cx| {
+            bump(&n, "rule");
+            f(cx)
+        }));
+    }
+    d
+}
+
+/// T05 对照：CommonMark + GFM 解析出的各类块元素数量
+fn expected_counts(doc: &str) -> BTreeMap<&'static str, usize> {
+    use pulldown_cmark::{Event, Options, Parser, Tag};
+    let opts = Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH;
+    let events: Vec<Event> = Parser::new_ext(doc, opts).collect();
+    let mut out = BTreeMap::new();
+    let mut bump = |k: &'static str| *out.entry(k).or_insert(0usize) += 1;
+    let (mut list_depth, mut ordered_stack, mut in_head) = (0usize, Vec::new(), false);
+    for (i, ev) in events.iter().enumerate() {
+        match ev {
+            Event::Start(Tag::Heading { level, .. }) => bump(if (*level as usize) <= 3 { "heading(1-3)" } else { "heading(4-6)" }),
+            Event::Start(Tag::BlockQuote(_)) => bump("block_quote"),
+            Event::Start(Tag::List(first)) => {
+                bump(if list_depth == 0 { "list(top)" } else { "list(nested)" });
+                list_depth += 1;
+                ordered_stack.push(first.is_some());
+            }
+            Event::End(pulldown_cmark::TagEnd::List(_)) => {
+                list_depth -= 1;
+                ordered_stack.pop();
+            }
+            Event::Start(Tag::Item) => {
+                let task = events[i + 1..].iter().take(2).any(|e| matches!(e, Event::TaskListMarker(_)));
+                bump(if task { "bullet(task)" } else if *ordered_stack.last().unwrap() { "bullet(ordered)" } else { "bullet(unordered)" });
+            }
+            Event::Start(Tag::Table(_)) => bump("table"),
+            Event::Start(Tag::TableHead) => in_head = true,
+            Event::End(pulldown_cmark::TagEnd::TableHead) => in_head = false,
+            Event::Start(Tag::TableCell) => bump(if in_head { "cell(head)" } else { "cell(body)" }),
+            Event::Rule => bump("rule"),
+            _ => {}
+        }
+    }
+    out
 }
 
 impl Render for Preview {
@@ -110,6 +259,8 @@ impl Render for Preview {
             Appearance::Light => Appearance::Dark,
             Appearance::Dark => Appearance::Light,
         };
+        let mut style = markdown::message_style(window, cx);
+        style.decorations = counting(style.decorations, &self.counts);
         div()
             .size_full()
             .flex()
@@ -131,7 +282,9 @@ impl Render for Preview {
             )
             .child(
                 div().id("scroll").flex_1().overflow_y_scroll().px(px(metrics::SPACE_4)).pb(px(metrics::SPACE_6)).child(
-                    MarkdownElement::new(self.md.clone(), markdown::message_style(window, cx)).code_block_renderer(recording),
+                    MarkdownElement::new(self.md.clone(), style)
+                        .code_block_renderer(recording)
+                        .on_url_click(|url, _, cx| markdown::gfm::open_link(&url, cx)),
                 ),
             )
     }
@@ -180,9 +333,15 @@ fn naive_copies(doc: &str) -> Vec<String> {
 fn selftest_t04(handle: WindowHandle<Preview>, cx: &mut App) {
     cx.spawn(async move |cx: &mut AsyncApp| {
         let md = handle.read_with(cx, |p, _| p.md.clone()).expect("窗口根视图");
-        wait_parsed(&md, CODE_DOC.len(), cx).await;
+        let doc = doc();
+        wait_parsed(&md, doc.len(), cx).await;
         // 显式画一帧：不依赖窗口是否在前台出帧（后台窗口可能没有 display link 回调）
-        handle.update(cx, |p, _, _| p.recorded.borrow_mut().clear()).expect("窗口根视图");
+        handle
+            .update(cx, |p, _, _| {
+                p.recorded.borrow_mut().clear();
+                p.counts.borrow_mut().clear();
+            })
+            .expect("窗口根视图");
         // 须经 AnyWindowHandle：`handle.update` 会占用根视图，绘制时再渲染它会重入
         cx.update_window(handle.into(), |_, window, cx| {
             window.refresh();
@@ -190,8 +349,8 @@ fn selftest_t04(handle: WindowHandle<Preview>, cx: &mut App) {
         })
         .expect("绘制");
         let got = handle.read_with(cx, |p, _| p.recorded.borrow().clone()).expect("窗口根视图");
-        let want = expected_copies(CODE_DOC);
-        let naive = naive_copies(CODE_DOC);
+        let want = expected_copies(&doc);
+        let naive = naive_copies(&doc);
         let mut ok = got.len() == want.len() && !want.is_empty(); // 一帧内每块恰好调用一次
         for (i, w) in want.iter().enumerate() {
             let g = got.get(i).map(String::as_str).unwrap_or("<缺失>");
@@ -204,7 +363,14 @@ fn selftest_t04(handle: WindowHandle<Preview>, cx: &mut App) {
         println!("T04: 代码块 {} 个，渲染器调用 {} 次；直接切源码会出错的块 {naive_wrong} 个（反证，应 ≥ 2：列表内、缩进式）", want.len(), got.len());
         ok &= naive_wrong >= 2;
         println!("{} S04-07 T04 代码块经 Buddy 渲染器绘制且复制内容与 v1 逐字节一致", if ok { "PASS" } else { "FAIL" });
-        std::process::exit(if ok { 0 } else { 1 });
+
+        let got = handle.read_with(cx, |p, _| p.counts.borrow().clone()).expect("窗口根视图");
+        let want = expected_counts(&doc);
+        let t05 = got == want && want.len() >= 11;
+        println!("T05: 装饰回调 {got:?}");
+        println!("T05: 期望     {want:?}");
+        println!("{} S04-08 T05 每个 GFM 块元素都经过 Buddy 装饰（逐类计数一致，覆盖 {} 类）", if t05 { "PASS" } else { "FAIL" }, want.len());
+        std::process::exit(if ok && t05 { 0 } else { 1 });
     })
     .detach();
 }
@@ -393,8 +559,8 @@ fn main() {
                 WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() },
                 |_, cx| {
                     let registry = Arc::new(LanguageRegistry::default());
-                    let md = cx.new(|cx| Markdown::new(CODE_DOC.into(), Some(registry), None, cx));
-                    cx.new(|_| Preview { md, recorded: Rc::default() })
+                    let md = cx.new(|cx| Markdown::new(doc().into(), Some(registry), None, cx));
+                    cx.new(|_| Preview { md, recorded: Rc::default(), counts: Rc::default() })
                 },
             )
             .expect("open_window 失败");
