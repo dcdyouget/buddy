@@ -12,7 +12,10 @@
 
 ## 输入
 
-- Comet `mend.rs`（MIT，413 行）；v1 `src/utils/markdownNormalizer.ts`（230 行）的流式修补逻辑
+- Comet `mend.rs`（MIT，413 行）
+- v1 `src/utils/markdownNormalizer.ts`（230 行）—— **读后更正**：它不是流式修补，而是两项与流式无关的规范化：
+  ① 中文标点旁 `**` 的 CommonMark 强调边界失效 → 在加粗内容两端插零宽空格守卫（渲染时去掉）；
+  ② AI 把纯文本 / 无语言代码块的结束围栏粘在正文末尾 → 拆开。**两项都是 v2 必做**
 
 ## 实现要点
 
