@@ -49,7 +49,7 @@
 | 决策 | 选择 | 理由 |
 |------|------|------|
 | 关键字粗体 / 注释斜体 | **保留**（同 v1），不遵循拆解依据「只改前景色」 | v1 `buddyCodeTheme` 即如此；等宽字体下不改变字宽与行高，T03 实测证明布局不变 |
-| 语言集 | v1 集合 ∩ tree-sitter | 与 v1 一致；Comet 额外支持的 11 种是否启用 → 用户决策清单 |
+| 语言集 | v1 集合 ∩ tree-sitter —— **2026-09-27 用户决定：另外启用** Comet 额外支持的 11 种（commit `06057e1`） | 原为与 v1 一致；TOML 查询改为只把键捕获为属性（否则值也被染成属性色） |
 | v1 有、无 grammar 的 6 种 | 按纯文本 | objc / graphql / reason / regex / actionscript / coffeescript 无对应语法；属已知差异 |
 | 高亮颜色来源 | Buddy 自建 `SyntaxTheme`（不用 zed 主题） | 保证与 v1 `--code-syntax-*` 一致 |
 | Comet 未用的语法包 | 暂时照常编译 | 是否裁剪（减小体积）由 S04-03 用数据决定 |

@@ -20,7 +20,7 @@
 //! # 外观只有浅 / 深两种
 //!
 //! v1 的主题设置只有 `light` / `dark`（`src/types/index.ts` `Theme`、engine `models::Theme`），
-//! **不跟随系统外观**。v2 保持一致；是否新增「跟随系统」由用户决定（S03-06 决策记录）。
+//! **不跟随系统外观**。v2 保持一致（2026-09-27 用户决定不做「跟随系统」，S03-06 决策记录）。
 
 pub mod easing;
 pub mod fonts;

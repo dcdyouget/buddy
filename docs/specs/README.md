@@ -299,6 +299,7 @@
 | 2026-09-27 | S04-02 | `doing` → `done` | Comet syntax 接入；v1 语言集 17 种；T03 布局不变（6e-5 px）并反证；+30 包全 MIT。commit `3aa039b` |
 | 2026-09-27 | S04-03 | `todo` → `doing` → `done` | util 替身（−21 包）、10 个未用语法包 feature 化（约 12 MB）、HTML 按 v1 实测转义；新增 GPL patch 同步检查。commit `6c55b0c` |
 | 2026-09-27 | S04-04 | `doing` → `done` | 实测后决定不做增量解析：release 5000 行 9 ms、流式一帧内追上（额外 ≤1.1 ms）。commit `b919826` |
+| 2026-09-27 | 用户决策 | 5 项定案 | ① 选区色用品牌色（S04-09）② 不做「跟随系统」主题（S03-06）③ 不打包 Fira Code，未安装时用系统字体（S03-05，现有回退规则即满足）④ 启用 v1 之外的 10 种代码高亮语言（S04-02 / S04-03，commit `06057e1`；约 +12 MB，包体积 Phase 08 实测）⑤ 整个重构完成后再推送（S01-05） |
 | 2026-09-27 | S04-06 | `todo` → `doing` → `blocked` | 节奏器（v1 `useSmoothTextRenderer`）+ 尾段 9 字落定 + 呼吸星标 + 减弱动效（NSWorkspace）；vendored 补丁 veil / overlay；15 单测对应 v1 用例；T08 布局不变、T09 端到端（含反证与拦截）。**阻塞于用户目检**（§6.5 第 7 项）。commit `89d90d8` |
 | 2026-09-27 | S04-09 | `todo` → `doing` → `blocked` | 复制按 v1（WebKit 选区纯文本：段落 / h3–h6 后空行、表格制表符、去守卫）；v1 基准由真实组件渲染 + WKWebView 测得；T07 真实拖选 + 复制逐字节一致（含拦截）。**阻塞于用户目检**（§6.5 第 6 项）。commit `a1ed468` |
 | 2026-09-27 | S04-08 | `todo` → `doing` → `blocked` | GFM 元素按 v1 外观（vendored 补丁新增 `MarkdownStyle::decorations`）、链接按 v1 规则打开、网络图片（reqwest 实现 GPUI HTTP 客户端，不新增包）；T05 / T06 含拦截。**阻塞于用户目检**（handoff §6.5 第 5 项）。commit `82de50e`、`bfe852e` |

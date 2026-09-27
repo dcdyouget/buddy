@@ -44,7 +44,7 @@
 | 决策 | 选择 | 理由 |
 |------|------|------|
 | 运行时选字体 | 取栈中第一个已安装者（WebKit 规则） | GPUI 首选字体未安装时退到自有全局栈（`.ZedMono` / Helvetica），不沿 CSS 链 → 会与 v1 不一致 |
-| 字体不随包分发 | 与 v1 一致 | v1 无 `@font-face`；是否打包 Fira Code 属产品决策 → 用户决策清单 |
+| 字体不随包分发 | 与 v1 一致 —— **2026-09-27 用户决定：不打包**，未安装 Fira Code 时用系统字体 | v1 无 `@font-face`。回退即现有 `fonts::ui_font` / `mono_font` 规则：按令牌字体栈取第一个已安装者，都没有时落到系统字体（`.SystemUIFont` / Menlo），无需改代码 |
 | TextRenderingMode | `Grayscale` | macOS 现状即灰度；为 Windows（R4）预留同口径 |
 | 字距（letter-spacing） | **GPUI 本 rev 不支持**，`.t-title` 的 -0.01em 无法应用 | `styled.rs` 无对应方法；20px 下约 -0.2px/字，目检时关注标题是否偏松 |
 

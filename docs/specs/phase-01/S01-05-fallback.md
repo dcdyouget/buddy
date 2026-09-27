@@ -68,7 +68,7 @@
 - commit：v1 基点 `9cc244a`（tag `v1-final` / 分支 `v1-fallback`，**仅本地**）；Phase 产物 `e91bbc3`
 - 设计文档处置：—
 
-**未完成的对外步骤**：`git push origin main v1-final v1-fallback` + GitHub 对 `v1-fallback` 加分支保护 —— 待用户决定推送时执行
+**未完成的对外步骤**：`git push origin main v1-final v1-fallback` + GitHub 对 `v1-fallback` 加分支保护 —— **2026-09-27 用户决定：整个 v2 重构完成后再推送**，届时执行
 
 ## 备注
 

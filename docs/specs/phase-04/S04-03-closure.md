@@ -47,7 +47,7 @@
 |------|------|------|
 | HTML 处理 | 解析关闭，`html5ever` 仍编译 | v1 实测为转义文本；裁掉 `html5ever` 需改上游 `parser.rs`，收益仅数个包，不值得破坏「vendored 原文不改」 |
 | util | 本地替身（lib 名 `util`） | 零源码改动即可去掉 21 个包 |
-| 语法包 | feature 化默认关 | 约 12 MB 静态数据，对照 < 10 MB 安装包目标；是否启用属产品决策（用户决策清单） |
+| 语法包 | feature 化默认关 —— **2026-09-27 用户决定：启用**（buddy-markdown 打开 `extra-languages`，commit `06057e1`） | 约 12 MB 静态数据（未压缩），对照 < 10 MB 安装包目标 → 最终包体积在 Phase 08 实测，超标时再议 |
 | 测试 | dev-dependency 自引用开启 feature | 保持 Comet 原测试集完整 |
 
 ## 完成记录

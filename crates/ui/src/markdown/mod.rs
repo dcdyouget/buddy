@@ -91,7 +91,7 @@ pub fn message_style(window: &Window, cx: &App) -> MarkdownStyle {
         rule_color: c.markdown_accent_line.into(),
         block_quote_border_color: c.markdown_accent.into(),
         syntax: syntax_theme(&theme),
-        // v1 无 `::selection` 规则，WebKit 用系统高亮色；GPUI 无对应接口，暂用品牌色（待用户决定，S04-09）。
+        // v1 无 `::selection` 规则，WebKit 用系统高亮色；v2 用品牌色（2026-09-27 用户决定，S04-09）。
         // 上游把选区色块画在文字**之上**，必须半透明，否则遮住文字
         selection_background_color: Hsla::from(c.buddy_primary).opacity(SELECTION_ALPHA),
         heading_level_styles: Some(HeadingLevelStyles {

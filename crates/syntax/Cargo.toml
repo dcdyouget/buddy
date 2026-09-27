@@ -39,7 +39,7 @@ tree-sitter-containerfile = { version = "=0.9.2", optional = true }
 
 [features]
 # v1 无高亮的 10 种语言（S04-03：静态解析表约 12 MB，AGENTS.md 安装包目标 < 10 MB）。
-# 是否启用列入用户决策清单；启用后 buddy-markdown 的 language_stub 也需放行对应语言。
+# 2026-09-27 用户决定启用：buddy-markdown 打开本 feature，language_stub 已放行对应语言。
 extra-languages = [
     "dep:tree-sitter-bash",
     "dep:tree-sitter-toml-ng",
