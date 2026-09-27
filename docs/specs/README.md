@@ -14,14 +14,14 @@
 | 01 | 工程骨架与分层 | 6 | **6** | **Phase 00 Go ✅ 已满足** |
 | 02 | 引擎层移植 | 9 | **9** | S01-01 |
 | 03 | 主题与设计令牌 | 7 | 5 | S01-01 |
-| 04 | Markdown 栈 | 9 | 1 | S01-01 |
+| 04 | Markdown 栈 | 9 | 2 | S01-01 |
 | 05 | 聊天界面 | 18 | 0 | S03-*, S04-* |
 | 06 | 设置界面 | 6 | 0 | S03-* |
 | 07 | 应用外壳与窗口行为 | 13 | 0 | S01-01 |
 | 08 | 更新与发布 | 11 | 0 | S07-* |
 | 09 | 平台对齐（Windows） | 9 | 0 | macOS 全链路验收 |
 | 10 | 测试与验收 | 7 | 0 | 与 02-09 并行 |
-| | **合计** | **104** | **30** | |
+| | **合计** | **104** | **31** | |
 
 > **准入条件是必要条件而非充分条件**：具体以各 spec 自身的「依赖」列为准（`RULES.md` §9.2）。
 > 规范强制 **Phase 单调性**：Phase `NN` 的 spec 只能依赖 Phase ≤ `NN` 的 spec（`RULES.md` §9.1）。
@@ -106,7 +106,7 @@
 | ID | Spec | 依赖 | 状态 | 文件 |
 |----|------|------|------|------|
 | S04-01 | vendor zed markdown 并以 shim 替换 settings / language / mermaid | S01-02 | `done` | `phase-04/S04-01-vendor-markdown.md` |
-| S04-02 | 引入 Comet syntax 替换 language stub | S04-01 | `doing` | `phase-04/S04-02-syntax-highlight.md` |
+| S04-02 | 引入 Comet syntax 替换 language stub | S04-01 | `done` | `phase-04/S04-02-syntax-highlight.md` |
 | S04-03 | 闭包收敛与依赖清理（含 mermaid / html 裁剪决策） | S04-02 | `todo` | `phase-04/S04-03-closure.md` |
 | S04-04 | 块粒度增量解析与后台合并 | S04-03 | `todo` | `phase-04/S04-04-incremental-parse.md` |
 | S04-05 | 半截标记修补（mend） | S04-04 | `todo` | `phase-04/S04-05-mend.md` |
@@ -296,3 +296,4 @@
 | 2026-09-27 | S03-07 | `todo` → `doing` → `done` | 品牌色逐值 / 生成物新鲜度 / 禁止硬编码颜色，拦截验证 11–13；新增 `scripts/gate.sh` 提交闸门。commit `c513cb1` |
 | 2026-09-27 | Phase 04 | 展开 9 个 spec 文件 | S04-01 改名（原「patch ThemeSettings 9 处」为旧估计，S00-06 实测 1 行 + shim）；S04-07 改名「代码块渲染与复制」（高亮归 S04-02）；语言集以 v1 `prism-react-renderer` 运行时实测为准 |
 | 2026-09-27 | S04-01 | `doing` → `done` | vendored zed markdown 为独立 crate；上游 + patch == vendored；禁用依赖 0；+36 包（主要 util）。commit `7424f9a` |
+| 2026-09-27 | S04-02 | `doing` → `done` | Comet syntax 接入；v1 语言集 17 种；T03 布局不变（6e-5 px）并反证；+30 包全 MIT。commit `3aa039b` |
