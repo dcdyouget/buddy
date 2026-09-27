@@ -1,20 +1,21 @@
 // S03-02：用 WebKit（与 v1 同一渲染引擎）独立计算每个颜色令牌，作为生成器的对照真值。
 //
-// 用法：swift scripts/theme/verify_webkit.swift <css 文件> <令牌名,逗号分隔>
-// 输出（stdout）每行：`<light|dark> <--token> <r> <g> <b> <a>`（0..1 浮点）
+// 用法：swift scripts/theme/verify_webkit.swift <css 文件> <CSS 属性 | --raw> <令牌名,逗号分隔>
+// 输出（stdout）每行：`<light|dark>\t<--token>\t<getComputedStyle 原始字符串>`，解析由调用方完成。
 //
 // 做法：离屏 WKWebView 载入 CSS（去掉无法解析的 @import），在 <html> / <html class="dark">
-// 两种状态下对探针元素设 `color: var(--token)`，读 getComputedStyle 的结果。
+// 两种状态下对探针元素设 `<属性>: var(--token)`，读 getComputedStyle 的结果。
 
 import AppKit
 import WebKit
 
 let args = CommandLine.arguments
-guard args.count == 3, let css = try? String(contentsOfFile: args[1], encoding: .utf8) else {
-    FileHandle.standardError.write("usage: verify_webkit.swift <css> <tokens>\n".data(using: .utf8)!)
+guard args.count == 4, let css = try? String(contentsOfFile: args[1], encoding: .utf8) else {
+    FileHandle.standardError.write("usage: verify_webkit.swift <css> <property> <tokens>\n".data(using: .utf8)!)
     exit(2)
 }
-let tokens = args[2].split(separator: ",").map(String.init)
+let property = args[2]
+let tokens = args[3].split(separator: ",").map(String.init)
 let cleaned = css.split(separator: "\n", omittingEmptySubsequences: false)
     .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("@import") }
     .joined(separator: "\n")
@@ -27,8 +28,15 @@ let js = """
   for (const mode of ['light', 'dark']) {
     document.documentElement.className = mode === 'dark' ? 'dark' : '';
     for (const t of \(tokensJSON)) {
-      probe.style.color = 'var(' + t + ')';
-      out.push(mode + '\\t' + t + '\\t' + getComputedStyle(probe).color);
+      let v;
+      if ('\(property)' === '--raw') {
+        // 自定义属性本身的计算值（WebKit 解析后的原始 token 串）
+        v = getComputedStyle(document.documentElement).getPropertyValue(t).replace(/\\s+/g, ' ').trim();
+      } else {
+        probe.style.setProperty('\(property)', 'var(' + t + ')');
+        v = getComputedStyle(probe).getPropertyValue('\(property)');
+      }
+      out.push(mode + '\\t' + t + '\\t' + v);
     }
   }
   return out.join('\\n');
@@ -39,31 +47,10 @@ final class Delegate: NSObject, WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         webView.evaluateJavaScript(js) { result, error in
             if let error { FileHandle.standardError.write("\(error)\n".data(using: .utf8)!); exit(1) }
-            for line in (result as? String ?? "").split(separator: "\n") {
-                let parts = line.split(separator: "\t").map(String.init)
-                guard parts.count == 3, let c = parseColor(parts[2]) else {
-                    FileHandle.standardError.write("无法解析：\(line)\n".data(using: .utf8)!); exit(1)
-                }
-                print("\(parts[0]) \(parts[1]) \(c.0) \(c.1) \(c.2) \(c.3)")
-            }
+            print(result as? String ?? "")
             exit(0)
         }
     }
-}
-
-/// 解析 `rgb(r, g, b)` / `rgba(r, g, b, a)` / `color(srgb r g b / a)`
-func parseColor(_ s: String) -> (Double, Double, Double, Double)? {
-    let nums = s.replacingOccurrences(of: "[^0-9.e\\- ]", with: " ", options: .regularExpression)
-        .split(separator: " ").compactMap { Double($0) }
-    if s.hasPrefix("color(srgb") {
-        guard nums.count >= 3 else { return nil }
-        return (nums[0], nums[1], nums[2], nums.count >= 4 ? nums[3] : 1)
-    }
-    if s.hasPrefix("rgb") {
-        guard nums.count >= 3 else { return nil }
-        return (nums[0] / 255, nums[1] / 255, nums[2] / 255, nums.count >= 4 ? nums[3] : 1)
-    }
-    return nil
 }
 
 let app = NSApplication.shared
