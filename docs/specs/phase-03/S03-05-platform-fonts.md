@@ -1,6 +1,6 @@
 # S03-05 平台字体栈与 TextRenderingMode
 
-> 状态: `todo`
+> 状态: `doing`
 > Phase: 03
 > 依赖: S03-04
 > 阻塞: —
