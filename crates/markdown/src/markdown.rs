@@ -23,6 +23,12 @@ pub fn install_theme_settings(
     );
 }
 mod language_stub;
+/// Buddy patch（S04-02）：导出高亮类别顺序与语言注册表，供 buddy-ui 构造 SyntaxTheme 与 Markdown
+pub mod syntax {
+    pub use crate::language_stub::{
+        HighlightId, Language, LanguageRegistry, Rope, SYNTAX_CATEGORIES, language_for_tag,
+    };
+}
 pub mod parser;
 mod path_range;
 mod selection;

@@ -4,6 +4,7 @@ members = [
     "crates/engine",
     "crates/ui",
     "crates/markdown",
+    "crates/syntax",
     "apps/buddy",
 ]
 # ⚠️ 必须 exclude v1 的 Tauri 工程。
@@ -25,6 +26,7 @@ authors = ["Buddy"]
 buddy-engine = { path = "crates/engine" }
 buddy-ui = { path = "crates/ui" }
 buddy-markdown = { path = "crates/markdown" }
+buddy-syntax = { path = "crates/syntax" }
 
 # ── GPUI 与 zed crate（S00-01 实测的组合）──
 #

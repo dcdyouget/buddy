@@ -12,6 +12,8 @@
 | 引擎层 | `crates/engine/` | **MIT** | **无** — 依赖树中 0 处 GPL |
 | 界面层 | `crates/ui/` | **GPL-3.0-or-later** | 见 §3 |
 | 入口 | `apps/buddy/` | **GPL-3.0-or-later** | 继承自 `crates/ui` |
+| markdown 渲染 | `crates/markdown/` | **GPL-3.0-or-later** | 本身即 vendored zed `crates/markdown`（rev `290cbcb`），见 `crates/markdown/VENDOR.md` 与其 patch 文件 |
+| 语法高亮 | `crates/syntax/` | **MIT** | 无 —— 移植自 Comet `crates/syntax`（MIT，原许可证 `crates/syntax/LICENSE-MIT-comet`） |
 
 **引擎层的纯净性已被实测验证**（S00-08）：`cargo tree -p buddy-engine` 中
 0 处 `gpui` / `theme` / `ui` / 其他 GPL crate。其直接依赖仅为
@@ -208,3 +210,15 @@ PY
 
 > GPL 与 Apache-2.0 全文随仓库分发是本项目的合规要求；
 > 其余许可证的全文由各依赖包自身携带。
+
+---
+
+## 附：Phase 04 新增依赖（S04-01 / S04-02，2026-09-27）
+
+> 上文 §2 的 746 包统计截至 S01-03；此后新增项在此列出，全量重统计交 `S08-09`。
+
+| 来源 | 新增包数 | 许可证 |
+|------|---------|--------|
+| S04-01 vendored markdown（主要经 zed `util`：`async_zip`、`rust-embed`、`nix`、`globset` 等） | 36（`Cargo.lock` 752 → 788） | 待 S08-09 逐项统计 |
+| S04-02 语法高亮：`tree-sitter` 0.26.11、`tree-sitter-highlight` 0.26.11、`tree-sitter-language` 0.1.8 及 27 个语法包（rust / javascript / typescript / python / go / json / bash / toml-ng / md / html / css / yaml / c / cpp / c-sharp / java / kotlin-ng / swift / ruby / php / sequel / lua / nix / make / containerfile）、`streaming-iterator` | 30（788 → 818） | **全部 MIT**（`streaming-iterator` 为 MIT OR Apache-2.0）；均未修改 |
+

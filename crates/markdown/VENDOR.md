@@ -12,9 +12,9 @@
 
 | 文件 | 修改 | 原因 |
 |------|------|------|
-| `markdown.rs` | `language` / `settings` / `theme_settings` 的 4 处 `use` 改指本地模块；新增 `mod` 声明与 `install_theme_settings`（共 37 行差异） | 去掉会拖入 zed settings 框架与需 cmake 的 `language` |
+| `markdown.rs` | `language` / `settings` / `theme_settings` 的 4 处 `use` 改指本地模块；新增 `mod` 声明、`install_theme_settings`、`pub mod syntax` 重导出（共 43 行差异） | 去掉会拖入 zed settings 框架与需 cmake 的 `language`；向 buddy-ui 暴露高亮类别与语言注册表 |
 | `theme_settings_shim.rs` | **新增**（Buddy 编写） | 提供与 `theme_settings::ThemeSettings` 同名同 API 的替代；字体 / 字号由 buddy-ui 按 Buddy 令牌传入 |
-| `language_stub.rs` | **新增**（Buddy 编写） | 替代 `language`（S04-02 起接 Comet `syntax` 做语法高亮） |
+| `language_stub.rs` | **新增**（Buddy 编写） | 替代 `language`：S04-02 起经 `buddy-syntax`（Comet，MIT）做 tree-sitter 高亮，只放行 v1 有高亮的语言，类别归并为 9 类（`SYNTAX_CATEGORIES`） |
 | `mermaid.rs` | **整体替换为 stub**（原 1836 行 → 100 行） | 原实现依赖 node / wasm；Buddy（v1）无 mermaid 功能 |
 | `parser.rs` / `selection.rs` / `path_range.rs` / `html.rs` / `html/*` | **未改动**（与上游逐字节一致） | — |
 

@@ -87,8 +87,7 @@ impl Default for ResolvedHighlights {
 }
 
 impl ResolvedHighlights {
-    /// 真实实现会检查 grammar 版本是否变化。
-    /// stub 恒为 `true` —— 因为 `runs` 恒为空，不会走到查表路径。
+    /// 真实实现会检查 grammar 版本是否变化；本实现的语法随二进制静态链接、不会变化 → 恒为 `true`。
     pub fn is_current(&self) -> bool {
         true
     }
@@ -140,16 +139,105 @@ impl Rope {
     }
 }
 
-/// 语言句柄（真实实现持有 tree-sitter 语法与查询）
+/// Buddy 的语法高亮类别（S04-02）。
+///
+/// 按 v1 `CodeBlock.tsx` 的 `buddyCodeTheme`（prism 词法类别 → `--code-syntax-*`）归并为 9 类。
+/// 顺序即 `HighlightId` 的值：调用方（buddy-ui）必须按**同一顺序**构造 `SyntaxTheme`
+/// （`markdown.rs` 以 `syntax_theme.get(HighlightId)` 按下标取样式）。
+pub const SYNTAX_CATEGORIES: [&str; 9] = [
+    "comment",     // prism: comment / prolog / doctype / cdata（v1 另加 italic）
+    "punctuation", // prism: punctuation
+    "property",    // prism: property / tag / constant / symbol / deleted
+    "number",      // prism: boolean / number
+    "string",      // prism: selector / attr-name / string / char / builtin / inserted
+    "operator",    // prism: operator / entity / url / string-variable
+    "keyword",     // prism: atrule / attr-value / keyword（v1 另加字重 600）
+    "function",    // prism: function / class-name
+    "special",     // prism: regex / important / variable
+];
+
+/// Comet 高亮类别 → Buddy 类别下标（`None` = 用正文代码色，与 prism 未着色的词法类别一致）
+fn category_of(kind: buddy_syntax::HighlightKind) -> Option<usize> {
+    use buddy_syntax::HighlightKind as K;
+    Some(match kind {
+        K::Comment => 0,
+        K::Punctuation => 1,
+        K::Property | K::Tag | K::Constant => 2,
+        K::Number | K::Boolean => 3,
+        K::String | K::Attribute | K::TypeBuiltin | K::FunctionBuiltin => 4,
+        K::Operator | K::MarkupLink => 5,
+        K::Keyword => 6,
+        K::Function | K::Type | K::Constructor | K::Macro => 7,
+        K::StringSpecial | K::Escape | K::Variable | K::VariableSpecial => 8,
+        K::Parameter
+        | K::Label
+        | K::MarkupHeading
+        | K::MarkupRaw
+        | K::MarkupReference
+        | K::MarkupEmphasis
+        | K::MarkupStrong
+        | K::Embedded
+        | K::Invalid => return None,
+    })
+}
+
+/// 代码块围栏标签 → 语言。**只放行 v1 有高亮的语言**（S04-02 决策：与 v1 一致）。
+///
+/// v1 的集合取自 `prism-react-renderer` 2.4.1 运行时注册（`node -e` 实测）：
+/// c cpp css go graphql html/markup/xml/svg json js/jsx/flow kotlin markdown objc python reason
+/// regex rust sql swift ts/tsx yaml（+ actionscript / coffeescript）。
+/// 其中 tree-sitter 无对应语法的（objc / graphql / reason / regex / actionscript / coffeescript）按纯文本。
+fn v1_language(tag: &str) -> Option<buddy_syntax::LanguageId> {
+    use buddy_syntax::LanguageId as L;
+    let tag = tag.trim().split_ascii_whitespace().next()?.to_ascii_lowercase();
+    Some(match tag.as_str() {
+        // prism 把这些都归入 markup
+        "markup" | "xml" | "svg" | "mathml" | "ssml" | "rss" | "atom" => L::Html,
+        "flow" => L::JavaScript,
+        other => match buddy_syntax::language_for_alias(other)? {
+            id @ (L::Rust
+            | L::JavaScript
+            | L::Jsx
+            | L::TypeScript
+            | L::Tsx
+            | L::Python
+            | L::Go
+            | L::Json
+            | L::Markdown
+            | L::Html
+            | L::Css
+            | L::Yaml
+            | L::C
+            | L::Cpp
+            | L::Kotlin
+            | L::Swift
+            | L::Sql) => id,
+            // Comet 另支持 bash / toml / java / ruby / php / c# / lua / nix / make / dockerfile / jsonc，
+            // v1 均无高亮 → 暂不启用（是否启用列入用户决策清单）
+            _ => return None,
+        },
+    })
+}
+
+/// 语言句柄
 #[derive(Clone, Debug)]
 pub struct Language {
     scope: LanguageScope,
+    id: Option<buddy_syntax::LanguageId>,
 }
 
 impl Language {
     pub fn new(scope: &'static str) -> Self {
         Self {
             scope: LanguageScope(scope),
+            id: None,
+        }
+    }
+
+    fn highlighted(id: buddy_syntax::LanguageId) -> Self {
+        Self {
+            scope: LanguageScope("source"),
+            id: Some(id),
         }
     }
 
@@ -161,39 +249,93 @@ impl Language {
         self.scope
     }
 
-    /// **stub：返回空高亮**（不做语法高亮）
+    /// tree-sitter 高亮（Comet `buddy_syntax`），返回按 [`SYNTAX_CATEGORIES`] 编号的区间。
     ///
-    /// 注意签名与消费点匹配：**不返回 `Result`**
-    /// （`markdown.rs:1671` 直接使用返回值，未做 `?`）。
-    pub fn highlight_text_resolved(&self, _rope: &Rope, _range: Range<usize>) -> ResolvedHighlights {
-        ResolvedHighlights::default()
+    /// 签名与 zed 一致：**不返回 `Result`**（`markdown.rs` 直接使用返回值）；
+    /// 失败（超限、未知语言等）返回空结果，消费点据此按纯文本渲染。
+    pub fn highlight_text_resolved(&self, rope: &Rope, range: Range<usize>) -> ResolvedHighlights {
+        let Some(id) = self.id else {
+            return ResolvedHighlights::default();
+        };
+        let Some(source) = rope.as_str().get(range.clone()) else {
+            return ResolvedHighlights::default();
+        };
+        let request = buddy_syntax::HighlightRequest {
+            source,
+            path: None,
+            fence_tag: Some(language_tag(id)),
+        };
+        let Ok(doc) = buddy_syntax::highlight(request) else {
+            return ResolvedHighlights::default();
+        };
+        // Comet 输出为「按行、行内字节偏移」；换算为相对 range.start 的绝对偏移
+        let mut runs = Vec::new();
+        let mut line_start = 0usize;
+        for (line, spans) in source.split_inclusive('\n').zip(doc.lines.iter()) {
+            for span in spans {
+                if let Some(cat) = category_of(span.kind) {
+                    runs.push((
+                        range.start + line_start + span.range.start
+                            ..range.start + line_start + span.range.end,
+                        HighlightId(cat),
+                    ));
+                }
+            }
+            line_start += line.len();
+        }
+        ResolvedHighlights {
+            sources: SmallVec::new(),
+            runs: runs.into(),
+        }
     }
 }
 
-/// 语言注册表（真实实现按名字/扩展名查语言）
-///
-/// ⚠️ 本 spike 里始终传 `None`（`Markdown::new(src, None, None, cx)`），
-/// 因此下面 3 个方法**永不被调用** —— 只需通过编译。
+/// Comet 按围栏标签识别语言；为已解析出的 `LanguageId` 取一个它认得的标签
+fn language_tag(id: buddy_syntax::LanguageId) -> &'static str {
+    use buddy_syntax::LanguageId as L;
+    match id {
+        L::Rust => "rust",
+        L::JavaScript => "javascript",
+        L::Jsx => "jsx",
+        L::TypeScript => "typescript",
+        L::Tsx => "tsx",
+        L::Python => "python",
+        L::Go => "go",
+        L::Json => "json",
+        L::Markdown => "markdown",
+        L::Html => "html",
+        L::Css => "css",
+        L::Yaml => "yaml",
+        L::C => "c",
+        L::Cpp => "cpp",
+        L::Kotlin => "kotlin",
+        L::Swift => "swift",
+        L::Sql => "sql",
+        _ => "",
+    }
+}
+
+/// 按围栏标签同步取语言（只放行 v1 语言集）；注册表的 async 方法亦基于它
+pub fn language_for_tag(tag: &str) -> Option<Arc<Language>> {
+    v1_language(tag).map(|id| Arc::new(Language::highlighted(id)))
+}
+
+/// 语言注册表：按围栏标签 / 文件路径查语言（只放行 v1 语言集）
 #[derive(Default, Clone, Debug)]
 pub struct LanguageRegistry;
 
 impl LanguageRegistry {
-    pub async fn language_for_name_or_extension(
-        &self,
-        _name: &str,
-    ) -> anyhow::Result<Arc<Language>> {
-        anyhow::bail!("S00-06 stub：未接入语言注册表")
+    pub async fn language_for_name_or_extension(&self, name: &str) -> anyhow::Result<Arc<Language>> {
+        language_for_tag(name).ok_or_else(|| anyhow::anyhow!("无高亮语言：{name}"))
     }
 
-    pub async fn load_language_for_file_path(
-        &self,
-        _path: &Path,
-    ) -> anyhow::Result<Arc<Language>> {
-        anyhow::bail!("S00-06 stub：未接入语言注册表")
+    pub async fn load_language_for_file_path(&self, path: &Path) -> anyhow::Result<Arc<Language>> {
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or_default();
+        self.language_for_name_or_extension(ext).await
     }
 
-    pub async fn language_for_name(&self, _name: &str) -> anyhow::Result<Arc<Language>> {
-        anyhow::bail!("S00-06 stub：未接入语言注册表")
+    pub async fn language_for_name(&self, name: &str) -> anyhow::Result<Arc<Language>> {
+        self.language_for_name_or_extension(name).await
     }
 }
 

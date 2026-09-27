@@ -32,6 +32,8 @@ markup5ever_rcdom.workspace = true
 pulldown-cmark.workspace = true
 smallvec.workspace = true
 stacksafe.workspace = true
+# 语法高亮（S04-02；MIT，移植自 Comet）—— 替代 zed `language` 的高亮能力
+buddy-syntax.workspace = true
 # ⚠️ 与 zed 原 Cargo.toml 的差异：移除 language / settings / theme_settings / mermaid_render
 #    （由 src/{language_stub,theme_settings_shim,mermaid}.rs 替代，理由见各文件头与 S00-06）
 
