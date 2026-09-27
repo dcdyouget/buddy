@@ -141,6 +141,7 @@ S01-06 剩余范围（均无需屏幕权限）：页面×状态清单（供目�
 | 1 | S02-06 | v2 窗口能用真实模型流式对话 | `cargo run -p buddy-app --example chat_bridge` → 点「发送示例问题」；再点一次后立刻点「停止生成」 | 回复文字逐步出现；状态行「结束：Done」、显示首批事件毫秒数；停止后状态「结束：Error(Aborted): 用户取消」。对话写在 `target/buddy-dev-data/`，**不进 v1 历史** |
 | 2 | S02-09 | v1 联网搜索是否在实际使用中也失败 | 在 v1 里让模型「搜索一下今天的新闻」 | 若搜索报错/无结果，属 v1 既有问题（research-log §19.6），决定是否另开修复 |
 | 4 | S04-07 | 代码块外观与复制反馈是否与 v1 一致 | `cargo run -p buddy-app --example markdown_preview` → 对照 v1 中同样的代码块；点各块右上角「复制」后粘贴；点「切换到深色」再看一遍 | 圆角边框 + 淡蓝底；头部有下边框，语言标签为胶囊（纯文本 / 无语言块无标签，行高更松）；「复制」点击后变绿显示「已复制」、对勾弹一下、约 2 秒复原；粘贴内容与代码一致（列表内代码无多余缩进）；超长行横向滚动不换行。已知差距：hover 变色无渐变；横向滚动条仅滚动时出现 |
+| 5 | S04-08 | 标题 / 列表 / 任务 / 引用 / 表格 / 分隔线 / 链接 / 图片 / 原始 HTML 的观感是否与 v1 一致 | 同上窗口（`markdown_preview`）顶部的 GFM 样例；对照 v1 中发送相同 markdown 的回复；点链接 | h1–h3 左侧渐变竖条（h1 另有底部渐隐线）；无序为带光圈小圆点、有序为圆形序号徽章；任务项为复选框；引用左侧主色竖边 + 淡渐变底；表格圆角外框、表头淡底主色字；分隔线两端渐隐；链接主色、点击用浏览器打开（`相对链接` 打开 `https://example.com/path`）；头像图片显示、失败图片显示占位；`<kbd>` 等原样显示。已知差距见 S04-08 决策记录（行内代码无边框、无悬停效果等） |
 | 3 | S03-05 / S03-06 | v2 主题的颜色、字体、圆角、阴影观感是否与 v1 一致；浅深切换是否无闪白 | `cargo run -p buddy-app --example theme_preview` → 对照同时打开的 v1（`git worktree add ../buddy-v1 v1-final && cd ../buddy-v1 && npm run tauri dev`）；点「切换到深色 / 浅色」 | 字体为 Fira Code（中文为苹方）、正文字重偏粗（v1 为 650）；色块与 v1 同名颜色一致；切换瞬间整窗换色、无白闪。已知差距：标题字距 GPUI 不支持（约 -0.2px/字） |
 
 ## 7. 必须知道的坑（Phase 00 实测得出，勿重踩）
@@ -229,7 +230,7 @@ S00-04 首探在首次合成之前，得到「无 `CABackdropLayer`」的**错�
 | S04-05 | S05-08 | 流式消息每批对完整文本 `markdown::normalize::normalize_markdown` 后 `replace`；**目检**：流式中半截 `**` 的观感与 v1 一致（v1 会短暂显示字面星号，v2 不做 mend） |
 | S04-05 | S04-09 / S05-08 | 显示与复制加粗文本时去掉零宽空格守卫（`normalize::strip_guards`） |
 | S04-07 | S04-06 | 系统「减弱动效」查询（S04-06-2）做好后，接入 `code_block::copy_icon` 的复制动画（v1 在 reduced-motion 下关闭） |
-| S04-07 | S05-08 | 助手消息用 `MarkdownElement::new(md, markdown::message_style(..)).code_block_renderer(code_block::renderer(md.downgrade()))`，且应用须 `with_assets(icons::Assets)` |
+| S04-07 / S04-08 | S05-08 | 助手消息用 `MarkdownElement::new(md, markdown::message_style(..)).code_block_renderer(code_block::renderer(md.downgrade())).on_url_click(\|u, _, cx\| gfm::open_link(&u, cx)).image_resolver(\|u, _\| gfm::image_source(u))`；应用须 `with_assets(icons::Assets)`、`chat_bridge::init` 后 `http::install` |
 
 **Phase 02（9 个 spec）可完全自动化** —— S00-08 已证明引擎层可脱离 Tauri 独立工作，
 且 `providers/` / `models/` 的移植改动量已实测（4 处）。

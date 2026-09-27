@@ -49,6 +49,7 @@ const GFM_DOC: &str = r#"# 一级标题：GFM 预览（S04-08）
 
 正文段落，含 **加粗**、*斜体*、~~删除线~~、`行内代码` 与 [链接文字](https://v2.tauri.app/)，
 以及裸网址 https://example.com 和无 scheme 的 [相对链接](example.com/path)。
+原始 HTML 应按原样显示为文字（v1 同）：<kbd>Ctrl</kbd> + <b>C</b>
 
 ## 二级标题
 
