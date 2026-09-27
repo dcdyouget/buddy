@@ -112,7 +112,7 @@
 | S04-05 | 半截标记修补（mend） | S04-04 | `done` | `phase-04/S04-05-mend.md` |
 | S04-06 | 流式渐显（veil） | S04-04 | `todo` | `phase-04/S04-06-veil.md` |
 | S04-07 | 代码块渲染与复制 | S04-02 | `blocked` | `phase-04/S04-07-code-block.md` |
-| S04-08 | GFM 元素（表格 / 任务列表 / 删除线 / 链接 / 图片） | S04-03 | `todo` | `phase-04/S04-08-gfm.md` |
+| S04-08 | GFM 元素（表格 / 任务列表 / 删除线 / 链接 / 图片） | S04-03 | `doing` | `phase-04/S04-08-gfm.md` |
 | S04-09 | 文本选择与复制 | S04-03 | `todo` | `phase-04/S04-09-selection.md` |
 
 ---
