@@ -235,8 +235,7 @@ def check_hard_constraints(rep: Reporter) -> None:
     else:
         rep.ok("S01-04-5 圆角刻度", f"{len(files)} 个文件，全部 ⊆ {sorted(ALLOWED_RADII)}")
 
-    # 状态色：品牌色应唯一（此处只检查是否存在非品牌的硬编码品牌感色值，允许列表由主题层管理）
-    rep.ok("S01-04-5b 品牌色", f"由 Theme 统一提供（硬约束 2），Phase 03 将加逐值校验")
+    check_brand_color(rep)
 
     # emoji 图标（硬约束 4）—— 只扫 UI 源码，排除注释与文档
     emoji_re = re.compile(
@@ -257,6 +256,75 @@ def check_hard_constraints(rep: Reporter) -> None:
         )
     else:
         rep.ok("S01-04-5c 无 emoji 图标", "源码中无 emoji")
+
+
+# ── S03-07：令牌守卫（品牌色逐值 / 生成物新鲜度 / 硬编码颜色）──────────
+
+TOKENS_RS = ROOT / "crates" / "ui" / "src" / "theme_system" / "tokens.rs"
+BRAND_HEX = "#5B5FE9"
+
+
+def _rgba_hex(text: str, const: str, field: str) -> str | None:
+    body = re.search(rf"pub const {const}: Palette = Palette \{{(.*?)\n\}};", text, flags=re.S)
+    if not body:
+        return None
+    m = re.search(rf"\b{field}: Rgba \{{[^}}]*\}}, // (#[0-9A-F]{{8}})", body.group(1))
+    return m.group(1)[:7] if m else None
+
+
+def check_brand_color(rep: Reporter, tokens_rs: Path | None = None) -> None:
+    """S01-04-5b（S03-07 落实）：生成令牌中品牌色逐值等于 #5B5FE9（硬约束 2）。"""
+    tokens_rs = tokens_rs or TOKENS_RS
+    if not tokens_rs.exists():
+        rep.fail("S01-04-5b 品牌色", f"{rel(tokens_rs)} 不存在")
+        return
+    text = tokens_rs.read_text(encoding="utf-8")
+    bad = []
+    for const in ("LIGHT", "DARK"):
+        for field in ("buddy_primary", "buddy_primary_500"):
+            v = _rgba_hex(text, const, field)
+            if v != BRAND_HEX:
+                bad.append(f"{const}.{field} = {v}（应为 {BRAND_HEX}）")
+    if bad:
+        rep.fail("S01-04-5b 品牌色", "品牌色被改动（硬约束 2）：\n" + "\n".join(f"  {b}" for b in bad))
+    else:
+        rep.ok("S01-04-5b 品牌色", f"浅/深 buddy_primary 与 -500 均为 {BRAND_HEX}")
+
+
+def check_tokens_fresh(rep: Reporter) -> None:
+    """S03-07-1：tokens.rs 必须与 v1-final 的 global.css 逐字节一致（gen_tokens.py --check）。"""
+    rc, out = run([sys.executable, str(ROOT / "scripts" / "theme" / "gen_tokens.py"), "--check"], cwd=ROOT)
+    if rc != 0:
+        rep.fail("S03-07-1 令牌生成物新鲜度", out.strip() + "\n\n修复方向：python3 scripts/theme/gen_tokens.py（勿手改 tokens.rs）")
+    else:
+        rep.ok("S03-07-1 令牌生成物新鲜度", "tokens.rs 与 v1-final global.css 一致")
+
+
+# 界面代码中构造颜色的写法（tokens.rs 为唯一允许处）
+# 只匹配「以数字构造」的颜色：`rgb(0x…)` / `rgba(0x…)` / `hsla(0.5, …)` / `Rgba { r: … }` / `Hsla { h: … }`
+# （同名的自定义辅助函数如 `hsla(c)` 不算）
+COLOR_LITERAL_RE = re.compile(r"\b(?:rgba?\(\s*0x|hsla\(\s*-?[\d.]|Rgba\s*\{\s*r\s*:|Hsla\s*\{\s*h\s*:)")
+
+
+def check_no_hardcoded_colors(rep: Reporter, roots: list[Path] | None = None) -> None:
+    """S03-07-2：crates/ui 与 apps 中禁止硬编码颜色（硬约束 5），颜色只能来自生成的 tokens.rs。"""
+    roots = roots or [ROOT / "crates" / "ui" / "src", ROOT / "apps"]
+    hits = []
+    for root in roots:
+        for f in root.rglob("*.rs"):
+            if f.resolve() == TOKENS_RS.resolve():
+                continue
+            for i, line in enumerate(f.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
+                code = line.split("//")[0]
+                if COLOR_LITERAL_RE.search(code):
+                    hits.append(f"{rel(f)}:{i}: {line.strip()[:100]}")
+    if hits:
+        rep.fail(
+            "S03-07-2 无硬编码颜色",
+            "界面代码出现颜色字面量（硬约束 5，颜色须取自 theme_system）：\n" + "\n".join(f"  {h}" for h in hits[:20]),
+        )
+    else:
+        rep.ok("S03-07-2 无硬编码颜色", "crates/ui 与 apps 的颜色均取自 tokens.rs")
 
 
 # ── 退役台账解析（检查 6 / 10 共用）───────────────────────────
@@ -613,6 +681,8 @@ def run_all(rep: Reporter) -> None:
 
     print("\n\033[1m=== 硬约束 ===\033[0m")
     check_hard_constraints(rep)
+    check_tokens_fresh(rep)
+    check_no_hardcoded_colors(rep)
 
     print("\n\033[1m=== 文档纪律 ===\033[0m")
     check_doc_paths(rep)
@@ -828,11 +898,49 @@ def self_test() -> int:
     finally:
         ledger.write_text(backup, encoding="utf-8")
 
+    # ── 验证 11–13：S03-07 令牌守卫 ─────────────────────────────
+    tokens_backup = TOKENS_RS.read_text(encoding="utf-8")
+    try:
+        # 11：品牌色被改（同时让 tokens.rs 变脏，也用于验证 12）
+        TOKENS_RS.write_text(
+            tokens_backup.replace("// #5B5FE9FF", "// #5B5FEAFF", 1), encoding="utf-8"
+        )
+        rep = Reporter()
+        check_brand_color(rep)
+        if rep.failures:
+            print("  \033[32mOK  \033[0m 拦截验证 11：品牌色被改 → 检查报 FAIL ✅")
+        else:
+            print("  \033[31mFAIL\033[0m 拦截验证 11：品牌色改动未检出")
+            failures += 1
+        # 12：手改生成物 → 与 CSS 不一致
+        rep = Reporter()
+        check_tokens_fresh(rep)
+        if rep.failures:
+            print("  \033[32mOK  \033[0m 拦截验证 12：手改 tokens.rs → 新鲜度检查报 FAIL ✅")
+        else:
+            print("  \033[31mFAIL\033[0m 拦截验证 12：生成物被手改未检出")
+            failures += 1
+    finally:
+        TOKENS_RS.write_text(tokens_backup, encoding="utf-8")
+
+    probe = ROOT / "crates" / "ui" / "src" / "_selftest_color_probe.rs"
+    try:
+        probe.write_text("fn _p() { let _ = gpui::rgb(0x5B5FE9); }\n", encoding="utf-8")
+        rep = Reporter()
+        check_no_hardcoded_colors(rep)
+        if rep.failures:
+            print("  \033[32mOK  \033[0m 拦截验证 13：界面代码注入 rgb(0x…) → 检查报 FAIL ✅")
+        else:
+            print("  \033[31mFAIL\033[0m 拦截验证 13：硬编码颜色未检出")
+            failures += 1
+    finally:
+        probe.unlink(missing_ok=True)
+
     print()
     if failures:
         print(f"\033[31m拦截验证失败 {failures} 项 —— 相关检查不可信\033[0m\n")
         return 1
-    print("\033[32m拦截验证全部 10 项通过 —— 检查确实有效\033[0m\n")
+    print("\033[32m拦截验证全部 13 项通过 —— 检查确实有效\033[0m\n")
     return 0
 
 
