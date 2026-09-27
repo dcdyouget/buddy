@@ -354,7 +354,7 @@ const V1_SELECTION: &str = include_str!("../../../docs/evidence/s04-09/v1-select
 
 /// 模拟真实鼠标拖选整段消息 + Copy 动作，读剪贴板（结束后恢复用户原剪贴板）
 async fn selftest_t07(handle: WindowHandle<Preview>, md: &Entity<Markdown>, cx: &mut AsyncApp) -> bool {
-    use buddy_ui::gpui::{Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PlatformInput, point};
+    use buddy_ui::gpui::{KeyDownEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PlatformInput, point};
     let src = markdown::normalize::normalize_markdown(COPY_SAMPLE);
     md.update(cx, |m, cx| m.replace(src.clone(), cx));
     wait_parsed(md, src.len(), cx).await;
@@ -381,7 +381,13 @@ async fn selftest_t07(handle: WindowHandle<Preview>, md: &Entity<Markdown>, cx: 
     }
     let sel = md.read_with(cx, |m, _| (m.has_selection(), m.selected_source().map(|s| s.len())));
     println!("T07: 选区 {sel:?}");
-    let _ = cx.update_window(handle.into(), |_, window, cx| window.dispatch_action(Box::new(buddy_ui::markdown::zed_markdown::Copy), cx));
+    // 按真实快捷键（经 markdown::init 的键位绑定），而不是直接派发动作
+    let key = PlatformInput::KeyDown(KeyDownEvent {
+        keystroke: Keystroke::parse(markdown::COPY_KEYSTROKE).expect("快捷键"),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    let _ = cx.update_window(handle.into(), |_, window, cx| window.dispatch_event(key, cx));
     let copied = cx.update(|cx| cx.read_from_clipboard()).and_then(|c| c.text()).unwrap_or_default();
     if let Some(saved) = saved {
         cx.update(|cx| cx.write_to_clipboard(saved));
@@ -401,7 +407,7 @@ async fn selftest_t07(handle: WindowHandle<Preview>, md: &Entity<Markdown>, cx: 
     if copied != want {
         println!("T07: 期望   {}", serde_json::to_string(&want).unwrap());
     }
-    println!("{} S04-09 T07 真实拖选 + 复制，结果与 v1 选区文本一致（除代码块头部与复选框空格）", if ok { "PASS" } else { "FAIL" });
+    println!("{} S04-09 T07 真实拖选 + Cmd+C，结果与 v1 选区文本一致（除代码块头部与复选框空格）", if ok { "PASS" } else { "FAIL" });
     ok
 }
 

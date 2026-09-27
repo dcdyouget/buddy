@@ -113,7 +113,7 @@
 | S04-06 | 流式渐显（veil） | S04-04 | `todo` | `phase-04/S04-06-veil.md` |
 | S04-07 | 代码块渲染与复制 | S04-02 | `blocked` | `phase-04/S04-07-code-block.md` |
 | S04-08 | GFM 元素（表格 / 任务列表 / 删除线 / 链接 / 图片） | S04-03 | `blocked` | `phase-04/S04-08-gfm.md` |
-| S04-09 | 文本选择与复制 | S04-03 | `todo` | `phase-04/S04-09-selection.md` |
+| S04-09 | 文本选择与复制 | S04-03 | `blocked` | `phase-04/S04-09-selection.md` |
 
 ---
 
@@ -299,6 +299,7 @@
 | 2026-09-27 | S04-02 | `doing` → `done` | Comet syntax 接入；v1 语言集 17 种；T03 布局不变（6e-5 px）并反证；+30 包全 MIT。commit `3aa039b` |
 | 2026-09-27 | S04-03 | `todo` → `doing` → `done` | util 替身（−21 包）、10 个未用语法包 feature 化（约 12 MB）、HTML 按 v1 实测转义；新增 GPL patch 同步检查。commit `6c55b0c` |
 | 2026-09-27 | S04-04 | `doing` → `done` | 实测后决定不做增量解析：release 5000 行 9 ms、流式一帧内追上（额外 ≤1.1 ms）。commit `b919826` |
+| 2026-09-27 | S04-09 | `todo` → `doing` → `blocked` | 复制按 v1（WebKit 选区纯文本：段落 / h3–h6 后空行、表格制表符、去守卫）；v1 基准由真实组件渲染 + WKWebView 测得；T07 真实拖选 + 复制逐字节一致（含拦截）。**阻塞于用户目检**（§6.5 第 6 项）。commit `a1ed468` |
 | 2026-09-27 | S04-08 | `todo` → `doing` → `blocked` | GFM 元素按 v1 外观（vendored 补丁新增 `MarkdownStyle::decorations`）、链接按 v1 规则打开、网络图片（reqwest 实现 GPUI HTTP 客户端，不新增包）；T05 / T06 含拦截。**阻塞于用户目检**（handoff §6.5 第 5 项）。commit `82de50e`、`bfe852e` |
 | 2026-09-27 | S04-07 | `todo` → `doing` → `blocked` | 代码块按 v1 渲染（头部语言标签、复制 / 已复制 + 动画）；vendored 补丁接通 `CodeBlockRenderer::Custom`；T04 复制内容逐字节一致（含反证与拦截）。**阻塞于用户目检**（handoff §6.5 第 4 项）。commit `200d6ad`、`0a83f01` |
 | 2026-09-27 | S04-05 | `doing` → `done` | 移植 v1 normalizer 两项规范化（6 测试含反证）；**不做 Comet 流式 mend**（v1 无此行为）；流式观感目检移交 S05-08。commit `c956292` |

@@ -30,8 +30,12 @@ use std::sync::Arc;
 use theme::SyntaxTheme;
 use zed_markdown::syntax::SYNTAX_CATEGORIES;
 
-/// 安装 markdown 渲染所需的字体设置。须在 [`crate::init_theme`] 之后调用。
+/// 安装 markdown 渲染所需的字体设置与复制快捷键。须在 [`crate::init_theme`] 之后调用。
+///
+/// 快捷键：上游依赖 zed 的键位表把 `cmd-c` 映射到 `Copy`；Buddy 没有该键位表，须自行绑定，
+/// 否则选中文字后 Cmd+C 无反应（S04-09）。仅在 markdown 获得焦点（`Markdown` 上下文）时生效。
 pub fn init(cx: &mut App) {
+    cx.bind_keys([gpui::KeyBinding::new(COPY_KEYSTROKE, zed_markdown::Copy, Some("Markdown"))]);
     let ui_font = fonts::ui_font(cx);
     let code_font = fonts::mono_font(cx);
     zed_markdown::install_theme_settings(
@@ -105,6 +109,9 @@ pub fn message_style(window: &Window, cx: &App) -> MarkdownStyle {
         ..Default::default()
     }
 }
+
+/// 复制快捷键（macOS Cmd+C；Windows Ctrl+C，Phase 09 验证）
+pub const COPY_KEYSTROKE: &str = if cfg!(target_os = "macos") { "cmd-c" } else { "ctrl-c" };
 
 /// 选区色的不透明度（叠在文字上，需保证文字可读）
 pub const SELECTION_ALPHA: f32 = 0.25;
