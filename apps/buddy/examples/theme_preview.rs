@@ -60,7 +60,7 @@ impl Render for Preview {
         let radii = [m::RADIUS_SM, m::RADIUS_MD, m::RADIUS_LG, m::RADIUS_XL, m::RADIUS_FULL].map(|r| {
             div()
                 .size(px(48.0))
-                .rounded(px(r.min(24.0)))
+                .rounded(px(r)) // GPUI 会把过大的圆角限制在短边一半，9999 即胶囊形
                 .bg(hsla(c.buddy_primary))
                 .text_color(hsla(c.text_on_primary))
                 .text_size(px(m::FONT_SIZE_XS))
