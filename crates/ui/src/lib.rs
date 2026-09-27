@@ -44,6 +44,7 @@ pub use gpui_platform;
 pub use theme::{self, ActiveTheme};
 
 pub mod chat_bridge;
+pub mod theme_system;
 
 use gpui::{App, Font, Pixels};
 use theme::{LoadThemes, ThemeSettingsProvider, UiDensity};
