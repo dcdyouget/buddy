@@ -289,6 +289,16 @@ def generate() -> str:
         w(f"    /// `{n}`")
         w(f"    pub {ident(n)}: Rgba,")
     w("}")
+    w("")
+    w("impl Palette {")
+    w("    /// 全部颜色（CSS 变量名, 值），按变量名排序 —— 供预览与校验遍历")
+    w("    pub fn entries(&self) -> Vec<(&'static str, Rgba)> {")
+    w("        vec![")
+    for n in groups["color"]:
+        w(f'            ("{n}", self.{ident(n)}),')
+    w("        ]")
+    w("    }")
+    w("}")
     for const, table in (("LIGHT", light), ("DARK", dark)):
         w("")
         w(f"pub const {const}: Palette = Palette {{")
