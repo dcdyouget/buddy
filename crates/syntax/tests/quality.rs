@@ -244,7 +244,8 @@ EOF
             ("touch", HighlightKind::Function),
             ("true", HighlightKind::Constant),
             ("yaml_enabled", HighlightKind::Property),
-            ("toml_enabled = true", HighlightKind::Property),
+            // Buddy：TOML 只把键捕获为属性（lib.rs `toml_highlights_query`），值按自身类别
+            ("toml_enabled", HighlightKind::Property),
             ("<root />", HighlightKind::String),
         ],
     );

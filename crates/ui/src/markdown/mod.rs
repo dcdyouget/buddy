@@ -187,14 +187,27 @@ mod tests {
     }
 
     #[test]
-    fn only_v1_languages_are_highlighted() {
+    fn highlighted_languages() {
         for tag in ["rust", "ts", "tsx", "python", "go", "json", "yaml", "cpp", "css", "html", "xml", "svg", "flow", "kotlin", "swift", "sql", "markdown"] {
             assert!(language_for_tag(tag).is_some(), "v1 有高亮的 {tag} 应被识别");
         }
-        // v1（prism-react-renderer 默认集）无高亮 → 保持纯文本
-        for tag in ["bash", "sh", "toml", "java", "ruby", "php", "lua", "text", "plain", "objc", "graphql"] {
-            assert!(language_for_tag(tag).is_none(), "{tag} 在 v1 中无高亮，不应启用");
+        // 用户决定（2026-09-27）另外启用的语言（v1 无高亮）
+        for tag in ["bash", "sh", "toml", "java", "ruby", "php", "lua", "csharp", "nix", "makefile", "dockerfile", "jsonc"] {
+            assert!(language_for_tag(tag).is_some(), "{tag} 应已启用");
         }
+        // 纯文本与无语法的语言保持不高亮
+        for tag in ["text", "plain", "objc", "graphql"] {
+            assert!(language_for_tag(tag).is_none(), "{tag} 不应高亮");
+        }
+    }
+
+    #[test]
+    fn extra_languages_get_categories() {
+        let runs = categories("bash", "echo \"hi\" # c\n");
+        assert!(runs.iter().any(|(t, c)| t == "# c" && *c == "comment"), "{runs:?}");
+        assert!(runs.iter().any(|(_, c)| *c == "string"), "{runs:?}");
+        let runs = categories("toml", "[pkg]\nname = \"x\"\n");
+        assert!(runs.iter().any(|(_, c)| *c == "string"), "{runs:?}");
     }
 
     #[test]

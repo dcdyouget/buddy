@@ -42,6 +42,10 @@ const SAMPLES: &[(&str, &str)] = &[
     ("python", "def greet(name: str) -> None:\n    # 打个招呼\n    print(f\"hi {name}\", True, None, 3.14)"),
     ("json", "{\"key\": [1, 2.5, true, null, \"值\"]}"),
     ("css", ".a > b:hover { color: #5B5FE9; margin: 0 4px !important; }"),
+    // 用户决定启用的语言（v1 无高亮）
+    ("bash", "for f in *.md; do echo \"$f\" | wc -l; done # 统计"),
+    ("toml", "[package]\nname = \"buddy\" # 名称\nversion = 2"),
+    ("java", "public class A { /** doc */ static final int N = 1; }"),
 ];
 
 /// 目检与 T05 共用的 GFM 样例
@@ -114,7 +118,7 @@ export const veryLongFunctionName = (alpha: number, beta: number, gamma: string)
 顾问/显职 ── 光禄大夫
 ```
 
-bash（v1 无高亮，但显示语言标签）：
+bash（v1 无高亮；v2 按用户决定启用高亮）：
 
 ```bash
 cargo run -p buddy-app --example markdown_preview

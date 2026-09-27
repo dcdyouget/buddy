@@ -181,12 +181,16 @@ fn category_of(kind: buddy_syntax::HighlightKind) -> Option<usize> {
     })
 }
 
-/// 代码块围栏标签 → 语言。**只放行 v1 有高亮的语言**（S04-02 决策：与 v1 一致）。
+/// 代码块围栏标签 → 语言。
 ///
 /// v1 的集合取自 `prism-react-renderer` 2.4.1 运行时注册（`node -e` 实测）：
 /// c cpp css go graphql html/markup/xml/svg json js/jsx/flow kotlin markdown objc python reason
 /// regex rust sql swift ts/tsx yaml（+ actionscript / coffeescript）。
 /// 其中 tree-sitter 无对应语法的（objc / graphql / reason / regex / actionscript / coffeescript）按纯文本。
+///
+/// S04-02 起只放行上述 v1 集合；**用户决定（2026-09-27）另外启用** Comet 支持而 v1 无高亮的
+/// bash / toml / java / ruby / php / c# / lua / nix / make / dockerfile / jsonc
+/// （`buddy-syntax` 的 `extra-languages` feature，由本 crate 的 Cargo.toml 打开）。
 fn v1_language(tag: &str) -> Option<buddy_syntax::LanguageId> {
     use buddy_syntax::LanguageId as L;
     let tag = tag.trim().split_ascii_whitespace().next()?.to_ascii_lowercase();
@@ -194,28 +198,7 @@ fn v1_language(tag: &str) -> Option<buddy_syntax::LanguageId> {
         // prism 把这些都归入 markup
         "markup" | "xml" | "svg" | "mathml" | "ssml" | "rss" | "atom" => L::Html,
         "flow" => L::JavaScript,
-        other => match buddy_syntax::language_for_alias(other)? {
-            id @ (L::Rust
-            | L::JavaScript
-            | L::Jsx
-            | L::TypeScript
-            | L::Tsx
-            | L::Python
-            | L::Go
-            | L::Json
-            | L::Markdown
-            | L::Html
-            | L::Css
-            | L::Yaml
-            | L::C
-            | L::Cpp
-            | L::Kotlin
-            | L::Swift
-            | L::Sql) => id,
-            // Comet 另支持 bash / toml / java / ruby / php / c# / lua / nix / make / dockerfile / jsonc，
-            // v1 均无高亮 → 暂不启用（是否启用列入用户决策清单）
-            _ => return None,
-        },
+        other => buddy_syntax::language_for_alias(other)?,
     })
 }
 
@@ -311,11 +294,22 @@ fn language_tag(id: buddy_syntax::LanguageId) -> &'static str {
         L::Kotlin => "kotlin",
         L::Swift => "swift",
         L::Sql => "sql",
-        _ => "",
+        // 用户决定（2026-09-27）启用的语言
+        L::Jsonc => "jsonc",
+        L::Bash => "bash",
+        L::Toml => "toml",
+        L::CSharp => "csharp",
+        L::Java => "java",
+        L::Ruby => "ruby",
+        L::Php => "php",
+        L::Lua => "lua",
+        L::Nix => "nix",
+        L::Make => "make",
+        L::Dockerfile => "dockerfile",
     }
 }
 
-/// 按围栏标签同步取语言（只放行 v1 语言集）；注册表的 async 方法亦基于它
+/// 按围栏标签同步取语言（见 [`v1_language`]）；注册表的 async 方法亦基于它
 pub fn language_for_tag(tag: &str) -> Option<Arc<Language>> {
     v1_language(tag).map(|id| Arc::new(Language::highlighted(id)))
 }

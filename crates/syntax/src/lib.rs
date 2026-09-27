@@ -2,6 +2,7 @@
 // 原文见本 crate 的 LICENSE-MIT-comet。Buddy 的改动：crate 更名为 buddy-syntax（测试文件 1 行 use 路径）；
 // S04-03 起 10 种 v1 无高亮的语言（bash / toml / c# / java / ruby / php / lua / nix / make / dockerfile）
 // 的语法包移入 `extra-languages` feature（默认关闭，`configuration` / `supports_language` 相应条件编译）。
+// 2026-09-27 起 buddy-markdown 打开该 feature（用户决定启用这些语言）；TOML 查询改写一处，见 `toml_highlights_query`。
 //! Syntax-highlighting contracts shared by Zeron's desktop surfaces.
 //!
 //! This crate intentionally has no UI, RPC, or engine dependencies. Public
@@ -576,6 +577,17 @@ fn javascript_family_configuration(
     make_configuration(grammar, name, &highlights, injections, locals)
 }
 
+/// Buddy：上游 TOML 查询以 `(pair (bare_key)) @property` 捕获**整个键值对**；本 crate 的优先级中
+/// property（85）高于 string / number（60），于是值被一并染成属性色。改为只捕获键本身。
+#[cfg(feature = "extra-languages")]
+fn toml_highlights_query() -> String {
+    const WHOLE_PAIR: &str = "(pair\n  (bare_key)) @property";
+    const KEY_ONLY: &str = "(pair\n  (bare_key) @property)";
+    let query = tree_sitter_toml_ng::HIGHLIGHTS_QUERY;
+    assert!(query.contains(WHOLE_PAIR), "tree-sitter-toml-ng 查询已变化，须复查此改写");
+    query.replacen(WHOLE_PAIR, KEY_ONLY, 1)
+}
+
 fn configuration(language: LanguageId) -> Result<HighlightConfiguration, HighlightError> {
     use LanguageId::*;
     match language {
@@ -619,7 +631,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
         Toml => make_configuration(
             tree_sitter_toml_ng::LANGUAGE.into(),
             "toml",
-            tree_sitter_toml_ng::HIGHLIGHTS_QUERY,
+            &toml_highlights_query(),
             "",
             "",
         ),

@@ -18,7 +18,7 @@
 | `markdown.rs`（S04-09） | `MarkdownDecorations::copy_text`：`Copy` 动作改由回调根据「选中的渲染行 + 各自源区间」生成剪贴板文本；新增 `RenderedText::lines_for_range`（与 `text_for_range` 同逻辑，保留源区间） | v1 复制为 WebKit 选区纯文本（段落后空行、表格制表符分隔、去掉加粗守卫），上游只按行 `\n` 连接 |
 | `markdown.rs`（S04-06） | `MarkdownDecorations::veil`（`MarkdownVeil`：按源字节位置给非代码文本逐字混合起始色 / 不透明度，`push_text` 中拆分文本运行）与 `overlay`（`MarkdownOverlay`：在某源位置的光标处布局一个元素，prepaint 中布局、paint 中绘制；`PrepaintState` 改为 `(Hitbox, Option<AnyElement>)`，测试包装元素同步） | 流式渐显（v1 `.streaming-char-settle`）与行内星标（v1 `.streaming-next-star`）；只改颜色、星标不参与布局 → 不改变排版（T08） |
 | `theme_settings_shim.rs` | **新增**（Buddy 编写） | 提供与 `theme_settings::ThemeSettings` 同名同 API 的替代；字体 / 字号由 buddy-ui 按 Buddy 令牌传入 |
-| `language_stub.rs` | **新增**（Buddy 编写） | 替代 `language`：S04-02 起经 `buddy-syntax`（Comet，MIT）做 tree-sitter 高亮，只放行 v1 有高亮的语言，类别归并为 9 类（`SYNTAX_CATEGORIES`） |
+| `language_stub.rs` | **新增**（Buddy 编写） | 替代 `language`：S04-02 起经 `buddy-syntax`（Comet，MIT）做 tree-sitter 高亮，S04-02 只放行 v1 有高亮的语言；**2026-09-27 用户决定另外启用** bash / toml / c# / java / ruby / php / lua / nix / make / dockerfile / jsonc（本 crate 打开 `buddy-syntax/extra-languages`）；类别归并为 9 类（`SYNTAX_CATEGORIES`） |
 | `mermaid.rs` | **整体替换为 stub**（原 1836 行 → 100 行） | 原实现依赖 node / wasm；Buddy（v1）无 mermaid 功能 |
 | `parser.rs` / `selection.rs` / `path_range.rs` / `html.rs` / `html/*` | **未改动**（与上游逐字节一致） | — |
 
@@ -28,7 +28,7 @@
 |---------|-------|------|
 | `language` / `settings` / `theme_settings` / `mermaid_render` | 移除 | 由 `src/` 内 shim / stub 替代（见上表） |
 | `util`（zed） | 改为本地 [`util-shim/`](./util-shim)（包名 `buddy-md-util`，**lib 名仍为 `util`**，Apache-2.0） | 源码中 `use util::…` 无需改动；zed `util` 只被本 crate 使用却拖入约 21 个包（S04-03 实测 818 → 797）。替身重导出 `gpui_util`（zed `util` 本就从它重导出 `maybe!` / `ResultExt`），并逐字复制 `generate_heading_slug` |
-| — | 新增 `buddy-syntax` | 语法高亮（S04-02） |
+| — | 新增 `buddy-syntax`（开 `extra-languages` feature） | 语法高亮（S04-02）；额外语言约 +12 MB（S04-03 测量），用户决定启用 |
 
 ## 复核方法
 
