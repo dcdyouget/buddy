@@ -11,6 +11,13 @@
 //! | 用户消息正文 | 14px | 1.5 | `MessageBubble.tsx:223-224` |
 //! | 代码块 | 13px 等宽（= `--font-size-base`） | 1.5 | `CodeBlock.tsx:206-208` |
 
+/// 源文本规范化（v1 `markdownNormalizer.ts` 的移植，S04-05）。
+///
+/// **接入方式**：流式消息每批更新时对**完整文本**调用 [`normalize::normalize_markdown`]，再 `Markdown::replace`；
+/// 不对增量片段 `append` —— 规范化需要看到完整行与成对定界符（v1 同样对整段文本规范化）。
+/// 上游每次追加本就全量重解析（S04-04），`replace` 不增加成本。
+/// 显示与复制加粗文本时须 [`normalize::strip_guards`]（守卫为零宽空格，复制时会被带出）→ S04-09 / S05-08。
+pub mod normalize;
 pub use zed_markdown;
 
 use crate::theme_system::{Theme, fonts, tokens::metrics};
