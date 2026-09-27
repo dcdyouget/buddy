@@ -13,7 +13,7 @@
 | 00 | 可行性 Spike | **9** | **9** | — |
 | 01 | 工程骨架与分层 | 6 | **6** | **Phase 00 Go ✅ 已满足** |
 | 02 | 引擎层移植 | 9 | **9** | S01-01 |
-| 03 | 主题与设计令牌 | 7 | 2 | S01-01 |
+| 03 | 主题与设计令牌 | 7 | 3 | S01-01 |
 | 04 | Markdown 栈 | 9 | 0 | S01-01 |
 | 05 | 聊天界面 | 18 | 0 | S03-*, S04-* |
 | 06 | 设置界面 | 6 | 0 | S03-* |
@@ -21,7 +21,7 @@
 | 08 | 更新与发布 | 11 | 0 | S07-* |
 | 09 | 平台对齐（Windows） | 9 | 0 | macOS 全链路验收 |
 | 10 | 测试与验收 | 7 | 0 | 与 02-09 并行 |
-| | **合计** | **104** | **26** | |
+| | **合计** | **104** | **27** | |
 
 > **准入条件是必要条件而非充分条件**：具体以各 spec 自身的「依赖」列为准（`RULES.md` §9.2）。
 > 规范强制 **Phase 单调性**：Phase `NN` 的 spec 只能依赖 Phase ≤ `NN` 的 spec（`RULES.md` §9.1）。
@@ -92,7 +92,7 @@
 | S03-01 | Theme 结构、Appearance 与全局安装 | S01-01 | `doing` | `phase-03/S03-01-theme-structure.md` |
 | S03-02 | 颜色令牌迁移（品牌色 / 状态色 / 中性阶） | S03-01 | `done` | `phase-03/S03-02-color-tokens.md` |
 | S03-03 | 外观令牌迁移（不透明填充 + 圆角 + 阴影） | S03-01, S00-04 | `done` | `phase-03/S03-03-appearance-tokens.md` |
-| S03-04 | 字体与排版令牌迁移 | S03-01 | `doing` | `phase-03/S03-04-typography-tokens.md` |
+| S03-04 | 字体与排版令牌迁移 | S03-01 | `done` | `phase-03/S03-04-typography-tokens.md` |
 | S03-05 | 平台字体栈与 TextRenderingMode | S03-04 | `todo` | `phase-03/S03-05-platform-fonts.md` |
 | S03-06 | 主题切换 | S03-01 | `todo` | `phase-03/S03-06-theme-switching.md` |
 | S03-07 | 令牌完备性与硬约束校验（脚本） | S03-02..S03-05 | `todo` | `phase-03/S03-07-token-guard.md` |
@@ -289,3 +289,4 @@
 | 2026-09-27 | S03-02 | `doing` → `done` | 令牌由 `global.css` 生成；158 个颜色值与离屏 WebKit 实算全部一致（0/255），篡改反证可检出。commit `db0945a` |
 | 2026-09-27 | S03-03 | `doing` → `done` | 圆角由生成器断言；阴影 18 项与 WebKit 逐层一致（含 inset）；更正本 spec 中「GPUI 不支持 inset」的错误判断。commit `be5bb81` |
 | 2026-09-27 | S03-04 | `todo` → `doing` | — |
+| 2026-09-27 | S03-04 | `doing` → `done` | 常量 50 项与 WebKit 一致；排版角色按 v1 `.t-*` 实际定义；退役 `design-tokens.md`（发现 3 类与代码不符）。commit `6d04e59` |
