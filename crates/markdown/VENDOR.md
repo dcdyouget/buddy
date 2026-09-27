@@ -18,6 +18,14 @@
 | `mermaid.rs` | **整体替换为 stub**（原 1836 行 → 100 行） | 原实现依赖 node / wasm；Buddy（v1）无 mermaid 功能 |
 | `parser.rs` / `selection.rs` / `path_range.rs` / `html.rs` / `html/*` | **未改动**（与上游逐字节一致） | — |
 
+## 依赖层面的修改（`Cargo.toml`，不在 `src/` patch 内）
+
+| 上游依赖 | Buddy | 原因 |
+|---------|-------|------|
+| `language` / `settings` / `theme_settings` / `mermaid_render` | 移除 | 由 `src/` 内 shim / stub 替代（见上表） |
+| `util`（zed） | 改为本地 [`util-shim/`](./util-shim)（包名 `buddy-md-util`，**lib 名仍为 `util`**，Apache-2.0） | 源码中 `use util::…` 无需改动；zed `util` 只被本 crate 使用却拖入约 21 个包（S04-03 实测 818 → 797）。替身重导出 `gpui_util`（zed `util` 本就从它重导出 `maybe!` / `ResultExt`），并逐字复制 `generate_heading_slug` |
+| — | 新增 `buddy-syntax` | 语法高亮（S04-02） |
+
 ## 复核方法
 
 ```bash
@@ -25,6 +33,8 @@ Z=~/.cargo/git/checkouts/zed-*/290cbcb/crates/markdown
 cp -R $Z/src /tmp/md && (cd /tmp/md && patch -p1 < <本目录>/patches/zed-markdown-290cbcb.patch)
 diff -r /tmp/md <本目录>/src    # 无输出 = 上游原文 + patch 与 vendored 逐字节一致
 ```
+
+`scripts/check-discipline.py` 的「S04-03 GPL patch 同步」自动执行上述复核（拦截验证 14 保证其有效）。
 
 ## 不在此 crate 中做的事
 

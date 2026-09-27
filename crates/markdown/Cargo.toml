@@ -22,7 +22,8 @@ theme.workspace = true
 ui.workspace = true
 collections.workspace = true
 sum_tree.workspace = true
-util.workspace = true
+# ⚠️ 不用 zed `util`（会拖入 36 个包）；改用本地替身，lib 名同为 `util`，vendored 源码无需改动（S04-03）
+util = { package = "buddy-md-util", path = "util-shim" }
 anyhow.workspace = true
 base64.workspace = true
 html5ever.workspace = true

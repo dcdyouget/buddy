@@ -1,0 +1,16 @@
+[package]
+name = "buddy-md-util"
+version.workspace = true
+edition.workspace = true
+publish = false
+# Apache-2.0 —— 内容取自 zed `crates/util`（Apache-2.0）与 `crates/gpui_util` 的重导出
+license = "Apache-2.0"
+description = "zed `util` 的最小替身：只提供 vendored markdown 用到的 3 项，避免 util 拖入 36 个包（S04-03）。"
+
+# lib 名保持 `util`：vendored markdown 源码中的 `use util::…` 无需任何修改
+[lib]
+name = "util"
+path = "src/lib.rs"
+
+[dependencies]
+gpui_util.workspace = true

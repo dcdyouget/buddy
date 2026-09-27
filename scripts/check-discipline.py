@@ -331,6 +331,49 @@ def check_no_hardcoded_colors(rep: Reporter, roots: list[Path] | None = None) ->
         rep.ok("S03-07-2 无硬编码颜色", "crates/ui 与 apps 的颜色均取自 tokens.rs")
 
 
+# ── S04-03：vendored markdown 的 GPL patch 与源码同步 ─────────────────
+
+VENDORED_MD = ROOT / "crates" / "markdown"
+ZED_REV_SHORT = "290cbcb"
+
+
+def _zed_markdown_src() -> Path | None:
+    """cargo 已拉取的 zed 源码中的 crates/markdown/src（与 workspace 锁定的 rev 一致）。"""
+    base = Path.home() / ".cargo" / "git" / "checkouts"
+    for d in sorted(base.glob(f"zed-*/{ZED_REV_SHORT}*/crates/markdown/src")):
+        return d
+    return None
+
+
+def check_vendor_patch(rep: Reporter) -> None:
+    """S04-03：上游原文 + patches/zed-markdown-<rev>.patch 必须逐字节等于 vendored src（GPL 修改释出不得过期）。"""
+    upstream = _zed_markdown_src()
+    patch = VENDORED_MD / "patches" / f"zed-markdown-{ZED_REV_SHORT}.patch"
+    if upstream is None:
+        rep.fail("S04-03 GPL patch 同步", "找不到 zed 源码（~/.cargo/git/checkouts/zed-*/%s*），请先 cargo fetch" % ZED_REV_SHORT)
+        return
+    if not patch.exists():
+        rep.fail("S04-03 GPL patch 同步", f"{rel(patch)} 不存在")
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp) / "src"
+        shutil.copytree(upstream, work)
+        rc, out = run(["patch", "-s", "-p1", "-i", str(patch)], cwd=work)
+        if rc != 0:
+            rep.fail("S04-03 GPL patch 同步", f"patch 无法应用到上游原文：\n{out.strip()[:400]}")
+            return
+        rc, out = run(["diff", "-r", str(work), str(VENDORED_MD / "src")])
+        if rc != 0:
+            rep.fail(
+                "S04-03 GPL patch 同步",
+                "上游原文 + patch ≠ vendored src（改了 vendored 代码却未重新生成 patch）：\n"
+                + out.strip()[:600]
+                + "\n\n修复方向：按 crates/markdown/VENDOR.md「复核方法」重新生成 patch",
+            )
+            return
+    rep.ok("S04-03 GPL patch 同步", f"上游 {ZED_REV_SHORT} + patch == crates/markdown/src")
+
+
 # ── 退役台账解析（检查 6 / 10 共用）───────────────────────────
 
 
@@ -687,6 +730,7 @@ def run_all(rep: Reporter) -> None:
     check_hard_constraints(rep)
     check_tokens_fresh(rep)
     check_no_hardcoded_colors(rep)
+    check_vendor_patch(rep)
 
     print("\n\033[1m=== 文档纪律 ===\033[0m")
     check_doc_paths(rep)
@@ -940,11 +984,26 @@ def self_test() -> int:
     finally:
         probe.unlink(missing_ok=True)
 
+    # ── 验证 14：改了 vendored 源码却不更新 patch ─────────────────
+    target = VENDORED_MD / "src" / "parser.rs"
+    backup = target.read_text(encoding="utf-8")
+    try:
+        target.write_text(backup + "\n// selftest: 未登记的修改\n", encoding="utf-8")
+        rep = Reporter()
+        check_vendor_patch(rep)
+        if rep.failures:
+            print("  \033[32mOK  \033[0m 拦截验证 14：改 vendored 源码不更新 patch → 检查报 FAIL ✅")
+        else:
+            print("  \033[31mFAIL\033[0m 拦截验证 14：patch 过期未检出")
+            failures += 1
+    finally:
+        target.write_text(backup, encoding="utf-8")
+
     print()
     if failures:
         print(f"\033[31m拦截验证失败 {failures} 项 —— 相关检查不可信\033[0m\n")
         return 1
-    print("\033[32m拦截验证全部 13 项通过 —— 检查确实有效\033[0m\n")
+    print("\033[32m拦截验证全部 14 项通过 —— 检查确实有效\033[0m\n")
     return 0
 
 

@@ -1,5 +1,7 @@
 // 移植自 Comet（~/Project/comet，crates/syntax，commit a4781608，crate 名 zeron-syntax），MIT 许可证，
-// 原文见本 crate 的 LICENSE-MIT-comet。Buddy 的改动：无（crate 更名为 buddy-syntax；测试文件 1 行 use 路径）。
+// 原文见本 crate 的 LICENSE-MIT-comet。Buddy 的改动：crate 更名为 buddy-syntax（测试文件 1 行 use 路径）；
+// S04-03 起 10 种 v1 无高亮的语言（bash / toml / c# / java / ruby / php / lua / nix / make / dockerfile）
+// 的语法包移入 `extra-languages` feature（默认关闭，`configuration` / `supports_language` 相应条件编译）。
 //! Syntax-highlighting contracts shared by Zeron's desktop surfaces.
 //!
 //! This crate intentionally has no UI, RPC, or engine dependencies. Public
@@ -299,6 +301,23 @@ fn line_starts(source: &str) -> Vec<usize> {
 
 /// Whether this build contains a parser and compatible highlight queries.
 pub const fn supports_language(language: LanguageId) -> bool {
+    // Buddy（S04-03）：extra-languages 关闭时，这 10 种语言的语法包不参与编译
+    #[cfg(not(feature = "extra-languages"))]
+    if matches!(
+        language,
+        LanguageId::Bash
+            | LanguageId::Toml
+            | LanguageId::CSharp
+            | LanguageId::Java
+            | LanguageId::Ruby
+            | LanguageId::Php
+            | LanguageId::Lua
+            | LanguageId::Nix
+            | LanguageId::Make
+            | LanguageId::Dockerfile
+    ) {
+        return false;
+    }
     let _ = language;
     true
 }
@@ -561,6 +580,11 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
     use LanguageId::*;
     match language {
         Rust => rust_configuration(),
+        // Buddy（S04-03）：v1 无高亮的语言默认不编译语法包（约 12 MB 静态解析表），返回 GrammarUnavailable
+        #[cfg(not(feature = "extra-languages"))]
+        Bash | Toml | CSharp | Java | Ruby | Php | Lua | Nix | Make | Dockerfile => {
+            Err(HighlightError::GrammarUnavailable(language))
+        }
         JavaScript | Jsx | TypeScript | Tsx => javascript_family_configuration(language),
         Python => make_configuration(
             tree_sitter_python::LANGUAGE.into(),
@@ -583,6 +607,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             "",
         ),
+        #[cfg(feature = "extra-languages")]
         Bash => make_configuration(
             tree_sitter_bash::LANGUAGE.into(),
             "bash",
@@ -590,6 +615,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             "",
         ),
+        #[cfg(feature = "extra-languages")]
         Toml => make_configuration(
             tree_sitter_toml_ng::LANGUAGE.into(),
             "toml",
@@ -637,6 +663,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             "",
         ),
+        #[cfg(feature = "extra-languages")]
         CSharp => make_configuration(
             tree_sitter_c_sharp::LANGUAGE.into(),
             "csharp",
@@ -644,6 +671,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             "",
         ),
+        #[cfg(feature = "extra-languages")]
         Java => make_configuration(
             tree_sitter_java::LANGUAGE.into(),
             "java",
@@ -665,6 +693,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             tree_sitter_swift::LOCALS_QUERY,
         ),
+        #[cfg(feature = "extra-languages")]
         Ruby => make_configuration(
             tree_sitter_ruby::LANGUAGE.into(),
             "ruby",
@@ -672,6 +701,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             tree_sitter_ruby::LOCALS_QUERY,
         ),
+        #[cfg(feature = "extra-languages")]
         Php => make_configuration(
             tree_sitter_php::LANGUAGE_PHP.into(),
             "php",
@@ -686,6 +716,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             "",
         ),
+        #[cfg(feature = "extra-languages")]
         Lua => make_configuration(
             tree_sitter_lua::LANGUAGE.into(),
             "lua",
@@ -693,6 +724,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             tree_sitter_lua::LOCALS_QUERY,
         ),
+        #[cfg(feature = "extra-languages")]
         Nix => make_configuration(
             tree_sitter_nix::LANGUAGE.into(),
             "nix",
@@ -700,6 +732,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             "",
         ),
+        #[cfg(feature = "extra-languages")]
         Make => make_configuration(
             tree_sitter_make::LANGUAGE.into(),
             "make",
@@ -707,6 +740,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             "",
         ),
+        #[cfg(feature = "extra-languages")]
         Dockerfile => make_configuration(
             tree_sitter_containerfile::LANGUAGE.into(),
             "dockerfile",

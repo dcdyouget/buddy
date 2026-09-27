@@ -4,6 +4,7 @@ members = [
     "crates/engine",
     "crates/ui",
     "crates/markdown",
+    "crates/markdown/util-shim",
     "crates/syntax",
     "apps/buddy",
 ]
@@ -42,7 +43,7 @@ gpui_tokio = { git = "https://github.com/zed-industries/zed", rev = "290cbcb9cb6
 # vendored markdown（S04-01）所需的 zed 内部 crate —— 同一 rev
 collections = { git = "https://github.com/zed-industries/zed", rev = "290cbcb9cb6a5dcbe0060431a126ad19e743f2f4" }
 sum_tree = { git = "https://github.com/zed-industries/zed", rev = "290cbcb9cb6a5dcbe0060431a126ad19e743f2f4" }
-util = { git = "https://github.com/zed-industries/zed", rev = "290cbcb9cb6a5dcbe0060431a126ad19e743f2f4" }
+gpui_util = { git = "https://github.com/zed-industries/zed", rev = "290cbcb9cb6a5dcbe0060431a126ad19e743f2f4" }
 
 # ── `gpui_platform` 的两个**必需** feature（S00-01 实测）──
 #
@@ -104,13 +105,18 @@ env_logger = "0.11"
 #   "patch `X` was not used in the crate graph"
 # 保留它们只会制造噪音，故暂不声明：
 #
-#   tree-sitter-language  —— 引入 tree-sitter 语法时（S04-02）需要
+#   tree-sitter-language  —— ~~引入 tree-sitter 语法时（S04-02）需要~~ **实测不需要**（S04-02）：该 patch 服务于
+#                            zed 的 tree-sitter fork；Buddy 用 crates.io 上游 tree-sitter 0.26 + tree-sitter-language 0.1.8，
+#                            不加 patch 即编译通过、Comet 语法测试 26 项通过。仅当改用 zed fork 时才需要：
 #                            { git = "https://github.com/tree-sitter/tree-sitter", rev = "43623ec9bf0eaaf7113285c46e8a09018f181b18" }
+#   async-process         —— 原由 zed `util` → `smol` 引入；S04-03 起 markdown 改用本地 util 替身
+#                            （crates/markdown/util-shim），闭包中已无 async-process（`cargo tree -i async-process` 为空）。
+#                            若将来重新依赖 zed `util`，必须加回：
+#                            { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
 #   notify / notify-types —— 引入 fs 监听时（S04-04 后台解析、S07 文件监听）需要
 #                            { git = "https://github.com/zed-industries/notify", rev = "d842f16b2716bd60f09caf3ae3a894237ab38f54" }
 #
 # ⚠️ 到那时**必须加回来**，否则会因 API 不匹配而编译失败。见
 #    docs/evidence/s00-06/README.md §1 与 THIRD_PARTY_NOTICES.md §5。
 [patch.crates-io]
-async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
 async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }
