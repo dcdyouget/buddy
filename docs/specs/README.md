@@ -95,7 +95,7 @@
 | S03-04 | 字体与排版令牌迁移 | S03-01 | `done` | `phase-03/S03-04-typography-tokens.md` |
 | S03-05 | 平台字体栈与 TextRenderingMode | S03-04 | `blocked` | `phase-03/S03-05-platform-fonts.md` |
 | S03-06 | 主题切换 | S03-01 | `blocked` | `phase-03/S03-06-theme-switching.md` |
-| S03-07 | 令牌完备性与硬约束校验（脚本） | S03-02..S03-05 | `todo` | `phase-03/S03-07-token-guard.md` |
+| S03-07 | 令牌完备性与硬约束校验（脚本） | S03-02..S03-05 | `doing` | `phase-03/S03-07-token-guard.md` |
 
 ---
 
