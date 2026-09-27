@@ -11,7 +11,7 @@
 //! `family` = 栈中第一个已安装者，`fallbacks` = 其后已安装者（给 CJK 等缺字形时用）。
 
 use super::tokens::fonts;
-use gpui::{App, Font, FontFallbacks, TextRenderingMode, font};
+use gpui::{App, Font, FontFallbacks, Global, TextRenderingMode, font};
 use std::collections::HashSet;
 
 /// GPUI 的系统 UI 字体占位名（macOS 映射为 `.AppleSystemUIFont`）
@@ -64,14 +64,41 @@ fn installed(cx: &App) -> HashSet<String> {
     names
 }
 
+/// 启动时解析好的字体（[`install`]）
+///
+/// **为什么缓存**：`installed()` 经 CoreText 枚举全部系统字体，单次数十毫秒；界面每帧要取十几次
+/// （消息样式、代码块、行内代码、每个序号徽章……），实测不缓存时整窗重绘一帧约 620ms（S04 目检发现卡顿）。
+/// 已安装字体在运行期间视为不变（v1 同样只在页面加载时解析 CSS 字体栈）。
+struct ResolvedFonts {
+    ui: Font,
+    mono: Font,
+}
+
+impl Global for ResolvedFonts {}
+
+/// 解析并缓存界面 / 等宽字体。由 [`crate::init_theme`] 调用，应用无需单独调用。
+pub fn install(cx: &mut App) {
+    let names = installed(cx);
+    cx.set_global(ResolvedFonts {
+        ui: resolve_stack(fonts::FONT_SANS, &names, SYSTEM_UI),
+        mono: resolve_stack(fonts::FONT_MONO, &names, "Menlo"),
+    });
+}
+
 /// 界面字体（`--font-sans`）
 pub fn ui_font(cx: &App) -> Font {
-    resolve_stack(fonts::FONT_SANS, &installed(cx), SYSTEM_UI)
+    match cx.try_global::<ResolvedFonts>() {
+        Some(f) => f.ui.clone(),
+        None => resolve_stack(fonts::FONT_SANS, &installed(cx), SYSTEM_UI),
+    }
 }
 
 /// 等宽字体（`--font-mono`）；栈中都没装时用 macOS 自带的 Menlo
 pub fn mono_font(cx: &App) -> Font {
-    resolve_stack(fonts::FONT_MONO, &installed(cx), "Menlo")
+    match cx.try_global::<ResolvedFonts>() {
+        Some(f) => f.mono.clone(),
+        None => resolve_stack(fonts::FONT_MONO, &installed(cx), "Menlo"),
+    }
 }
 
 /// 文字渲染模式：显式 `Grayscale`。

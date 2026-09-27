@@ -4,6 +4,7 @@
 //! cargo run -p buddy-app --example markdown_preview                  # 目检窗口（S04-07 代码块 / S04-08 GFM）
 //! cargo run -p buddy-app --example markdown_preview -- --selftest   # 自检后退出
 //! cargo run --release -p buddy-app --example markdown_preview -- --bench  # S04-04 解析耗时测量
+//! cargo run [--release] -p buddy-app --example markdown_preview -- --frametime  # 整窗重绘一帧的耗时
 //! ```
 //!
 //! 自检 T03（S04-02）：代码高亮不改变布局 —— 同一行代码按「带高亮样式」与「不带」各排版一次，
@@ -15,6 +16,8 @@
 //!
 //! 自检 T05（S04-08）：样例中每个 GFM 块元素（标题 / 引用 / 列表 / 列表项 / 表格 / 单元格 / 分隔线）
 //! 都经过 Buddy 的装饰回调，次数与 CommonMark+GFM 解析结果逐类一致。
+//!
+//! 自检 T10：整窗重绘一帧的中位耗时须在预算内（防止每帧做昂贵操作，如枚举系统字体）。
 //!
 //! 自检 T06（S04-08）：markdown 中的网络图片经 Buddy 的图片解析器与 HTTP 客户端真实发起请求
 //! （本地服务返回一张 1×1 PNG），并解码成功。
@@ -497,7 +500,16 @@ fn selftest_t04(handle: WindowHandle<Preview>, cx: &mut App) {
         println!("{} S04-08 T05 每个 GFM 块元素都经过 Buddy 装饰（逐类计数一致，覆盖 {} 类）", if t05 { "PASS" } else { "FAIL" }, want.len());
         let t06 = selftest_t06(handle, &md, cx).await;
         let t07 = selftest_t07(handle, &md, cx).await;
-        std::process::exit(if ok && t05 && t06 && t07 { 0 } else { 1 });
+        // T10：整窗重绘耗时（用回完整样例文档）
+        let full = doc.clone(); // 本函数开头的 `doc` 即完整样例
+        md.update(cx, |m, cx| m.replace(full.clone(), cx));
+        wait_parsed(&md, full.len(), cx).await;
+        let samples = measure_frames(handle, 30, cx).await;
+        let median = samples[samples.len() / 2];
+        let t10 = median < FRAME_BUDGET_MS;
+        println!("T10: 整窗重绘 30 帧，中位 {median:.2} ms（预算 {FRAME_BUDGET_MS} ms）");
+        println!("{} S04 T10 重绘耗时在预算内", if t10 { "PASS" } else { "FAIL" });
+        std::process::exit(if ok && t05 && t06 && t07 && t10 { 0 } else { 1 });
     })
     .detach();
 }
@@ -667,10 +679,50 @@ fn bench(cx: &mut App) {
     .detach();
 }
 
+/// 强制整窗重绘 n 帧（与真实交互的每帧路径相同：布局 + 预绘制 + 绘制），返回升序的耗时（ms）
+async fn measure_frames(handle: WindowHandle<Preview>, n: usize, cx: &mut AsyncApp) -> Vec<f64> {
+    let mut samples = Vec::new();
+    for _ in 0..n {
+        let t = Instant::now();
+        let _ = cx.update_window(handle.into(), |_, window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+        samples.push(t.elapsed().as_secs_f64() * 1000.0);
+        cx.background_executor().timer(Duration::from_millis(5)).await;
+    }
+    samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    samples
+}
+
+/// 整窗重绘一帧的预算（ms）。实测 debug 5.8 / release 1.1；字体未缓存时 620（S04 目检卡顿的根因）
+const FRAME_BUDGET_MS: f64 = 50.0;
+
+/// 报告整窗重绘耗时分布
+fn frametime(handle: WindowHandle<Preview>, cx: &mut App) {
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let md = handle.read_with(cx, |p, _| p.md.clone()).expect("窗口根视图");
+        wait_parsed(&md, doc().len(), cx).await;
+        let samples = measure_frames(handle, 120, cx).await;
+        let pick = |q: f64| samples[((samples.len() - 1) as f64 * q) as usize];
+        println!(
+            "frametime profile={} frames={} median_ms={:.2} p95_ms={:.2} max_ms={:.2}",
+            if cfg!(debug_assertions) { "debug" } else { "release" },
+            samples.len(),
+            pick(0.5),
+            pick(0.95),
+            pick(1.0)
+        );
+        std::process::exit(0);
+    })
+    .detach();
+}
+
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let self_test = std::env::args().any(|a| a == "--selftest");
     let run_bench = std::env::args().any(|a| a == "--bench");
+    let run_frametime = std::env::args().any(|a| a == "--frametime");
     application().with_assets(buddy_ui::icons::Assets).run(move |cx: &mut App| {
         buddy_ui::init_theme(cx);
         Theme::install(Appearance::Light, cx);
@@ -700,6 +752,8 @@ fn main() {
                 std::process::exit(1);
             }
             selftest_t04(handle, cx);
+        } else if run_frametime {
+            frametime(handle, cx);
         }
     });
 }

@@ -119,4 +119,6 @@ impl ThemeSettingsProvider for BuddyThemeSettings {
 pub fn init_theme(cx: &mut App) {
     theme::init(LoadThemes::JustBase, cx);
     theme::set_theme_settings_provider(Box::new(BuddyThemeSettings::default()), cx);
+    // 字体栈解析很贵（枚举系统字体），启动时做一次并缓存（见 theme_system::fonts::install）
+    theme_system::fonts::install(cx);
 }
