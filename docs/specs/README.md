@@ -14,14 +14,14 @@
 | 01 | 工程骨架与分层 | 6 | **6** | **Phase 00 Go ✅ 已满足** |
 | 02 | 引擎层移植 | 9 | **9** | S01-01 |
 | 03 | 主题与设计令牌 | 7 | 5 | S01-01 |
-| 04 | Markdown 栈 | 9 | 4 | S01-01 |
+| 04 | Markdown 栈 | 9 | 5 | S01-01 |
 | 05 | 聊天界面 | 18 | 0 | S03-*, S04-* |
 | 06 | 设置界面 | 6 | 0 | S03-* |
 | 07 | 应用外壳与窗口行为 | 13 | 0 | S01-01 |
 | 08 | 更新与发布 | 11 | 0 | S07-* |
 | 09 | 平台对齐（Windows） | 9 | 0 | macOS 全链路验收 |
 | 10 | 测试与验收 | 7 | 0 | 与 02-09 并行 |
-| | **合计** | **104** | **33** | |
+| | **合计** | **104** | **34** | |
 
 > **准入条件是必要条件而非充分条件**：具体以各 spec 自身的「依赖」列为准（`RULES.md` §9.2）。
 > 规范强制 **Phase 单调性**：Phase `NN` 的 spec 只能依赖 Phase ≤ `NN` 的 spec（`RULES.md` §9.1）。
@@ -109,7 +109,7 @@
 | S04-02 | 引入 Comet syntax 替换 language stub | S04-01 | `done` | `phase-04/S04-02-syntax-highlight.md` |
 | S04-03 | 闭包收敛与依赖清理（含 mermaid / html 裁剪决策） | S04-02 | `done` | `phase-04/S04-03-closure.md` |
 | S04-04 | 块粒度增量解析与后台合并 | S04-03 | `done` | `phase-04/S04-04-incremental-parse.md` |
-| S04-05 | 半截标记修补（mend） | S04-04 | `doing` | `phase-04/S04-05-mend.md` |
+| S04-05 | 半截标记修补（mend） | S04-04 | `done` | `phase-04/S04-05-mend.md` |
 | S04-06 | 流式渐显（veil） | S04-04 | `todo` | `phase-04/S04-06-veil.md` |
 | S04-07 | 代码块渲染与复制 | S04-02 | `todo` | `phase-04/S04-07-code-block.md` |
 | S04-08 | GFM 元素（表格 / 任务列表 / 删除线 / 链接 / 图片） | S04-03 | `todo` | `phase-04/S04-08-gfm.md` |
@@ -299,3 +299,4 @@
 | 2026-09-27 | S04-02 | `doing` → `done` | Comet syntax 接入；v1 语言集 17 种；T03 布局不变（6e-5 px）并反证；+30 包全 MIT。commit `3aa039b` |
 | 2026-09-27 | S04-03 | `todo` → `doing` → `done` | util 替身（−21 包）、10 个未用语法包 feature 化（约 12 MB）、HTML 按 v1 实测转义；新增 GPL patch 同步检查。commit `6c55b0c` |
 | 2026-09-27 | S04-04 | `doing` → `done` | 实测后决定不做增量解析：release 5000 行 9 ms、流式一帧内追上（额外 ≤1.1 ms）。commit `b919826` |
+| 2026-09-27 | S04-05 | `doing` → `done` | 移植 v1 normalizer 两项规范化（6 测试含反证）；**不做 Comet 流式 mend**（v1 无此行为）；流式观感目检移交 S05-08。commit `c956292` |

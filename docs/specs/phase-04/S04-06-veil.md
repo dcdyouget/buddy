@@ -13,6 +13,7 @@
 ## 输入
 
 - Comet `veil.rs`（MIT，508 行）
+- v1 流式行为用例（`v1-final:src/components/chat/StreamingMarkdown.test.tsx`）：`:151` 最新字符渐显且星标在下一位置、`:199` 星标锚定列表最后可见字符、`:214` 首字符前显示呼吸星标、`:230` 代码内容不加字符过渡、`:245` 未闭合流式围栏闭合前保持纯文本（S04-05 移交）
 - v1 令牌：`--delay-streaming-char-age-1..8`（-32..-256ms）、`--duration-streaming-char-settle` 260ms（`theme_system::tokens::motion`）
 
 ## 实现要点
