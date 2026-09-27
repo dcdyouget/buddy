@@ -1,6 +1,6 @@
 # S04-02 引入 Comet syntax 替换 language stub
 
-> 状态: `todo`
+> 状态: `doing`
 > Phase: 04
 > 依赖: S04-01
 > 阻塞: —

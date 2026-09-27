@@ -106,7 +106,7 @@
 | ID | Spec | 依赖 | 状态 | 文件 |
 |----|------|------|------|------|
 | S04-01 | vendor zed markdown 并以 shim 替换 settings / language / mermaid | S01-02 | `done` | `phase-04/S04-01-vendor-markdown.md` |
-| S04-02 | 引入 Comet syntax 替换 language stub | S04-01 | `todo` | `phase-04/S04-02-syntax-highlight.md` |
+| S04-02 | 引入 Comet syntax 替换 language stub | S04-01 | `doing` | `phase-04/S04-02-syntax-highlight.md` |
 | S04-03 | 闭包收敛与依赖清理（含 mermaid / html 裁剪决策） | S04-02 | `todo` | `phase-04/S04-03-closure.md` |
 | S04-04 | 块粒度增量解析与后台合并 | S04-03 | `todo` | `phase-04/S04-04-incremental-parse.md` |
 | S04-05 | 半截标记修补（mend） | S04-04 | `todo` | `phase-04/S04-05-mend.md` |
