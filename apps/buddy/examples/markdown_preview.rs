@@ -2,15 +2,19 @@
 //!
 //! ```text
 //! cargo run -p buddy-app --example markdown_preview -- --selftest   # 自检后退出
+//! cargo run --release -p buddy-app --example markdown_preview -- --bench  # S04-04 解析耗时测量
 //! ```
 //!
 //! 自检 T03（S04-02）：代码高亮不改变布局 —— 同一行代码按「带高亮样式」与「不带」各排版一次，
 //! 宽度与行高必须完全相同（v1 的关键字字重 600、注释斜体在等宽字体下不改变字宽）。
 
 use buddy_ui::gpui::{
-    App, Bounds, Context, Font, FontStyle, Hsla, Render, TextRun, Window, WindowBounds,
-    WindowOptions, div, prelude::*, px, size,
+    App, AppContext, AsyncApp, Bounds, Context, Entity, Font, FontStyle, Hsla, Render, TextRun,
+    Window, WindowBounds, WindowOptions, div, prelude::*, px, size,
 };
+use buddy_ui::markdown::zed_markdown::{Markdown, syntax::LanguageRegistry};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use buddy_ui::gpui_platform::application;
 use buddy_ui::markdown::{self, zed_markdown::syntax::{Rope, language_for_tag}};
 use buddy_ui::theme_system::{Appearance, BuddyTheme, Theme, fonts, tokens::metrics};
@@ -100,14 +104,114 @@ fn selftest(window: &mut Window, cx: &mut App) -> bool {
     pass
 }
 
+
+/// 生成 n 行的混合文档：段落 / 列表 / 表格 / 代码块（rust、ts）交替，接近真实长回复
+fn long_doc(lines: usize) -> String {
+    let blocks = [
+        "## 小节标题\n\nBuddy 是一个跨平台的 AI 聊天工具，**按下热键**即可唤起，`inline code` 与 [链接](https://example.com)。\n",
+        "- 第一点\n- 第二点，包含 *强调*\n  - 嵌套项\n",
+        "| 列 A | 列 B |\n|------|------|\n| 1 | 2 |\n| 3 | 4 |\n",
+        "```rust\nfn fib(n: u64) -> u64 {\n    match n { 0 | 1 => n, _ => fib(n - 1) + fib(n - 2) }\n}\n```\n",
+        "```typescript\nexport const add = (a: number, b: number): number => a + b; // sum\n```\n",
+    ];
+    let mut out = String::new();
+    let mut i = 0;
+    while out.lines().count() < lines {
+        out.push_str(blocks[i % blocks.len()]);
+        out.push('\n');
+        i += 1;
+    }
+    out
+}
+
+/// 上游在解析进行中收到新内容会置 `should_reparse`，完成后再解析一轮；
+/// 因此 `!is_parsing()` 即「解析结果已追上当前全部源文本」（`parsed_markdown()` 仅 test-support 可见）
+async fn wait_parsed(md: &Entity<Markdown>, want_len: usize, cx: &mut AsyncApp) {
+    loop {
+        let done = md.read_with(cx, |m, _| !m.is_parsing() && m.source().len() >= want_len);
+        if done {
+            return;
+        }
+        cx.background_executor().timer(Duration::from_micros(200)).await;
+    }
+}
+
+/// S04-04：① 一次性解析不同长度文档的耗时；② 按流式节奏（每 16ms 追加一段）追加时，
+/// 追加到解析结果可见的额外延迟与实际解析次数（验证上游后台解析 + 合并是否够用）
+fn bench(cx: &mut App) {
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let registry = Arc::new(LanguageRegistry::default());
+        for lines in [200usize, 1000, 5000] {
+            let doc = long_doc(lines);
+            let md = cx.new(|cx| Markdown::new("".into(), Some(registry.clone()), None, cx));
+            let mut samples = Vec::new();
+            for _ in 0..5 {
+                md.update(cx, |m, cx| m.replace("", cx));
+                wait_parsed(&md, 0, cx).await;
+                let t = Instant::now();
+                md.update(cx, |m, cx| m.replace(doc.clone(), cx));
+                wait_parsed(&md, doc.len(), cx).await;
+                samples.push(t.elapsed().as_secs_f64() * 1000.0);
+            }
+            samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            println!("bench full-parse lines={lines} bytes={} median_ms={:.2} max_ms={:.2}", doc.len(), samples[2], samples[4]);
+        }
+        for lines in [1000usize, 5000] {
+            let doc = long_doc(lines);
+            let md = cx.new(|cx| Markdown::new("".into(), Some(registry.clone()), None, cx));
+            // 预先灌入大部分文档，只流式追加末尾：衡量「长回复末段」的追加延迟
+            let prefill = doc.len() * 9 / 10;
+            let mut pos = prefill;
+            while !doc.is_char_boundary(pos) {
+                pos += 1;
+            }
+            md.update(cx, |m, cx| m.replace(doc[..pos].to_string(), cx));
+            wait_parsed(&md, pos, cx).await;
+            let chunk = 48; // 约等于真实流式一次到达的字节数
+            let (mut max_lag, mut appends, mut caught_up_within_frame) = (0f64, 0usize, 0usize);
+            while pos < doc.len() && appends < 300 {
+                let mut end = (pos + chunk).min(doc.len());
+                while !doc.is_char_boundary(end) {
+                    end += 1;
+                }
+                let piece = doc[pos..end].to_string();
+                pos = end;
+                let t = Instant::now();
+                md.update(cx, |m, cx| m.append(&piece, cx));
+                appends += 1;
+                cx.background_executor().timer(Duration::from_millis(16)).await;
+                if md.read_with(cx, |m, _| !m.is_parsing()) {
+                    caught_up_within_frame += 1;
+                } else {
+                    wait_parsed(&md, pos, cx).await; // 一帧内未追上：等到追上，计入额外延迟
+                }
+                max_lag = max_lag.max(t.elapsed().as_secs_f64() * 1000.0 - 16.0);
+            }
+            println!(
+                "bench streaming lines={lines} doc_bytes={} appends={appends} caught_up_within_one_frame={caught_up_within_frame} max_extra_lag_ms={:.2}",
+                doc.len(),
+                max_lag.max(0.0)
+            );
+        }
+        println!("BENCH DONE");
+        std::process::exit(0);
+    })
+    .detach();
+}
+
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let self_test = std::env::args().any(|a| a == "--selftest");
+    let run_bench = std::env::args().any(|a| a == "--bench");
     application().run(move |cx: &mut App| {
         buddy_ui::init_theme(cx);
         Theme::install(Appearance::Light, cx);
         fonts::install_text_rendering(cx);
         markdown::init(cx);
+        if run_bench {
+            bench(cx);
+            return;
+        }
         let bounds = Bounds::centered(None, size(px(400.0), px(200.0)), cx);
         let handle = cx
             .open_window(
