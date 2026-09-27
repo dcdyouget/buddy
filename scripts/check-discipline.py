@@ -182,6 +182,7 @@ def check_licenses(rep: Reporter) -> None:
     for p, want in [
         ("crates/ui/Cargo.toml", "GPL-3.0-or-later"),
         ("apps/buddy/Cargo.toml", "GPL-3.0-or-later"),
+        ("crates/markdown/Cargo.toml", "GPL-3.0-or-later"),  # vendored zed markdown（S04-01）
     ]:
         txt = (ROOT / p).read_text(encoding="utf-8")
         m = re.search(r'^license\s*=\s*"([^"]+)"', txt, re.M)
@@ -192,7 +193,7 @@ def check_licenses(rep: Reporter) -> None:
             )
             ok = False
     if ok:
-        rep.ok("S01-04-4b 界面层许可证声明", "GPL-3.0-or-later ×2")
+        rep.ok("S01-04-4b 界面层许可证声明", "GPL-3.0-or-later ×3（ui / app / markdown）")
 
     # NOTICE 与许可证全文必须存在
     missing = [
@@ -242,8 +243,11 @@ def check_hard_constraints(rep: Reporter) -> None:
         "[\U0001F300-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF]"
     )
     emoji_hits: list[str] = []
+    # vendored 第三方源码（zed markdown）不属于 Buddy 界面代码：其中 emoji 仅见于测试用例字符串
+    # （如 `"café ☕ naïve"`），不是图标；为保持与 zed 原文一致不改源码，故不纳入本项扫描
+    vendored = ROOT / "crates" / "markdown"
     for f in files:
-        if f.suffix == ".css":
+        if f.suffix == ".css" or vendored in f.parents:
             continue
         for i, line in enumerate(f.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
             code = line.split("//")[0]

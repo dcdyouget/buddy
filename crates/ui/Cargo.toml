@@ -15,6 +15,9 @@ theme.workspace = true
 ui.workspace = true
 gpui_tokio.workspace = true
 
+# vendored zed markdown（GPL，S04-01）
+buddy-markdown.workspace = true
+
 # 引擎层（MIT）—— 注意依赖方向：UI 依赖 engine，反向不允许
 buddy-engine.workspace = true
 

@@ -23,7 +23,7 @@
 //! # 模块（S03-* / S05-* / S07-* 将逐一迁入）
 //!
 //! - `theme_system` —— 设计令牌（`S03-*`）
-//! - `markdown` —— vendored markdown（`S04-*`）
+//! - [`markdown`] —— vendored zed markdown 的接入（`S04-*`，渲染器在 `crates/markdown`）
 //! - `chat` / `settings` —— 页面（`S05-*` / `S06-*`）
 //! - `shell` —— 窗口外壳（`S07-*`）
 //! - [`chat_bridge`] —— tokio（engine）↔ GPUI 前台的事件桥接（`S02-06`）
@@ -44,6 +44,7 @@ pub use gpui_platform;
 pub use theme::{self, ActiveTheme};
 
 pub mod chat_bridge;
+pub mod markdown;
 pub mod theme_system;
 
 use gpui::{App, Font, Pixels};

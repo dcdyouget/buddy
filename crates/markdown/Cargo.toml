@@ -1,0 +1,45 @@
+[package]
+name = "buddy-markdown"
+version.workspace = true
+edition.workspace = true
+publish = false
+# GPL-3.0-or-later —— vendored 自 zed `crates/markdown`（其 license 字段即 GPL-3.0-or-later）
+license = "GPL-3.0-or-later"
+description = "vendored zed markdown（rev 290cbcb），以 shim 替换 settings / language / mermaid_render。"
+
+# markdown.rs 是 zed 原 crate 的根文件，大量使用 `crate::` 路径 → 保持为 crate 根
+[lib]
+name = "zed_markdown"
+path = "src/markdown.rs"
+doctest = false
+# vendored 源码自带的单元测试依赖 zed 的测试设施（gpui/test-support、util::test）与被 stub 掉的
+# `language`，在本 crate 中无意义且无法编译 → 不编译。Buddy 的 markdown 测试写在 buddy-ui。
+test = false
+
+[dependencies]
+gpui.workspace = true
+theme.workspace = true
+ui.workspace = true
+collections.workspace = true
+sum_tree.workspace = true
+util.workspace = true
+anyhow.workspace = true
+base64.workspace = true
+html5ever.workspace = true
+linkify.workspace = true
+log.workspace = true
+markup5ever_rcdom.workspace = true
+pulldown-cmark.workspace = true
+smallvec.workspace = true
+stacksafe.workspace = true
+# ⚠️ 与 zed 原 Cargo.toml 的差异：移除 language / settings / theme_settings / mermaid_render
+#    （由 src/{language_stub,theme_settings_shim,mermaid}.rs 替代，理由见各文件头与 S00-06）
+
+[features]
+# zed 原 crate 的 feature（vendored 源码中有 `cfg(feature = "test-support")`），保留同名以免 unexpected_cfgs
+test-support = []
+
+[lints.rust]
+# mermaid 被 stub 替换后，vendored 源码中的 mermaid 缩放常量与方法不再被调用。
+# 为保持 vendored 文件与 zed 原文逐字节一致（仅 import 级 patch），在此放行而不改源码。
+dead_code = "allow"

@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/engine",
     "crates/ui",
+    "crates/markdown",
     "apps/buddy",
 ]
 # ⚠️ 必须 exclude v1 的 Tauri 工程。
@@ -23,6 +24,7 @@ authors = ["Buddy"]
 # ── 分层内部 crate ──
 buddy-engine = { path = "crates/engine" }
 buddy-ui = { path = "crates/ui" }
+buddy-markdown = { path = "crates/markdown" }
 
 # ── GPUI 与 zed crate（S00-01 实测的组合）──
 #
@@ -35,6 +37,10 @@ theme = { git = "https://github.com/zed-industries/zed", rev = "290cbcb9cb6a5dcb
 ui = { git = "https://github.com/zed-industries/zed", rev = "290cbcb9cb6a5dcbe0060431a126ad19e743f2f4" }
 # tokio ↔ GPUI 桥接（S00-08 实测可用）
 gpui_tokio = { git = "https://github.com/zed-industries/zed", rev = "290cbcb9cb6a5dcbe0060431a126ad19e743f2f4" }
+# vendored markdown（S04-01）所需的 zed 内部 crate —— 同一 rev
+collections = { git = "https://github.com/zed-industries/zed", rev = "290cbcb9cb6a5dcbe0060431a126ad19e743f2f4" }
+sum_tree = { git = "https://github.com/zed-industries/zed", rev = "290cbcb9cb6a5dcbe0060431a126ad19e743f2f4" }
+util = { git = "https://github.com/zed-industries/zed", rev = "290cbcb9cb6a5dcbe0060431a126ad19e743f2f4" }
 
 # ── `gpui_platform` 的两个**必需** feature（S00-01 实测）──
 #
@@ -59,6 +65,14 @@ log = "0.4"
 chrono = "0.4"
 dom_query = "0.27"
 base64 = "0.22"
+# vendored markdown（S04-01）—— 版本与 zed workspace（rev 290cbcb）一致，同 S00-06
+anyhow = "1.0.86"
+html5ever = "0.39"
+linkify = "0.10.0"
+markup5ever_rcdom = "0.39"
+pulldown-cmark = { version = "0.13.0", default-features = false }
+smallvec = { version = "1.6", features = ["union", "const_new"] }
+stacksafe = "1.0"
 tempfile = "3"
 # 数据目录定位，与 v1 Tauri app_data_dir 同源（tauri 2.11 用 dirs 6）
 dirs = "6"

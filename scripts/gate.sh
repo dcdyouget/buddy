@@ -10,6 +10,9 @@ cd "$(dirname "$0")/.."
 
 python3 scripts/check-discipline.py >/tmp/buddy-gate.log 2>&1 || { cat /tmp/buddy-gate.log; echo "gate: 纪律检查失败"; exit 1; }
 python3 scripts/check-discipline.py --self-test >/tmp/buddy-gate.log 2>&1 || { cat /tmp/buddy-gate.log; echo "gate: 拦截验证失败"; exit 1; }
-cargo check --workspace --all-targets 2>&1 | tee /tmp/buddy-gate.log | grep -qE '^(warning|error)' && { grep -E '^(warning|error)' -A6 /tmp/buddy-gate.log | head -40; echo "gate: 编译有 warning / error"; exit 1; }
+# buddy-markdown 只查 lib：vendored zed 源码自带的单元测试依赖 zed 测试设施与被 stub 的 language，
+# 无法也无需编译（不改 vendored 源码以保持与 zed 原文一致，见 crates/markdown/Cargo.toml）
+{ cargo check --workspace --all-targets --exclude buddy-markdown 2>&1; cargo check -p buddy-markdown --lib 2>&1; } \
+  | tee /tmp/buddy-gate.log | grep -qE '^(warning|error)' && { grep -E '^(warning|error)' -A6 /tmp/buddy-gate.log | head -40; echo "gate: 编译有 warning / error"; exit 1; }
 (cd src-tauri && cargo check >/tmp/buddy-gate.log 2>&1) || { tail -20 /tmp/buddy-gate.log; echo "gate: v1 编译失败"; exit 1; }
 echo "gate: 全部通过"
