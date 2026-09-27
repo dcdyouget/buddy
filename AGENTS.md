@@ -66,7 +66,7 @@ Buddy is a cross-platform (macOS / Windows) AI chat tool. Press a global hotkey 
 
 - 不做设计稿 / 视觉稿 / 动效稿另立产物
 - 视觉真值：**v1 取 `src/styles/global.css`，v2 取 `Theme`（`crates/ui`）**
-- 设计令牌真值：`docs/design/design-tokens.md`（实现后亦退役，见 `RULES.md` §7）
+- 设计令牌真值：v1 `src/styles/global.css`；v2 由其生成的 `crates/ui/src/theme_system/tokens.rs`（`scripts/theme/gen_tokens.py`）
 - 需要看效果就看运行的代码；需要改设计就改代码
 
 ### 当前进度（会变化，以注册表为准）
@@ -108,7 +108,6 @@ Buddy is a cross-platform (macOS / Windows) AI chat tool. Press a global hotkey 
 | `docs/specs/design-deletions.md` | 设计文档退役台账 | 删除设计文档时 |
 | `docs/evidence/v1-baseline/` | **v1 基线**：页面×状态目检清单、令牌实测值、性能、长会话样本（S01-06 产出；不含截图，视觉验收由用户对照运行中的 v1 目检） | 做验收时 |
 | `docs/design/overview.md` | Architecture overview & key decisions | When needing context |
-| `docs/design/design-tokens.md` | Colors, fonts, spacing, shadows | When writing UI code |
 | `docs/design/pages-and-states.md` | 7 page specs + state machine | When building pages |
 | `docs/design/component-mapping.md` | Design → React component map | When building components |
 | `docs/design/rust-architecture.md` | Rust module layout & responsibilities | When writing Rust |

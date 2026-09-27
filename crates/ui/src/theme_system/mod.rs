@@ -9,6 +9,14 @@
 //! Buddy 自己的界面**只读** [`Theme`]（`cx.buddy_theme()`），不读 zed 主题色 ——
 //! 否则会混入 zed 的配色，偏离 v1 观感。
 //!
+//! # 阴影的用途（迁自已退役的 `design-tokens.md` §Shadows）
+//!
+//! | 令牌 | 用于 |
+//! |------|------|
+//! | `shadow_static` | 输入框、列表项、标签（浅色 alpha ≤ 0.05） |
+//! | `shadow_floating_sm` | 设置页内的浮层 |
+//! | `shadow_floating_md` | 主窗口、滑入面板 |
+//!
 //! # 外观只有浅 / 深两种
 //!
 //! v1 的主题设置只有 `light` / `dark`（`src/types/index.ts` `Theme`、engine `models::Theme`），
@@ -53,6 +61,38 @@ impl ShadowSpec {
 /// 把整组阴影转为 GPUI 可直接使用的列表（`div().shadow(..)`）
 pub fn box_shadows(layers: &[ShadowSpec]) -> Vec<BoxShadow> {
     layers.iter().map(ShadowSpec::to_box_shadow).collect()
+}
+
+/// 排版角色（v1 `global.css` 的 `.t-*` 类，`v1-final` 第 1574–1578 行）
+///
+/// v1 只定义了这 5 个角色；`design-tokens.md` 所列的 `t-display` / `t-overline` 在代码中**从未存在**。
+/// 注意 `title` / `h3` 的字重是 CSS 里写死的 `600`，不是 `--font-weight-*` 令牌。
+pub mod typography {
+    use super::tokens::metrics as m;
+
+    /// 一个排版角色
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub struct TextRole {
+        /// 字号（逻辑像素）
+        pub size: f32,
+        /// 字重（CSS 数值）
+        pub weight: f32,
+        /// 行高（字号倍数）
+        pub line_height: f32,
+        /// 字距（em 系数）
+        pub letter_spacing: f32,
+    }
+
+    /// `.t-title`：600 / `--font-size-xl` / `--line-height-tight` / `--letter-spacing-tight`
+    pub const TITLE: TextRole = TextRole { size: m::FONT_SIZE_XL, weight: 600.0, line_height: m::LINE_HEIGHT_TIGHT, letter_spacing: m::LETTER_SPACING_TIGHT };
+    /// `.t-h3`：600 / `--font-size-lg` / `--line-height-tight`
+    pub const H3: TextRole = TextRole { size: m::FONT_SIZE_LG, weight: 600.0, line_height: m::LINE_HEIGHT_TIGHT, letter_spacing: m::LETTER_SPACING_BASE };
+    /// `.t-body`：`--font-weight-regular` / `--font-size-md` / `--line-height-base`
+    pub const BODY: TextRole = TextRole { size: m::FONT_SIZE_MD, weight: m::FONT_WEIGHT_REGULAR, line_height: m::LINE_HEIGHT_BASE, letter_spacing: m::LETTER_SPACING_BASE };
+    /// `.t-body-sm`：`--font-weight-regular` / `--font-size-base` / `--line-height-base`
+    pub const BODY_SM: TextRole = TextRole { size: m::FONT_SIZE_BASE, weight: m::FONT_WEIGHT_REGULAR, line_height: m::LINE_HEIGHT_BASE, letter_spacing: m::LETTER_SPACING_BASE };
+    /// `.t-caption`：同 body-sm 但 `--font-size-sm`，颜色用 `text_muted`
+    pub const CAPTION: TextRole = TextRole { size: m::FONT_SIZE_SM, weight: m::FONT_WEIGHT_REGULAR, line_height: m::LINE_HEIGHT_BASE, letter_spacing: m::LETTER_SPACING_BASE };
 }
 
 /// 外观
@@ -169,6 +209,18 @@ mod tests {
         assert_eq!(s.offset.y, px(1.0));
         assert!((s.color.a - 0.55).abs() < 1e-6);
         assert!(!layers[0].to_box_shadow().inset);
+    }
+
+    #[test]
+    fn typography_roles_match_v1_classes() {
+        use typography::*;
+        // v1-final global.css:1574-1578
+        assert_eq!((TITLE.size, TITLE.weight), (20.0, 600.0));
+        assert_eq!((H3.size, H3.weight), (16.0, 600.0));
+        assert_eq!((BODY.size, BODY.weight, BODY.line_height), (14.0, 650.0, 1.5));
+        assert_eq!(BODY_SM.size, 13.0);
+        assert_eq!(CAPTION.size, 12.0);
+        assert_eq!(TITLE.letter_spacing, -0.01);
     }
 
     #[test]

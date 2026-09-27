@@ -38,7 +38,6 @@
 | 设计文档 | 退役于 spec | why 迁移要求 |
 |---------|------------|-------------|
 | `docs/design/rust-architecture.md` | S02-*, S07-01 | 模块职责边界的理由需迁移到 crate 级文档注释 |
-| `docs/design/design-tokens.md` | S03-02, S03-03, S03-04（2026-09-27：曾同时列于「不退役」表，自相矛盾；S01-06 证实其与代码有 8 处不符，且 Phase 03 起令牌由 `global.css` 生成为代码 → 退役） | 品牌色 `#5B5FE9` 与圆角刻度 `4/8/12/16/9999` 的约束 —— **已确认由 `AGENTS.md` 硬约束 2、3 覆盖**，无需额外迁移 |
 | `docs/design/pages-and-states.md` | S05-18, S10-03 | 状态机的转换条件理由需迁移 |
 | `docs/design/component-mapping.md` | S05-*, S06-* | 组件拆分的理由需迁移 |
 | `docs/design/overview.md` | 最后 | 架构约束需先迁移到 `AGENTS.md` 后再删 |
@@ -72,5 +71,7 @@
 | 2026-09-27 | `docs/design/ipc-contract.md`（整份） | S02-08（v2 无 IPC；v1 命令 → `chat::ChatEngine` 方法，覆盖表见 `phase-02/S02-08-ipc-retire.md`） | 能力整体移除，逐条核对：camelCase↔snake_case 映射为 Tauri 专属，作废；`save_config` 重注册热键 → `ChatEngine::save_config` 注释（热键归 Phase 07）；模型 ID 规则 → `models/model_identity.rs`；`send_message` 持久化归属 → S02-07-6；`approveAll` 只在当次有效 → `chat.rs` 在开始/结束时重置 `approve_all_for_turn`；隐藏窗口不取消 → AGENTS.md 硬约束 7；StreamEvent 联合类型 → `streaming.rs` `StreamEvent`（代码即契约）。**文档与代码不符之处**：称「Rust 当前没有发射 `thinking_end`」，实际 `streaming.rs` `thinking_end()` 会发；命令表漏列 `get_message_count` 与 3 个图片命令 |
 
 | 2026-09-27 | `docs/design/sse-and-api.md`（整份） | S02-01（Provider / Compatibility）、S02-05（Provider 层取消）、S02-07（编排：`crates/engine/src/chat.rs`）、S02-06（UI 消费：`crates/ui/src/chat_bridge.rs`） | 工具循环上限 20 / 连续 3 轮失败、上下文 70% 预算、图片只随当前提问与工具轮携带 → `chat.rs` 常量与注释（v1 原样）；终态事件晚于持久化与释放占用 → `chat.rs` 注释 + `streaming.rs` `StreamFailure` 注释；Esc/失焦/托盘隐藏不取消 → AGENTS.md 硬约束 7 + `chat_bridge.rs` 模块文档（禁止 `Tokio::spawn` 的理由）；生图工具只对 openai_compatible 注册 → `chat.rs` 注释；未知模型 128000 → 测试锁定。v1 前端「文本增量 rAF 平滑消费」属渲染细节 → 交 S04-06（流式渐显）。**文档与代码不符**：称「当前无 system prompt」，实际 `providers/mod.rs` `BUDDY_SYSTEM_PROMPT` 每次注入 |
+
+| 2026-09-27 | `docs/design/design-tokens.md`（整份） | S03-02（颜色）、S03-03（圆角 / 阴影）、S03-04（排版 / 间距 / 动效）→ `crates/ui/src/theme_system/`（`tokens.rs` 由 `global.css` 生成，WebKit 全量验证） | 品牌色唯一、圆角刻度 → AGENTS.md 硬约束 2、3（生成器另行断言）；「禁止硬编码」→ 硬约束 5（S03-07 加脚本守卫）；阴影用途表 → `theme_system/mod.rs` 模块文档；排版角色 → `theme_system::typography`（以 v1 `.t-*` 实际定义为准）。**文档与代码不符之处**：表面色 8 处（半透明 rgba vs 实色）；列出的 `t-display` / `t-overline` 在代码中从未存在，`body` 字号写 14 而 `.t-body-sm` 实为 13；「红色警告底色 `rgba(220,38,38,0.12)` 例外」在 v1 代码中 0 处使用。S01-06 的 `extract_tokens.py` 改为读 git 历史版本（`e91bbc3:`），基线仍可复现 |
 
 > **注**：`.design/` 未被 git 跟踪，删除不产生 git 记录，仅在此登记以保留删除事实。

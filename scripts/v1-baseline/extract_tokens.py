@@ -17,7 +17,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CSS_REF = "v1-final:src/styles/global.css"
-DOC = ROOT / "docs" / "design" / "design-tokens.md"
+# design-tokens.md 已于 S03-04 退役删除；对照其最后一个版本（首次入库 e91bbc3，此后未改）
+DOC_REF = "e91bbc3:docs/design/design-tokens.md"
 
 
 def read_css(ref: str) -> str:
@@ -93,11 +94,11 @@ def main() -> int:
     light = variables(block(css, ":root"))
     dark = variables(block(css, "html.dark"))
     dark_full = {**light, **dark}
-    doc = doc_tokens(DOC.read_text(encoding="utf-8"))
+    doc = doc_tokens(read_css(DOC_REF))
 
     print("# v1 设计令牌实测值（S01-06-8）\n")
     print(f"> 生成：`python3 scripts/v1-baseline/extract_tokens.py`，来源 `{ref}`（代码真值）。")
-    print(f"> 对照：`docs/design/design-tokens.md`。浅色 {len(light)} 个变量，深色覆盖 {len(dark)} 个。\n")
+    print(f"> 对照：`{DOC_REF}`（已退役）。浅色 {len(light)} 个变量，深色覆盖 {len(dark)} 个。\n")
 
     print("## 与 design-tokens.md 的差异\n")
     diff_rows, missing_in_css = [], []

@@ -1,7 +1,7 @@
 # v1 设计令牌实测值（S01-06-8）
 
 > 生成：`python3 scripts/v1-baseline/extract_tokens.py`，来源 `v1-final:src/styles/global.css`（代码真值）。
-> 对照：`docs/design/design-tokens.md`。浅色 139 个变量，深色覆盖 46 个。
+> 对照：`e91bbc3:docs/design/design-tokens.md`（已退役）。浅色 139 个变量，深色覆盖 46 个。
 
 ## 与 design-tokens.md 的差异
 
