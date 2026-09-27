@@ -1,6 +1,6 @@
 # S04-01 vendor zed markdown 并以 shim 替换 settings / language / mermaid
 
-> 状态: `todo`
+> 状态: `doing`
 > Phase: 04
 > 依赖: S01-02
 > 阻塞: —
