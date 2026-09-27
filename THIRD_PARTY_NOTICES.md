@@ -221,4 +221,5 @@ PY
 |------|---------|--------|
 | S04-01 vendored markdown（主要经 zed `util`：`async_zip`、`rust-embed`、`nix`、`globset` 等） | 36（`Cargo.lock` 752 → 788） | 待 S08-09 逐项统计 |
 | S04-02 语法高亮：`tree-sitter` 0.26.11、`tree-sitter-highlight` 0.26.11、`tree-sitter-language` 0.1.8 及 27 个语法包（rust / javascript / typescript / python / go / json / bash / toml-ng / md / html / css / yaml / c / cpp / c-sharp / java / kotlin-ng / swift / ruby / php / sequel / lua / nix / make / containerfile）、`streaming-iterator` | 30（788 → 818） | **全部 MIT**（`streaming-iterator` 为 MIT OR Apache-2.0）；均未修改 |
+| S04-03 收敛：zed `util` 换为本地替身 `crates/markdown/util-shim`（Apache-2.0，内容取自 zed `util` / `gpui_util`）；10 个语法包（bash / toml-ng / c-sharp / java / ruby / php / lua / nix / make / containerfile）改为可选 feature `extra-languages`，默认构建不含 | −21（818 → 797）；默认产物中另少 10 个语法包 | 替身为 Apache-2.0；其余不变 |
 
