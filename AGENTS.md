@@ -76,7 +76,11 @@ Buddy is a cross-platform (macOS / Windows) AI chat tool. Press a global hotkey 
 | Phase | 状态 |
 |-------|------|
 | Phase 00 可行性 Spike | ✅ **9/9 完成** |
-| Phase 01 工程骨架与分层 | 5/6 —— S01-05 退路 tag `v1-final` 已建（仅本地）；S01-06 范围已缩减（不截图） |
+| Phase 01 工程骨架与分层 | ✅ 6/6（退路 tag `v1-final` 仅在本地，重构完成后推送） |
+| Phase 02 引擎层移植 | ✅ 9/9 |
+| Phase 03 主题与设计令牌 | ✅ 7/7 |
+| Phase 04 Markdown 栈 | ✅ 9/9 |
+| Phase 05–10 | 未开始（合计 40/104，以注册表为准） |
 
 > **两个高风险门槛（S00-02 / S00-03）已通过；9 项风险中 4 项消除（R1/R3/R5/R7）、1 项降级（R2）。**
 > **完全不需要 fork GPUI。** 全栈闭包 770 包（+77），毒性依赖零残留。

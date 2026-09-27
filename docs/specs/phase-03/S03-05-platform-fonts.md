@@ -1,9 +1,9 @@
 # S03-05 平台字体栈与 TextRenderingMode
 
-> 状态: `blocked`
+> 状态: `done`
 > Phase: 03
 > 依赖: S03-04
-> 阻塞: 等待用户目检（`handoff.md` §6.5 第 3 项：主题预览窗口中的字体观感是否与 v1 一致）
+> 阻塞: —
 > 退役设计文档: —
 
 ## 目标
@@ -25,7 +25,7 @@
 
 ## 验收标准
 
-- [ ] 本机解析出的实际 UI 字体与 v1 一致（Fira Code，中文回退 PingFang）—— 程序化已确认，**待用户目检**
+- [x] 本机解析出的实际 UI 字体与 v1 一致（Fira Code，中文回退 PingFang）—— 程序化已确认；2026-09-28 用户目检通过（handoff §6.5 第 3 项）
 - [x] `text_rendering_mode()` 读回为 `Grayscale`
 
 ## 证据
@@ -44,12 +44,13 @@
 | 决策 | 选择 | 理由 |
 |------|------|------|
 | 运行时选字体 | 取栈中第一个已安装者（WebKit 规则） | GPUI 首选字体未安装时退到自有全局栈（`.ZedMono` / Helvetica），不沿 CSS 链 → 会与 v1 不一致 |
+| 解析结果缓存 | `init_theme` 时解析一次，存为 Global（`fonts::install`，commit `b05a24f`） | 目检反馈卡顿：`all_font_names()` 经 CoreText 枚举全部系统字体，每帧十几次调用使整窗重绘约 620ms（release 同样）；缓存后 debug 5.8ms / release 1.1ms。`markdown_preview` 自检 T10 守住预算 50ms（拦截：去掉缓存 → 627ms FAIL） |
 | 字体不随包分发 | 与 v1 一致 —— **2026-09-27 用户决定：不打包**，未安装 Fira Code 时用系统字体 | v1 无 `@font-face`。回退即现有 `fonts::ui_font` / `mono_font` 规则：按令牌字体栈取第一个已安装者，都没有时落到系统字体（`.SystemUIFont` / Menlo），无需改代码 |
 | TextRenderingMode | `Grayscale` | macOS 现状即灰度；为 Windows（R4）预留同口径 |
 | 字距（letter-spacing） | **GPUI 本 rev 不支持**，`.t-title` 的 -0.01em 无法应用 | `styled.rs` 无对应方法；20px 下约 -0.2px/字，目检时关注标题是否偏松 |
 
 ## 完成记录
 
-- 日期：
-- commit：
-- 设计文档处置：
+- 日期：2026-09-28（2026-09-28 用户目检通过）
+- commit：`8cadce6`；性能修正 `b05a24f`（字体解析结果启动时缓存，见决策记录）
+- 设计文档处置：无

@@ -13,15 +13,15 @@
 | 00 | 可行性 Spike | **9** | **9** | — |
 | 01 | 工程骨架与分层 | 6 | **6** | **Phase 00 Go ✅ 已满足** |
 | 02 | 引擎层移植 | 9 | **9** | S01-01 |
-| 03 | 主题与设计令牌 | 7 | 5 | S01-01 |
-| 04 | Markdown 栈 | 9 | 5 | S01-01 |
+| 03 | 主题与设计令牌 | 7 | **7** | S01-01 |
+| 04 | Markdown 栈 | 9 | **9** | S01-01 |
 | 05 | 聊天界面 | 18 | 0 | S03-*, S04-* |
 | 06 | 设置界面 | 6 | 0 | S03-* |
 | 07 | 应用外壳与窗口行为 | 13 | 0 | S01-01 |
 | 08 | 更新与发布 | 11 | 0 | S07-* |
 | 09 | 平台对齐（Windows） | 9 | 0 | macOS 全链路验收 |
 | 10 | 测试与验收 | 7 | 0 | 与 02-09 并行 |
-| | **合计** | **104** | **34** | |
+| | **合计** | **104** | **40** | |
 
 > **准入条件是必要条件而非充分条件**：具体以各 spec 自身的「依赖」列为准（`RULES.md` §9.2）。
 > 规范强制 **Phase 单调性**：Phase `NN` 的 spec 只能依赖 Phase ≤ `NN` 的 spec（`RULES.md` §9.1）。
@@ -93,8 +93,8 @@
 | S03-02 | 颜色令牌迁移（品牌色 / 状态色 / 中性阶） | S03-01 | `done` | `phase-03/S03-02-color-tokens.md` |
 | S03-03 | 外观令牌迁移（不透明填充 + 圆角 + 阴影） | S03-01, S00-04 | `done` | `phase-03/S03-03-appearance-tokens.md` |
 | S03-04 | 字体与排版令牌迁移 | S03-01 | `done` | `phase-03/S03-04-typography-tokens.md` |
-| S03-05 | 平台字体栈与 TextRenderingMode | S03-04 | `blocked` | `phase-03/S03-05-platform-fonts.md` |
-| S03-06 | 主题切换 | S03-01 | `blocked` | `phase-03/S03-06-theme-switching.md` |
+| S03-05 | 平台字体栈与 TextRenderingMode | S03-04 | `done` | `phase-03/S03-05-platform-fonts.md` |
+| S03-06 | 主题切换 | S03-01 | `done` | `phase-03/S03-06-theme-switching.md` |
 | S03-07 | 令牌完备性与硬约束校验（脚本） | S03-02..S03-05 | `done` | `phase-03/S03-07-token-guard.md` |
 
 ---
@@ -110,10 +110,10 @@
 | S04-03 | 闭包收敛与依赖清理（含 mermaid / html 裁剪决策） | S04-02 | `done` | `phase-04/S04-03-closure.md` |
 | S04-04 | 块粒度增量解析与后台合并 | S04-03 | `done` | `phase-04/S04-04-incremental-parse.md` |
 | S04-05 | 半截标记修补（mend） | S04-04 | `done` | `phase-04/S04-05-mend.md` |
-| S04-06 | 流式渐显（veil） | S04-04 | `blocked` | `phase-04/S04-06-veil.md` |
-| S04-07 | 代码块渲染与复制 | S04-02 | `blocked` | `phase-04/S04-07-code-block.md` |
-| S04-08 | GFM 元素（表格 / 任务列表 / 删除线 / 链接 / 图片） | S04-03 | `blocked` | `phase-04/S04-08-gfm.md` |
-| S04-09 | 文本选择与复制 | S04-03 | `blocked` | `phase-04/S04-09-selection.md` |
+| S04-06 | 流式渐显（veil） | S04-04 | `done` | `phase-04/S04-06-veil.md` |
+| S04-07 | 代码块渲染与复制 | S04-02 | `done` | `phase-04/S04-07-code-block.md` |
+| S04-08 | GFM 元素（表格 / 任务列表 / 删除线 / 链接 / 图片） | S04-03 | `done` | `phase-04/S04-08-gfm.md` |
+| S04-09 | 文本选择与复制 | S04-03 | `done` | `phase-04/S04-09-selection.md` |
 
 ---
 
@@ -299,6 +299,7 @@
 | 2026-09-27 | S04-02 | `doing` → `done` | Comet syntax 接入；v1 语言集 17 种；T03 布局不变（6e-5 px）并反证；+30 包全 MIT。commit `3aa039b` |
 | 2026-09-27 | S04-03 | `todo` → `doing` → `done` | util 替身（−21 包）、10 个未用语法包 feature 化（约 12 MB）、HTML 按 v1 实测转义；新增 GPL patch 同步检查。commit `6c55b0c` |
 | 2026-09-27 | S04-04 | `doing` → `done` | 实测后决定不做增量解析：release 5000 行 9 ms、流式一帧内追上（额外 ≤1.1 ms）。commit `b919826` |
+| 2026-09-28 | S03-05 / S03-06 / S04-06 / S04-07 / S04-08 / S04-09 | `blocked` → `done` | 用户目检 §6.5 全部 7 项通过（含 S02-06 真实对话、S02-09 v1 联网搜索实际可用）。目检中反馈「窗口卡」→ 定位为每帧枚举系统字体（620ms/帧，release 同样），修正后 5.8ms / 1.1ms，commit `b05a24f` |
 | 2026-09-27 | 用户决策 | 5 项定案 | ① 选区色用品牌色（S04-09）② 不做「跟随系统」主题（S03-06）③ 不打包 Fira Code，未安装时用系统字体（S03-05，现有回退规则即满足）④ 启用 v1 之外的 10 种代码高亮语言（S04-02 / S04-03，commit `06057e1`；约 +12 MB，包体积 Phase 08 实测）⑤ 整个重构完成后再推送（S01-05） |
 | 2026-09-27 | S04-06 | `todo` → `doing` → `blocked` | 节奏器（v1 `useSmoothTextRenderer`）+ 尾段 9 字落定 + 呼吸星标 + 减弱动效（NSWorkspace）；vendored 补丁 veil / overlay；15 单测对应 v1 用例；T08 布局不变、T09 端到端（含反证与拦截）。**阻塞于用户目检**（§6.5 第 7 项）。commit `89d90d8` |
 | 2026-09-27 | S04-09 | `todo` → `doing` → `blocked` | 复制按 v1（WebKit 选区纯文本：段落 / h3–h6 后空行、表格制表符、去守卫）；v1 基准由真实组件渲染 + WKWebView 测得；T07 真实拖选 + 复制逐字节一致（含拦截）。**阻塞于用户目检**（§6.5 第 6 项）。commit `a1ed468` |
