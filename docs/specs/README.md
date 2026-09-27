@@ -26,7 +26,7 @@
 > **准入条件是必要条件而非充分条件**：具体以各 spec 自身的「依赖」列为准（`RULES.md` §9.2）。
 > 规范强制 **Phase 单调性**：Phase `NN` 的 spec 只能依赖 Phase ≤ `NN` 的 spec（`RULES.md` §9.1）。
 
-> **表格列说明**：Phase 00 / 01 / 02 / 03 已展开为详细文件，因此多一列「文件」；其余 Phase 在启动时展开并补上该列。
+> **表格列说明**：Phase 00 / 01 / 02 / 03 / 04 已展开为详细文件，因此多一列「文件」；其余 Phase 在启动时展开并补上该列。
 
 ---
 
@@ -103,17 +103,17 @@
 
 > 拆解依据：`docs/tasks/v2.0.0-gpui/04-markdown.md`
 
-| ID | Spec | 依赖 | 状态 |
-|----|------|------|------|
-| S04-01 | vendor markdown.rs 并 patch 掉 ThemeSettings（9 处） | S01-02 | `todo` |
-| S04-02 | 引入 Comet syntax 替换 zed language | S04-01 | `todo` |
-| S04-03 | 闭包收敛与依赖清理（含 mermaid / html 裁剪决策） | S04-02 | `todo` |
-| S04-04 | 块粒度增量解析与后台合并 | S04-03 | `todo` |
-| S04-05 | 半截标记修补（mend） | S04-04 | `todo` |
-| S04-06 | 流式渐显（veil） | S04-04 | `todo` |
-| S04-07 | 代码块与语法高亮 | S04-02 | `todo` |
-| S04-08 | GFM 元素（表格 / 任务列表 / 删除线 / 链接 / 图片） | S04-03 | `todo` |
-| S04-09 | 文本选择与复制 | S04-03 | `todo` |
+| ID | Spec | 依赖 | 状态 | 文件 |
+|----|------|------|------|------|
+| S04-01 | vendor zed markdown 并以 shim 替换 settings / language / mermaid | S01-02 | `todo` | `phase-04/S04-01-vendor-markdown.md` |
+| S04-02 | 引入 Comet syntax 替换 language stub | S04-01 | `todo` | `phase-04/S04-02-syntax-highlight.md` |
+| S04-03 | 闭包收敛与依赖清理（含 mermaid / html 裁剪决策） | S04-02 | `todo` | `phase-04/S04-03-closure.md` |
+| S04-04 | 块粒度增量解析与后台合并 | S04-03 | `todo` | `phase-04/S04-04-incremental-parse.md` |
+| S04-05 | 半截标记修补（mend） | S04-04 | `todo` | `phase-04/S04-05-mend.md` |
+| S04-06 | 流式渐显（veil） | S04-04 | `todo` | `phase-04/S04-06-veil.md` |
+| S04-07 | 代码块渲染与复制 | S04-02 | `todo` | `phase-04/S04-07-code-block.md` |
+| S04-08 | GFM 元素（表格 / 任务列表 / 删除线 / 链接 / 图片） | S04-03 | `todo` | `phase-04/S04-08-gfm.md` |
+| S04-09 | 文本选择与复制 | S04-03 | `todo` | `phase-04/S04-09-selection.md` |
 
 ---
 
@@ -294,3 +294,4 @@
 | 2026-09-27 | S03-05 | `doing` → `blocked` | 程序化完成（本机 Fira Code + PingFang 回退、Grayscale、GPUI 字体名陷阱已处理）；**阻塞于用户目检**（handoff §6.5 #3） |
 | 2026-09-27 | S03-06 | `todo` → `doing`（**补记**）→ `blocked` | 实现随 S03-01 提交时漏改状态；自检 PASS；**阻塞于用户目检**（handoff §6.5 #3） |
 | 2026-09-27 | S03-07 | `todo` → `doing` → `done` | 品牌色逐值 / 生成物新鲜度 / 禁止硬编码颜色，拦截验证 11–13；新增 `scripts/gate.sh` 提交闸门。commit `c513cb1` |
+| 2026-09-27 | Phase 04 | 展开 9 个 spec 文件 | S04-01 改名（原「patch ThemeSettings 9 处」为旧估计，S00-06 实测 1 行 + shim）；S04-07 改名「代码块渲染与复制」（高亮归 S04-02）；语言集以 v1 `prism-react-renderer` 运行时实测为准 |

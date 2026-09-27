@@ -252,7 +252,7 @@ S00-04 首探在首次合成之前，得到「无 `CABackdropLayer`」的**错�
 4. **设计文档实现完成后必须删除**并登记 `docs/specs/design-deletions.md`。见 `RULES.md` §7。
 5. **同一时刻最多 2 个 spec 处于 `doing`。**
 6. **不允许跳过 `doing` 直接 `done`。**
-7. **改动后跑** `python3 scripts/check-discipline.py`（14 项）**与** `--self-test`（8 项拦截验证）。
+7. **提交一律 `scripts/gate.sh && git commit …`**（纪律检查 16 项 + 拦截验证 13 项 + workspace / v1 编译）。**不要手写检查链**：曾两次用 `;` 连接导致检查失败后仍提交。
 8. **不要破坏 v1**：改 workspace 后必须 `cd src-tauri && cargo check` 验证
    （根 `Cargo.toml` 的 `exclude = ["src-tauri"]` 是必需的）。
 9. **需要眼睛验收的，停下来问用户。** 见 §7.3。
