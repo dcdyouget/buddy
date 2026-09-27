@@ -19,6 +19,7 @@
 /// 显示与复制加粗文本时须 [`normalize::strip_guards`]（守卫为零宽空格，复制时会被带出）→ S04-09 / S05-08。
 pub mod normalize;
 pub mod code_block;
+pub mod streaming;
 pub mod copy;
 pub mod gfm;
 pub use zed_markdown;
@@ -50,7 +51,7 @@ pub fn init(cx: &mut App) {
 /// 助手消息的 markdown 样式（v1 `.ai-message-content`）
 ///
 /// 正文基础字体、代码块（S04-07）、GFM 元素（S04-08，见 [`gfm`]）。使用时配合 [`code_block::renderer`]：
-/// `MarkdownElement::new(md.clone(), message_style(window, cx)).code_block_renderer(code_block::renderer(md.downgrade()))`
+/// `MarkdownElement::new(md.clone(), message_style(window, cx)).code_block_renderer(code_block::renderer(md.downgrade(), streaming))`
 pub fn message_style(window: &Window, cx: &App) -> MarkdownStyle {
     let theme = *cx.buddy_theme();
     let c = theme.colors;

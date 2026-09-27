@@ -855,6 +855,7 @@ dependencies = [
  "gpui_platform",
  "gpui_tokio",
  "log",
+ "objc",
  "pulldown-cmark",
  "reqwest",
  "theme",

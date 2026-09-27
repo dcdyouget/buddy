@@ -252,7 +252,7 @@ fn expected_counts(doc: &str) -> BTreeMap<&'static str, usize> {
 impl Render for Preview {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.buddy_theme();
-        let CodeBlockRenderer::Custom { render, transform } = code_block::renderer(self.md.downgrade()) else {
+        let CodeBlockRenderer::Custom { render, transform } = code_block::renderer(self.md.downgrade(), false) else {
             unreachable!("Buddy 代码块渲染器为 Custom")
         };
         let recorded = self.recorded.clone();

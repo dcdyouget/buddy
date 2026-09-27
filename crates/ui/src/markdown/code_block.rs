@@ -126,10 +126,14 @@ pub fn code_area_style(theme: &Theme, cx: &App) -> StyleRefinement {
 }
 
 /// 构造代码块渲染器。`markdown` 为被渲染的实体（复制反馈需要通知它重绘）。
-pub fn renderer(markdown: WeakEntity<Markdown>) -> CodeBlockRenderer {
+///
+/// `streaming`：消息仍在流式输出。此时**未闭合**的围栏不显示复制按钮（v1 以 `PlainCodeBlock` 显示，
+/// 无复制按钮，`StreamingMarkdown.test.tsx:245`）；闭合后恢复为完整代码块。
+pub fn renderer(markdown: WeakEntity<Markdown>, streaming: bool) -> CodeBlockRenderer {
     CodeBlockRenderer::Custom {
-        render: Arc::new(move |kind, parsed, range, _metadata: CodeBlockMetadata, _window, cx| {
-            render_container(&markdown, kind, parsed, range, cx)
+        render: Arc::new(move |kind, parsed, range, metadata: CodeBlockMetadata, _window, cx| {
+            let copyable = !(streaming && !metadata.is_fenced_closed && !matches!(kind, CodeBlockKind::Indented));
+            render_container(&markdown, kind, parsed, range, copyable, cx)
         }),
         transform: None,
     }
@@ -138,10 +142,13 @@ pub fn renderer(markdown: WeakEntity<Markdown>) -> CodeBlockRenderer {
 /// 复制按钮图标；变为对勾时播放 v1 的 `markdown-copy-success`：
 /// 缩放 0.72 → 1.12（70%）→ 1，时长 `--duration-normal`，每段 `--ease-spring`
 ///
-/// 减弱动效：v1 在 `prefers-reduced-motion` 下关闭此动画；v2 的系统设置查询随 S04-06-2 提供后接入。
+/// 减弱动效：与 v1（`prefers-reduced-motion` 下 `animation: none`）一致，系统开启时不播放。
 fn copy_icon(copied: bool, block_start: usize) -> AnyElement {
     if !copied {
         return icon(IconName::Copy, px(12.)).into_any_element();
+    }
+    if crate::accessibility::prefers_reduced_motion() {
+        return icon(IconName::Check, px(12.)).into_any_element();
     }
     let spring = cubic_bezier(motion::EASE_SPRING);
     icon(IconName::Check, px(12.))
@@ -166,6 +173,7 @@ fn render_container(
     kind: &CodeBlockKind,
     parsed: &ParsedMarkdown,
     range: Range<usize>,
+    copyable: bool,
     cx: &App,
 ) -> Div {
     let theme = cx.buddy_theme();
@@ -232,7 +240,7 @@ fn render_container(
         .border_color(c.code_border)
         .bg(c.code_header_bg)
         .children(label)
-        .child(copy_button);
+        .when(copyable, |h| h.child(copy_button));
 
     div()
         .w_full()

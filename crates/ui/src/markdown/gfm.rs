@@ -166,6 +166,9 @@ pub fn decorations(theme: &Theme) -> MarkdownDecorations {
         }),
         // 与 v1（WebKit）选区纯文本一致，并去掉加粗守卫（S04-09）
         copy_text: Some(Arc::new(super::copy::copy_text)),
+        // 流式渐显与星标按帧设置（S04-06，见 markdown::streaming）
+        veil: None,
+        overlay: None,
     }
 }
 

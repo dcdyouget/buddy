@@ -1,6 +1,7 @@
 //! SVG 图标（硬约束 4：只用 SVG，不用 emoji）
 //!
-//! 图形取自 v1 所用的 Lucide（`lucide-react`，ISC，见 `THIRD_PARTY_NOTICES.md`），
+//! 图形取自 v1 所用的 Lucide（`lucide-react`，ISC，见 `THIRD_PARTY_NOTICES.md`）；
+//! `streaming-star.svg` 为 Buddy 按 v1 `.streaming-next-star` 的 `clip-path` 多边形自绘。
 //! 文件在 `crates/ui/assets/icons/`，编译期嵌入。GPUI 把 SVG 当作蒙版绘制，
 //! 颜色取元素的 `text_color`（等价于 v1 的 `stroke="currentColor"`）。
 //!
@@ -16,16 +17,19 @@ pub enum IconName {
     Copy,
     /// 对勾（lucide `check`）
     Check,
+    /// 流式四角星（v1 `.streaming-next-star`）
+    StreamingStar,
 }
 
 impl IconName {
-    const ALL: [IconName; 2] = [IconName::Copy, IconName::Check];
+    const ALL: [IconName; 3] = [IconName::Copy, IconName::Check, IconName::StreamingStar];
 
     /// 资源路径
     pub fn path(self) -> &'static str {
         match self {
             IconName::Copy => "icons/copy.svg",
             IconName::Check => "icons/check.svg",
+            IconName::StreamingStar => "icons/streaming-star.svg",
         }
     }
 
@@ -33,6 +37,7 @@ impl IconName {
         match self {
             IconName::Copy => include_bytes!("../assets/icons/copy.svg"),
             IconName::Check => include_bytes!("../assets/icons/check.svg"),
+            IconName::StreamingStar => include_bytes!("../assets/icons/streaming-star.svg"),
         }
     }
 }

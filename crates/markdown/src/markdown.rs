@@ -172,6 +172,32 @@ pub struct MarkdownDecorations {
     /// Builds the clipboard text for the `Copy` action from the selected rendered lines
     /// (each with the source range it covers), instead of joining them with `\n`
     pub copy_text: Option<CopyTextFn>,
+    /// Per-character colour veil for non-code text (streaming reveal)
+    pub veil: Option<MarkdownVeil>,
+    /// Element drawn on top of the text at a source index (streaming caret)
+    pub overlay: Option<MarkdownOverlay>,
+}
+
+/// Buddy patch: per-character colour veil (see [`MarkdownDecorations::veil`])
+#[derive(Clone)]
+pub struct MarkdownVeil {
+    /// Colour a veiled character starts from
+    pub start_color: Hsla,
+    /// Opacity multiplier a veiled character starts from
+    pub start_opacity: f32,
+    /// Eased progress in `0.0..=1.0` for the character starting at this source byte index;
+    /// `None` = not veiled. At `1.0` the character has its normal style.
+    pub progress: Arc<dyn Fn(usize) -> Option<f32>>,
+}
+
+/// Buddy patch: an element laid out at the caret position of a source index
+/// (see [`MarkdownDecorations::overlay`])
+#[derive(Clone)]
+pub struct MarkdownOverlay {
+    pub source_index: usize,
+    /// Builds the element; it is laid out with its origin at the caret position
+    /// (top of the line box) and receives the line height
+    pub build: Arc<dyn Fn(Pixels, &mut Window, &mut App) -> AnyElement>,
 }
 
 /// Buddy patch: see [`MarkdownDecorations::copy_text`]
@@ -2655,7 +2681,7 @@ impl Styled for MarkdownElement {
 
 impl Element for MarkdownElement {
     type RequestLayoutState = RenderedMarkdown;
-    type PrepaintState = Hitbox;
+    type PrepaintState = (Hitbox, Option<AnyElement>);
 
     fn id(&self) -> Option<ElementId> {
         None
@@ -2708,6 +2734,7 @@ impl Element for MarkdownElement {
             highlights,
             parsed_markdown.code_block_highlights.clone(),
         );
+        builder.veil = self.style.decorations.veil.clone();
         let markdown_end = if let Some(last) = parsed_markdown.events.last() {
             last.0.end
         } else {
@@ -3512,7 +3539,21 @@ impl Element for MarkdownElement {
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
         rendered_markdown.element.prepaint(window, cx);
         self.autoscroll(&rendered_markdown.text, window, cx);
-        hitbox
+        // Buddy patch: lay out the overlay at the caret position of its source index
+        let overlay = self.style.decorations.overlay.clone().and_then(|overlay| {
+            let (position, line_height) = rendered_markdown
+                .text
+                .position_for_source_index(overlay.source_index)?;
+            let mut element = (overlay.build)(line_height, window, cx);
+            element.prepaint_as_root(
+                position,
+                size(gpui::AvailableSpace::MinContent, gpui::AvailableSpace::MinContent),
+                window,
+                cx,
+            );
+            Some(element)
+        });
+        (hitbox, overlay)
     }
 
     fn paint(
@@ -3521,7 +3562,7 @@ impl Element for MarkdownElement {
         _inspector_id: Option<&gpui::InspectorElementId>,
         _bounds: Bounds<Pixels>,
         rendered_markdown: &mut Self::RequestLayoutState,
-        hitbox: &mut Self::PrepaintState,
+        (hitbox, overlay): &mut Self::PrepaintState,
         window: &mut Window,
         cx: &mut App,
     ) {
@@ -3552,6 +3593,9 @@ impl Element for MarkdownElement {
 
         self.paint_mouse_listeners(hitbox, &rendered_markdown.text, window, cx);
         rendered_markdown.element.paint(window, cx);
+        if let Some(overlay) = overlay {
+            overlay.paint(window, cx);
+        }
     }
 }
 
@@ -3877,6 +3921,8 @@ struct MarkdownElementBuilder {
     table: TableState,
     syntax_theme: Arc<SyntaxTheme>,
     highlights: MarkdownHighlights,
+    /// Buddy patch
+    veil: Option<MarkdownVeil>,
 }
 
 struct MarkdownHighlights {
@@ -3998,6 +4044,7 @@ impl MarkdownElementBuilder {
             table: TableState::default(),
             syntax_theme,
             highlights,
+            veil: None,
         }
     }
 
@@ -4259,8 +4306,51 @@ impl MarkdownElementBuilder {
                     .runs
                     .push(text_style.to_run(text.len() - offset));
             }
+        } else if let Some(veil) = self.veil.clone()
+            // Only verbatim source text maps byte-for-byte onto source indices
+            && text.len() == source_range.len()
+        {
+            self.push_veiled_runs(text, source_range.start, &text_style, &veil);
         } else {
             self.pending_line.runs.push(text_style.to_run(text.len()));
+        }
+    }
+
+    /// Buddy patch: one run per veiled character, blending from the veil's start colour
+    fn push_veiled_runs(
+        &mut self,
+        text: &str,
+        source_start: usize,
+        text_style: &TextStyle,
+        veil: &MarkdownVeil,
+    ) {
+        let mut plain = 0;
+        for (offset, ch) in text.char_indices() {
+            let Some(progress) = (veil.progress)(source_start + offset) else {
+                plain += ch.len_utf8();
+                continue;
+            };
+            if plain > 0 {
+                self.pending_line.runs.push(text_style.to_run(plain));
+                plain = 0;
+            }
+            let progress = progress.clamp(0., 1.);
+            let from = veil.start_color.to_rgb();
+            let to = text_style.color.to_rgb();
+            let lerp = |a: f32, b: f32| a + (b - a) * progress;
+            let opacity = lerp(veil.start_opacity, 1.);
+            let color = Hsla::from(gpui::Rgba {
+                r: lerp(from.r, to.r),
+                g: lerp(from.g, to.g),
+                b: lerp(from.b, to.b),
+                a: to.a * opacity,
+            });
+            let mut style = text_style.clone();
+            style.color = color;
+            self.pending_line.runs.push(style.to_run(ch.len_utf8()));
+        }
+        if plain > 0 {
+            self.pending_line.runs.push(text_style.to_run(plain));
         }
     }
 
@@ -5181,7 +5271,7 @@ mod tests {
 
     impl Element for CapturingMarkdownElement {
         type RequestLayoutState = RenderedMarkdown;
-        type PrepaintState = Hitbox;
+        type PrepaintState = (Hitbox, Option<AnyElement>);
 
         fn id(&self) -> Option<ElementId> {
             self.markdown_element.id()

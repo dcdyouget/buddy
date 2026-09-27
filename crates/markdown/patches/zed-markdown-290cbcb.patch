@@ -1,6 +1,6 @@
 diff --color --color=never -ruN md-orig/html/html_rendering.rs md-ours/html/html_rendering.rs
---- md-orig/html/html_rendering.rs	2026-09-27 23:22:45
-+++ md-ours/html/html_rendering.rs	2026-09-27 23:22:45
+--- md-orig/html/html_rendering.rs	2026-09-27 23:36:37
++++ md-ours/html/html_rendering.rs	2026-09-27 23:36:37
 @@ -103,6 +103,7 @@
                      &heading.source_range,
                      markdown_end,
@@ -19,7 +19,7 @@ diff --color --color=never -ruN md-orig/html/html_rendering.rs md-ours/html/html
                      &block_quote.children,
 diff --color --color=never -ruN md-orig/language_stub.rs md-ours/language_stub.rs
 --- md-orig/language_stub.rs	1970-01-01 08:00:00
-+++ md-ours/language_stub.rs	2026-09-27 23:22:45
++++ md-ours/language_stub.rs	2026-09-27 23:36:37
 @@ -0,0 +1,390 @@
 +//! S00-06 产物：`language` 模块 **stub**（去掉语法高亮的极简版）
 +//!
@@ -412,8 +412,8 @@ diff --color --color=never -ruN md-orig/language_stub.rs md-ours/language_stub.r
 +    }
 +}
 diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
---- md-orig/markdown.rs	2026-09-27 23:22:45
-+++ md-ours/markdown.rs	2026-09-27 23:22:45
+--- md-orig/markdown.rs	2026-09-27 23:36:37
++++ md-ours/markdown.rs	2026-09-27 23:36:37
 @@ -1,5 +1,34 @@
  pub mod html;
  mod mermaid;
@@ -484,7 +484,7 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
  use parser::CodeBlockMetadata;
  use parser::{
      MarkdownEvent, MarkdownTag, MarkdownTagEnd, ParsedMetadataBlock, parse_links_only,
-@@ -93,7 +128,56 @@
+@@ -93,7 +128,82 @@
      }
  }
  
@@ -532,6 +532,32 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
 +    /// Builds the clipboard text for the `Copy` action from the selected rendered lines
 +    /// (each with the source range it covers), instead of joining them with `\n`
 +    pub copy_text: Option<CopyTextFn>,
++    /// Per-character colour veil for non-code text (streaming reveal)
++    pub veil: Option<MarkdownVeil>,
++    /// Element drawn on top of the text at a source index (streaming caret)
++    pub overlay: Option<MarkdownOverlay>,
++}
++
++/// Buddy patch: per-character colour veil (see [`MarkdownDecorations::veil`])
++#[derive(Clone)]
++pub struct MarkdownVeil {
++    /// Colour a veiled character starts from
++    pub start_color: Hsla,
++    /// Opacity multiplier a veiled character starts from
++    pub start_opacity: f32,
++    /// Eased progress in `0.0..=1.0` for the character starting at this source byte index;
++    /// `None` = not veiled. At `1.0` the character has its normal style.
++    pub progress: Arc<dyn Fn(usize) -> Option<f32>>,
++}
++
++/// Buddy patch: an element laid out at the caret position of a source index
++/// (see [`MarkdownDecorations::overlay`])
++#[derive(Clone)]
++pub struct MarkdownOverlay {
++    pub source_index: usize,
++    /// Builds the element; it is laid out with its origin at the caret position
++    /// (top of the line box) and receives the line height
++    pub build: Arc<dyn Fn(Pixels, &mut Window, &mut App) -> AnyElement>,
 +}
 +
 +/// Buddy patch: see [`MarkdownDecorations::copy_text`]
@@ -541,7 +567,7 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
  pub struct HeadingLevelStyles {
      pub h1: Option<TextStyleRefinement>,
      pub h2: Option<TextStyleRefinement>,
-@@ -131,6 +215,8 @@
+@@ -131,6 +241,8 @@
      pub prevent_mouse_interaction: bool,
      pub table_columns_min_size: bool,
      pub soft_break_as_hard_break: bool,
@@ -550,7 +576,7 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
  }
  
  impl Default for MarkdownStyle {
-@@ -160,6 +246,7 @@
+@@ -160,6 +272,7 @@
              prevent_mouse_interaction: false,
              table_columns_min_size: false,
              soft_break_as_hard_break: false,
@@ -558,7 +584,7 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
          }
      }
  }
-@@ -1128,11 +1215,21 @@
+@@ -1128,11 +1241,21 @@
          self.active_search_highlight
      }
  
@@ -582,7 +608,7 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
          cx.write_to_clipboard(ClipboardItem::new_string(text));
      }
  
-@@ -2014,6 +2111,7 @@
+@@ -2014,6 +2137,7 @@
          range: &Range<usize>,
          markdown_end: usize,
          text_align_override: Option<TextAlign>,
@@ -590,7 +616,7 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
      ) {
          let align = text_align_override.unwrap_or(self.style.base_text_style.text_align);
          let mut heading = div().mt_4().mb_2();
-@@ -2033,6 +2131,9 @@
+@@ -2033,6 +2157,9 @@
          let mut heading_style = self.style.heading.clone();
          let mut heading_text_style = heading_style.text_style().clone();
          heading.style().refine(&heading_style);
@@ -600,7 +626,7 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
  
          if let Some(level_style) =
              heading_level_style(level, self.style.heading_level_styles.as_ref())
-@@ -2058,6 +2159,7 @@
+@@ -2058,6 +2185,7 @@
          kind: Option<pulldown_cmark::BlockQuoteKind>,
          range: &Range<usize>,
          markdown_end: usize,
@@ -608,7 +634,7 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
      ) {
          let border_color = self
              .style
-@@ -2098,6 +2200,10 @@
+@@ -2098,6 +2226,10 @@
              Some(header) => block_div.child(header),
              None => block_div,
          };
@@ -619,7 +645,24 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
  
          builder.push_text_style(self.style.block_quote.clone());
          builder.push_div(block_div, range, markdown_end);
-@@ -2612,6 +2718,8 @@
+@@ -2549,7 +2681,7 @@
+ 
+ impl Element for MarkdownElement {
+     type RequestLayoutState = RenderedMarkdown;
+-    type PrepaintState = Hitbox;
++    type PrepaintState = (Hitbox, Option<AnyElement>);
+ 
+     fn id(&self) -> Option<ElementId> {
+         None
+@@ -2602,6 +2734,7 @@
+             highlights,
+             parsed_markdown.code_block_highlights.clone(),
+         );
++        builder.veil = self.style.decorations.veil.clone();
+         let markdown_end = if let Some(last) = parsed_markdown.events.last() {
+             last.0.end
+         } else {
+@@ -2612,6 +2745,8 @@
          let mut current_img_block_range: Option<Range<usize>> = None;
          let mut handled_html_block = false;
          let mut rendered_mermaid_block = false;
@@ -628,7 +671,7 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
          let mut rendered_metadata_block = false;
          for (index, (range, event)) in parsed_markdown.events.iter().enumerate() {
              // Skip alt text for images that rendered
-@@ -2716,6 +2824,7 @@
+@@ -2716,6 +2851,7 @@
                                  range,
                                  markdown_end,
                                  text_align_override,
@@ -636,7 +679,7 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
                              );
                          }
                          MarkdownTag::BlockQuote(kind) => {
-@@ -2724,9 +2833,10 @@
+@@ -2724,9 +2860,10 @@
                                  *kind,
                                  range,
                                  markdown_end,
@@ -648,7 +691,7 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
                              if render_mermaid_diagrams
                                  && let Some(mermaid_diagram) =
                                      parsed_markdown.mermaid_diagrams.get(&range.start)
-@@ -2780,7 +2890,7 @@
+@@ -2780,7 +2917,7 @@
                              }
  
                              match (&self.code_block_renderer, is_indented) {
@@ -657,7 +700,7 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
                                      // This is a parent container that we can position the copy button inside.
                                      let parent_container =
                                          div().group("code_block").relative().w_full();
-@@ -2836,7 +2946,40 @@
+@@ -2836,7 +2973,40 @@
                                      builder.push_code_block(language);
                                      builder.push_div(code_block, range, markdown_end);
                                  }
@@ -699,7 +742,7 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
                              }
                          }
                          MarkdownTag::HtmlBlock => {
-@@ -2849,16 +2992,29 @@
+@@ -2849,16 +3019,29 @@
                          MarkdownTag::List(bullet_index) => {
                              builder.push_list(*bullet_index);
                              let is_top_level = builder.list_stack.len() == 1;
@@ -737,7 +780,7 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
                                  task_list_marker_for_item(&parsed_markdown.events, index)
                              {
                                  let source = &parsed_markdown.source()[range.clone()];
-@@ -2894,20 +3050,26 @@
+@@ -2894,20 +3077,26 @@
                              font_style: Some(FontStyle::Italic),
                              ..Default::default()
                          }),
@@ -778,7 +821,7 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
                          MarkdownTag::Link { dest_url, .. } => {
                              if builder.code_block_stack.is_empty() {
                                  builder.link_depth += 1;
-@@ -2970,22 +3132,26 @@
+@@ -2970,22 +3159,26 @@
  
                              let column_count = alignments.len();
                              builder.push_div(div().flex(), range, markdown_end);
@@ -818,7 +861,7 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
                                      .restrict_scroll_to_axis()
                                      .custom_scrollbars(
                                          Scrollbars::new(ScrollAxes::Horizontal)
-@@ -3000,10 +3166,14 @@
+@@ -3000,10 +3193,14 @@
                          }
                          MarkdownTag::TableHead => {
                              builder.table.start_head();
@@ -837,7 +880,7 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
                          }
                          MarkdownTag::TableRow => {
                              builder.table.start_row();
-@@ -3038,6 +3208,17 @@
+@@ -3038,6 +3235,17 @@
                                  Some(Alignment::Right) => cell_div.items_end(),
                                  _ => cell_div,
                              };
@@ -855,7 +898,7 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
  
                              builder.push_text_style(TextStyleRefinement {
                                  text_align: Some(text_align),
-@@ -3149,6 +3330,18 @@
+@@ -3149,6 +3357,18 @@
                              });
                          }
  
@@ -874,7 +917,7 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
                          // Pop the parent container.
                          builder.pop_div();
                      }
-@@ -3251,6 +3444,11 @@
+@@ -3251,6 +3471,11 @@
                      }
                      builder.push_text(&parsed_markdown.source[range.clone()], range.clone());
                  }
@@ -886,7 +929,39 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
                  MarkdownEvent::Rule => {
                      builder.push_div(
                          div()
-@@ -3333,10 +3531,13 @@
+@@ -3314,7 +3539,21 @@
+         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+         rendered_markdown.element.prepaint(window, cx);
+         self.autoscroll(&rendered_markdown.text, window, cx);
+-        hitbox
++        // Buddy patch: lay out the overlay at the caret position of its source index
++        let overlay = self.style.decorations.overlay.clone().and_then(|overlay| {
++            let (position, line_height) = rendered_markdown
++                .text
++                .position_for_source_index(overlay.source_index)?;
++            let mut element = (overlay.build)(line_height, window, cx);
++            element.prepaint_as_root(
++                position,
++                size(gpui::AvailableSpace::MinContent, gpui::AvailableSpace::MinContent),
++                window,
++                cx,
++            );
++            Some(element)
++        });
++        (hitbox, overlay)
+     }
+ 
+     fn paint(
+@@ -3323,7 +3562,7 @@
+         _inspector_id: Option<&gpui::InspectorElementId>,
+         _bounds: Bounds<Pixels>,
+         rendered_markdown: &mut Self::RequestLayoutState,
+-        hitbox: &mut Self::PrepaintState,
++        (hitbox, overlay): &mut Self::PrepaintState,
+         window: &mut Window,
+         cx: &mut App,
+     ) {
+@@ -3333,10 +3572,13 @@
          window.on_action(std::any::TypeId::of::<crate::Copy>(), {
              let entity = self.markdown.clone();
              let text = rendered_markdown.text.clone();
@@ -901,12 +976,92 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
                  }
              }
          });
-@@ -4826,6 +5027,37 @@
-         }
+@@ -3351,6 +3593,9 @@
  
-         source_index..source_index
+         self.paint_mouse_listeners(hitbox, &rendered_markdown.text, window, cx);
+         rendered_markdown.element.paint(window, cx);
++        if let Some(overlay) = overlay {
++            overlay.paint(window, cx);
++        }
+     }
+ }
+ 
+@@ -3676,6 +3921,8 @@
+     table: TableState,
+     syntax_theme: Arc<SyntaxTheme>,
+     highlights: MarkdownHighlights,
++    /// Buddy patch
++    veil: Option<MarkdownVeil>,
+ }
+ 
+ struct MarkdownHighlights {
+@@ -3797,6 +4044,7 @@
+             table: TableState::default(),
+             syntax_theme,
+             highlights,
++            veil: None,
+         }
+     }
+ 
+@@ -4058,11 +4306,54 @@
+                     .runs
+                     .push(text_style.to_run(text.len() - offset));
+             }
++        } else if let Some(veil) = self.veil.clone()
++            // Only verbatim source text maps byte-for-byte onto source indices
++            && text.len() == source_range.len()
++        {
++            self.push_veiled_runs(text, source_range.start, &text_style, &veil);
+         } else {
+             self.pending_line.runs.push(text_style.to_run(text.len()));
+         }
+     }
+ 
++    /// Buddy patch: one run per veiled character, blending from the veil's start colour
++    fn push_veiled_runs(
++        &mut self,
++        text: &str,
++        source_start: usize,
++        text_style: &TextStyle,
++        veil: &MarkdownVeil,
++    ) {
++        let mut plain = 0;
++        for (offset, ch) in text.char_indices() {
++            let Some(progress) = (veil.progress)(source_start + offset) else {
++                plain += ch.len_utf8();
++                continue;
++            };
++            if plain > 0 {
++                self.pending_line.runs.push(text_style.to_run(plain));
++                plain = 0;
++            }
++            let progress = progress.clamp(0., 1.);
++            let from = veil.start_color.to_rgb();
++            let to = text_style.color.to_rgb();
++            let lerp = |a: f32, b: f32| a + (b - a) * progress;
++            let opacity = lerp(veil.start_opacity, 1.);
++            let color = Hsla::from(gpui::Rgba {
++                r: lerp(from.r, to.r),
++                g: lerp(from.g, to.g),
++                b: lerp(from.b, to.b),
++                a: to.a * opacity,
++            });
++            let mut style = text_style.clone();
++            style.color = color;
++            self.pending_line.runs.push(style.to_run(ch.len_utf8()));
++        }
++        if plain > 0 {
++            self.pending_line.runs.push(text_style.to_run(plain));
++        }
 +    }
 +
+     fn trim_trailing_newline(&mut self) {
+         if self.pending_line.text.ends_with('\n') {
+             self.pending_line
+@@ -4828,6 +5119,37 @@
+         source_index..source_index
+     }
+ 
 +    /// Buddy patch: the pieces [`Self::text_for_range`] joins, with the source range of each
 +    fn lines_for_range(&self, range: Range<usize>) -> Vec<(String, Range<usize>)> {
 +        let mut out = Vec::new();
@@ -936,12 +1091,23 @@ diff --color --color=never -ruN md-orig/markdown.rs md-ours/markdown.rs
 +            ));
 +        }
 +        out
-     }
- 
++    }
++
      fn text_for_range(&self, range: Range<usize>) -> String {
+         let mut accumulator = String::new();
+ 
+@@ -4949,7 +5271,7 @@
+ 
+     impl Element for CapturingMarkdownElement {
+         type RequestLayoutState = RenderedMarkdown;
+-        type PrepaintState = Hitbox;
++        type PrepaintState = (Hitbox, Option<AnyElement>);
+ 
+         fn id(&self) -> Option<ElementId> {
+             self.markdown_element.id()
 diff --color --color=never -ruN md-orig/mermaid.rs md-ours/mermaid.rs
---- md-orig/mermaid.rs	2026-09-27 23:22:45
-+++ md-ours/mermaid.rs	2026-09-27 23:22:45
+--- md-orig/mermaid.rs	2026-09-27 23:36:37
++++ md-ours/mermaid.rs	2026-09-27 23:36:37
 @@ -1,1836 +1,100 @@
 -use collections::HashMap;
 -use gpui::{
@@ -2843,7 +3009,7 @@ diff --color --color=never -ruN md-orig/mermaid.rs md-ours/mermaid.rs
  }
 diff --color --color=never -ruN md-orig/theme_settings_shim.rs md-ours/theme_settings_shim.rs
 --- md-orig/theme_settings_shim.rs	1970-01-01 08:00:00
-+++ md-ours/theme_settings_shim.rs	2026-09-27 23:22:45
++++ md-ours/theme_settings_shim.rs	2026-09-27 23:36:37
 @@ -0,0 +1,148 @@
 +//! S00-06 产物：`ThemeSettings` **shim**
 +//!

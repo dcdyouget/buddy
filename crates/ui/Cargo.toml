@@ -27,7 +27,15 @@ tokio.workspace = true
 # http：GPUI 图片加载的 HTTP 客户端（与 engine 同一 reqwest，不新增包）
 reqwest.workspace = true
 anyhow.workspace = true
+# markdown::streaming：定位流式尾段中的可见字符（与 vendored markdown 同一解析器，已在闭包中）
+pulldown-cmark.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc.workspace = true
 
 [dev-dependencies]
-# markdown::normalize 测试：用与 vendored parser 相同的解析器验证规范化效果
-pulldown-cmark.workspace = true
+
+[lints.rust]
+# objc 0.2 的 `msg_send!` 宏展开含 `cfg(feature = "cargo-clippy")`（accessibility.rs）；
+# 仅声明这一个取值为预期，其余 unexpected_cfgs 照常告警
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
