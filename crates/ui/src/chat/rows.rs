@@ -53,6 +53,11 @@ pub enum RowKind {
         /// 调用 id
         call: String,
     },
+    /// 回答下方的操作栏（复制 / 回到问题 / 时间，S05-14）。v1：非流式、不是工具循环的中间段、且有正文时显示
+    Actions {
+        /// 所属 assistant 消息下标
+        msg: usize,
+    },
     /// 流式中的回答尚无任何可见内容：占位行（v1 此时只显示呼吸星标）。
     /// 只在流式中存在，出现首个内容后即消失。
     Pending {
@@ -89,7 +94,7 @@ pub struct Row {
 
 fn msg_of(kind: &RowKind) -> usize {
     match kind {
-        RowKind::User { msg } | RowKind::Block { msg, .. } | RowKind::Tool { msg, .. } | RowKind::Pending { msg } => *msg,
+        RowKind::User { msg } | RowKind::Block { msg, .. } | RowKind::Tool { msg, .. } | RowKind::Pending { msg } | RowKind::Actions { msg } => *msg,
     }
 }
 
@@ -207,11 +212,25 @@ pub fn build_rows(state: &ChatState) -> Vec<Row> {
                 if live && rows.len() == rows_before {
                     rows.push(Row { id: format!("{anchor}#{m}.pending"), kind: RowKind::Pending { msg: ix }, version: 0, pos: RowPos::default() });
                 }
+                if !live && !next_visible_is_assistant(state, ix) && has_answer_text(message) {
+                    rows.push(Row { id: format!("{anchor}#{m}.actions"), kind: RowKind::Actions { msg: ix }, version: 0, pos: RowPos::default() });
+                }
             }
         }
     }
     assign_positions(state, &mut rows);
     rows
+}
+
+/// 下一条可见消息（跳过 tool）是否为助手（v1 `continuesToNext`）
+fn next_visible_is_assistant(state: &ChatState, ix: usize) -> bool {
+    state.messages[ix + 1..].iter().find(|m| m.role != MessageRole::Tool).is_some_and(|m| m.role == MessageRole::Assistant)
+}
+
+/// v1 `hasAnswerText`：正文或任一正文块非空白
+pub fn has_answer_text(message: &Message) -> bool {
+    !message.content.trim().is_empty()
+        || message.blocks.iter().flatten().any(|b| matches!(b, ContentBlock::Text { content } if !content.trim().is_empty()))
 }
 
 /// 第二遍：按消息分组标出首 / 末行与续段关系，并把位置并入版本
@@ -354,7 +373,7 @@ mod tests {
             tool("t1", "c1"),
             assistant("a2", vec![text("答")], vec![]),
         ]);
-        assert_eq!(ids(&build_rows(&state)), vec!["u1", "u1#0.0", "u1#0.1", "u1#0.t.c1", "u1#1.0"]);
+        assert_eq!(ids(&build_rows(&state)), vec!["u1", "u1#0.0", "u1#0.1", "u1#0.t.c1", "u1#1.0", "u1#1.actions"]);
     }
 
     #[test]
@@ -374,9 +393,36 @@ mod tests {
                 (true, false, false, true),  // a1 第一块：后面还有助手续段
                 (false, false, false, true), // a1 第二块
                 (false, true, false, true),  // a1 的工具行（末行）
-                (true, true, true, false),   // a2：续段（隔着 tool 消息仍算紧接）
+                (true, false, true, false),  // a2：续段（隔着 tool 消息仍算紧接）
+                (false, true, true, false),  // a2 的操作栏（末行）
             ]
         );
+    }
+
+    #[test]
+    fn actions_row_rules_match_v1() {
+        // 工具循环：中间段无操作栏，最后一段有；纯思考无正文的消息无操作栏
+        let state = ChatState::from_history(vec![
+            user("u1", "问"),
+            assistant("a1", vec![text("先查")], vec!["c1"]),
+            tool("t1", "c1"),
+            assistant("a2", vec![text("答")], vec![]),
+            user("u2", "再问"),
+            assistant("a3", vec![ContentBlock::Thinking { content: "想".into(), is_open: false }], vec![]),
+        ]);
+        let ids: Vec<String> = build_rows(&state).into_iter().map(|r| r.id).collect();
+        assert!(ids.contains(&"u1#1.actions".to_string()) && !ids.contains(&"u1#0.actions".to_string()), "{ids:?}");
+        assert!(!ids.iter().any(|i| i.starts_with("u2#") && i.ends_with(".actions")), "{ids:?}");
+        // 流式中不显示；结束后出现（只插入一行，其余行 id 不变）
+        let mut live = ChatState::from_history(Vec::new());
+        live.begin_send(user("u", "问"), "m");
+        live.push_event(StreamEvent::TextDelta { content_index: 0, delta: "答".into() }, 0.0);
+        live.flush(0.0);
+        let during: Vec<String> = build_rows(&live).into_iter().map(|r| r.id).collect();
+        assert!(!during.iter().any(|i| i.ends_with(".actions")));
+        live.push_event(StreamEvent::Done { reason: StopReason::Stop, full_text: String::new() }, 0.0);
+        let after: Vec<String> = build_rows(&live).into_iter().map(|r| r.id).collect();
+        assert_eq!(after, vec!["u".to_string(), "u#0.0".into(), "u#0.actions".into()]);
     }
 
     #[test]
@@ -385,7 +431,7 @@ mod tests {
         state.tools.get_mut("before").unwrap().insert_after = Some(-1);
         state.tools.get_mut("mid").unwrap().insert_after = Some(0);
         // 同一消息中有调用带位置 → 无位置者放到全部块之后
-        assert_eq!(ids(&build_rows(&state)), vec!["u", "u#0.t.before", "u#0.0", "u#0.t.mid", "u#0.1", "u#0.t.unplaced"]);
+        assert_eq!(ids(&build_rows(&state)), vec!["u", "u#0.t.before", "u#0.0", "u#0.t.mid", "u#0.1", "u#0.t.unplaced", "u#0.actions"]);
     }
 
     #[test]
@@ -428,7 +474,7 @@ mod tests {
             tool("t-0-2", "c1"),
             assistant("a-1-3", vec![text("答")], vec![]),
         ]);
-        assert_eq!(finished, vec!["u1", "u1#0.0", "u1#0.1", "u1#0.t.c1", "u1#1.0"]);
+        assert_eq!(finished, vec!["u1", "u1#0.0", "u1#0.1", "u1#0.t.c1", "u1#1.0", "u1#1.actions"]);
         assert_eq!(ids(&build_rows(&reloaded)), finished.iter().map(String::as_str).collect::<Vec<_>>());
         // 流式过程中出现过的 id 都在最终集合里（没有只在流式中存在、结束时消失的行）；
         // 例外只有「尚无内容」占位行，它按设计只在流式中存在

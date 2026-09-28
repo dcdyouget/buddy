@@ -136,7 +136,7 @@
 | S05-11 | 网络搜索卡片 | S05-10 | `todo` | `phase-05/S05-11-web-search.md` |
 | S05-12 | 图片生成卡片 | S05-10 | `todo` | `phase-05/S05-12-image-gen.md` |
 | S05-13 | 提问与审批卡片 | S05-08, S02-07 | `todo` | `phase-05/S05-13-ask-approval.md` |
-| S05-14 | 消息操作（复制 / 重试 / 编辑） | S05-08 | `doing` | `phase-05/S05-14-message-actions.md` |
+| S05-14 | 消息操作（复制 / 重试 / 编辑） | S05-08 | `blocked` | `phase-05/S05-14-message-actions.md` |
 | S05-15 | 模型选择器 | S05-06, S02-01 | `todo` | `phase-05/S05-15-model-picker.md` |
 | S05-16 | 空态与无 Key 态 | S05-06 | `todo` | `phase-05/S05-16-empty-nokey.md` |
 | S05-17 | 状态实体拆分与细粒度通知 | S05-01 | `done` | `phase-05/S05-17-state-entities.md` |
@@ -318,3 +318,4 @@
 | 2026-09-27 | S04-08 | `todo` → `doing` → `blocked` | GFM 元素按 v1 外观（vendored 补丁新增 `MarkdownStyle::decorations`）、链接按 v1 规则打开、网络图片（reqwest 实现 GPUI HTTP 客户端，不新增包）；T05 / T06 含拦截。**阻塞于用户目检**（handoff §6.5 第 5 项）。commit `82de50e`、`bfe852e` |
 | 2026-09-27 | S04-07 | `todo` → `doing` → `blocked` | 代码块按 v1 渲染（头部语言标签、复制 / 已复制 + 动画）；vendored 补丁接通 `CodeBlockRenderer::Custom`；T04 复制内容逐字节一致（含反证与拦截）。**阻塞于用户目检**（handoff §6.5 第 4 项）。commit `200d6ad`、`0a83f01` |
 | 2026-09-27 | S04-05 | `doing` → `done` | 移植 v1 normalizer 两项规范化（6 测试含反证）；**不做 Comet 流式 mend**（v1 无此行为）；流式观感目检移交 S05-08。commit `c956292` |
+| 2026-09-28 | S05-14 | `doing` → `blocked` | 回答操作栏按 v1（复制 / 回到问题 / 时间）；T21 真实点击含拦截；待目检 #14 |

@@ -851,6 +851,7 @@ dependencies = [
  "anyhow",
  "buddy-engine",
  "buddy-markdown",
+ "chrono",
  "gpui",
  "gpui_platform",
  "gpui_tokio",

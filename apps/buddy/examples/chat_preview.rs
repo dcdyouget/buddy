@@ -411,6 +411,62 @@ async fn selftest_follow(handle: WindowHandle<ChatPreview>, cx: &mut AsyncApp) -
     ok
 }
 
+/// T21 回答操作栏（S05-14）：真实点击「复制」、「已复制」反馈与恢复、回到问题
+async fn selftest_actions(handle: WindowHandle<ChatPreview>, cx: &mut AsyncApp) -> bool {
+    use buddy_ui::gpui::{Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, point};
+    let transcript = handle.read_with(cx, |p, _| p.transcript.clone()).unwrap();
+    wait_idle(handle, cx).await;
+    handle.update(cx, |p, _, cx| p.simulate_reply("请模拟一段流式回复", cx)).unwrap();
+    wait_idle(handle, cx).await;
+    transcript.update(cx, |t, cx| t.scroll_to_bottom(cx));
+    for _ in 0..20 {
+        cx.background_executor().timer(Duration::from_millis(16)).await;
+        draw(handle, cx).await;
+    }
+    let row_id = transcript.read_with(cx, |t, _| t.rows().last().map(|r| r.id.clone())).unwrap_or_default();
+    let bounds = transcript.read_with(cx, |t, _| t.painted_row_bounds(&row_id));
+    let saved = cx.update(|cx| cx.read_from_clipboard());
+    // 按 v1 版式定位「复制」按钮：行左 space-4 + 框边 1 + 框内左 space-2；行顶 space-1 + 框上边距 space-3 + 边 1 + 内 2 + 按钮半高 12
+    let target = bounds.map(|b| point(b.left() + px(16.0 + 1.0 + 8.0 + 20.0), b.top() + px(4.0 + 12.0 + 1.0 + 2.0 + 12.0)));
+    if let Some(p) = target {
+        for e in [
+            PlatformInput::MouseMove(MouseMoveEvent { position: p, pressed_button: None, modifiers: Modifiers::default() }),
+            PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Left, position: p, modifiers: Modifiers::default(), click_count: 1, first_mouse: false }),
+            PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Left, position: p, modifiers: Modifiers::default(), click_count: 1 }),
+        ] {
+            let _ = cx.update_window(handle.into(), |_, window, cx| window.dispatch_event(e, cx));
+            draw(handle, cx).await;
+        }
+    }
+    let copied_text = cx.update(|cx| cx.read_from_clipboard()).and_then(|c| c.text()).unwrap_or_default();
+    let copied_state = transcript.read_with(cx, |t, _| t.copied_row_for_test() == Some(row_id.clone()));
+    cx.background_executor().timer(Duration::from_millis(1800)).await;
+    draw(handle, cx).await;
+    let restored = transcript.read_with(cx, |t, _| t.copied_row_for_test().is_none());
+    if let Some(saved) = saved {
+        cx.update(|cx| cx.write_to_clipboard(saved));
+    }
+    // 回到问题：取历史中段一轮（最后几轮离底部太近，列表会把滚动位置夹到末尾），其用户消息应滚到视口顶部
+    let anchor = transcript.read_with(cx, |t, _| {
+        let actions: Vec<_> = t.rows().iter().filter(|r| r.id.ends_with(".actions")).collect();
+        actions.get(actions.len() / 2).map(|r| r.id.split('#').next().unwrap_or_default().to_string()).unwrap_or_default()
+    });
+    transcript.update(cx, |t, cx| t.scroll_to_row(&anchor, cx));
+    draw(handle, cx).await;
+    let top_is_question = transcript.read_with(cx, |t, _| {
+        let ix = t.rows().iter().position(|r| r.id == anchor);
+        ix == Some(t.list_state().logical_scroll_top().item_ix)
+    });
+    let ok = row_id.ends_with(".actions") && copied_text == STREAM_REPLY.trim() && copied_state && restored && top_is_question;
+    println!(
+        "T21: 操作栏行 {row_id}；复制得到 {} 字（与回答一致 {}）；「已复制」{copied_state} → 1.6 秒后恢复 {restored}；回到问题 {top_is_question}",
+        copied_text.chars().count(),
+        copied_text == STREAM_REPLY.trim()
+    );
+    println!("{} S05-14 T21 回答操作栏（复制 / 反馈 / 回到问题）", if ok { "PASS" } else { "FAIL" });
+    ok
+}
+
 /// T20 思考块与工具卡片（S05-09 / S05-10）
 async fn selftest_tools(handle: WindowHandle<ChatPreview>, cx: &mut AsyncApp) -> bool {
     use buddy_ui::chat::rows::RowKind;
@@ -608,7 +664,9 @@ fn selftest(handle: WindowHandle<ChatPreview>, cx: &mut App) {
                 let row = rows[top_before.item_ix - 10].clone();
                 p.conversation.update(cx, |c, cx| {
                     let msg = match row.kind {
-                        buddy_ui::chat::rows::RowKind::Block { msg, .. } | buddy_ui::chat::rows::RowKind::User { msg } => msg,
+                        buddy_ui::chat::rows::RowKind::Block { msg, .. }
+                        | buddy_ui::chat::rows::RowKind::User { msg }
+                        | buddy_ui::chat::rows::RowKind::Actions { msg } => msg,
                         _ => unreachable!(),
                     };
                     let longer = format!("{}\n\n{}", c.state.messages[msg].content, ANSWERS[4].repeat(3));
@@ -690,7 +748,8 @@ fn selftest(handle: WindowHandle<ChatPreview>, cx: &mut App) {
         let t18 = selftest_follow(handle, cx).await;
         let t19 = selftest_wheel(handle, cx).await;
         let t20 = selftest_tools(handle, cx).await;
-        std::process::exit(if t11 && t12 && t13 && t14 && t15 && t16 && t17 && t18 && t19 && t20 { 0 } else { 1 });
+        let t21 = selftest_actions(handle, cx).await;
+        std::process::exit(if t11 && t12 && t13 && t14 && t15 && t16 && t17 && t18 && t19 && t20 && t21 { 0 } else { 1 });
     })
     .detach();
 }

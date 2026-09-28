@@ -8,8 +8,10 @@
 //! - [`composer`] —— 输入区（S05-06）
 //! - [`think_block`] —— 思考块（S05-09）
 //! - [`tool_card`] —— 工具调用卡片（S05-10）
+//! - [`message_actions`] —— 回答操作栏（S05-14）
 
 pub mod composer;
+pub mod message_actions;
 pub mod message_row;
 pub mod rows;
 pub mod session;

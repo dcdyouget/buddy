@@ -16,6 +16,7 @@
 //! 行外观见 [`message_row`]（S05-08）；思考块 / 工具行的完整外观由 S05-09 / S05-10 完成。
 
 use super::message_row;
+use super::message_actions;
 use super::think_block;
 use super::tool_card;
 use gpui::ScrollHandle;
@@ -78,6 +79,8 @@ pub struct Transcript {
     /// 最近一次绘制时各行的屏幕边界（按行 id）。GPUI 贴底列表的 `bounds_for_item`
     /// 对末尾几行恒为 None，自检与定位需要以实际绘制为准
     painted_rows: Rc<RefCell<HashMap<String, gpui::Bounds<Pixels>>>>,
+    /// 刚复制过的操作栏（行 id）与恢复计时（v1 1.6 秒）
+    copied_actions: Option<(String, Task<()>)>,
     _observe: Subscription,
 }
 
@@ -113,6 +116,7 @@ impl Transcript {
             detail_scroll: HashMap::new(),
             nested_scroll: Rc::default(),
             painted_rows: Rc::default(),
+            copied_actions: None,
             _observe: observe,
         };
         this.sync(cx);
@@ -229,7 +233,10 @@ impl Transcript {
                 gpui::canvas(|_, _, _| {}, move |bounds, _, _, _| {
                     painted.borrow_mut().insert(id.clone(), bounds);
                 })
+                // 须显式 top/left：否则绝对定位元素落在内容之后，边界整体下移一个行高
                 .absolute()
+                .top_0()
+                .left_0()
                 .size_full(),
             )
             .into_any_element()
@@ -353,6 +360,34 @@ impl Transcript {
                     cx,
                 );
                 message_row::assistant_row(row.pos, card).into_any_element()
+            }
+            RowKind::Actions { msg } => {
+                let message = &state.messages[*msg];
+                let answer = message_actions::answer_text(message);
+                // 本轮用户消息 = 行 id 的锚（S05-02）；它在行集合中才有「回到问题」
+                let anchor = row.id.split('#').next().unwrap_or_default().to_string();
+                let has_question = self.rows.iter().any(|r| r.id == anchor && matches!(r.kind, RowKind::User { .. }));
+                let copied = self.copied_actions.as_ref().is_some_and(|(id, _)| *id == row.id);
+                let (w1, w2) = (cx.entity().downgrade(), cx.entity().downgrade());
+                let id = row.id.clone();
+                let bar = message_actions::message_actions(
+                    &row.id,
+                    message.created_at,
+                    copied,
+                    has_question,
+                    move |_, _, cx| {
+                        if answer.is_empty() {
+                            return;
+                        }
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(answer.clone()));
+                        let _ = w1.update(cx, |t, cx| t.mark_copied(id.clone(), cx));
+                    },
+                    move |_, _, cx| {
+                        let _ = w2.update(cx, |t, cx| t.scroll_to_row(&anchor, cx));
+                    },
+                    cx,
+                );
+                message_row::assistant_row(row.pos, bar).into_any_element()
             }
             // 回答尚无内容：只显示呼吸星标（v1 `StreamingNextStar`）
             RowKind::Pending { .. } => {
@@ -513,6 +548,8 @@ impl Transcript {
             },
         )
         .absolute()
+        .top_0()
+        .left_0()
         .size_full()
     }
 
@@ -533,6 +570,27 @@ impl Transcript {
         self.set_tool_expanded(row_id, !current, cx);
     }
 
+    /// 操作栏「已复制」反馈，1.6 秒后恢复（v1）
+    fn mark_copied(&mut self, row_id: String, cx: &mut Context<Self>) {
+        let task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(message_actions::COPIED_FEEDBACK).await;
+            let _ = this.update(cx, |t, cx| {
+                t.copied_actions = None;
+                cx.notify();
+            });
+        });
+        self.copied_actions = Some((row_id, task));
+        cx.notify();
+    }
+
+    /// 回到问题：把该行滚到视口顶部，并脱离跟随（v1 `scrollIntoView({ block: 'start' })`）
+    pub fn scroll_to_row(&mut self, row_id: &str, cx: &mut Context<Self>) {
+        if let Some(ix) = self.rows.iter().position(|r| r.id == row_id) {
+            self.list.scroll_to(gpui::ListOffset { item_ix: ix, offset_in_item: px(0.) });
+            cx.notify();
+        }
+    }
+
     /// 设置工具卡片展开（用户点击）：记住用户选择并重测该行
     fn set_tool_expanded(&mut self, row_id: &str, expanded: bool, cx: &mut Context<Self>) {
         self.tool_expanded.insert(row_id.to_string(), expanded);
@@ -541,6 +599,11 @@ impl Transcript {
             self.remeasured_rows += 1;
         }
         cx.notify();
+    }
+
+    /// 当前处于「已复制」的操作栏行（自检用）
+    pub fn copied_row_for_test(&self) -> Option<String> {
+        self.copied_actions.as_ref().map(|(id, _)| id.clone())
     }
 
     /// 工具详情的卡内滚动句柄（自检用）
@@ -655,6 +718,8 @@ impl Render for Transcript {
         let show_button = self.scroll_button_visible(cx);
         // 本帧重新登记可见的内层滚动区域（行渲染时写入）
         self.nested_scroll.borrow_mut().clear();
+        // 行绘制边界同样只保留本帧（否则未重绘的行留着过期位置）
+        self.painted_rows.borrow_mut().clear();
         // 陷阱 1：`list()` 自己 flex_grow；v1 列表上下内边距 space-3 / space-2
         div()
             .relative()

@@ -94,6 +94,8 @@ icons! {
     Wrench => "wrench",
     /// 失败（lucide `circle-x`，v1 `XCircle`）
     CircleX => "circle-x",
+    /// 回到问题（lucide `arrow-up`）
+    ArrowUp => "arrow-up",
     /// 流式四角星（Buddy 自绘，v1 `.streaming-next-star`）
     StreamingStar => "streaming-star",
 }
