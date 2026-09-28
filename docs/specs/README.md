@@ -121,26 +121,26 @@
 
 > 拆解依据：`docs/tasks/v2.0.0-gpui/05-chat-ui.md`
 
-| ID | Spec | 依赖 | 状态 |
-|----|------|------|------|
-| S05-01 | Transcript 虚拟列表骨架（ListState） | S03-01 | `todo` |
-| S05-02 | 块粒度行模型与稳定 id | S05-01 | `todo` |
-| S05-03 | 行高记忆与测量 | S05-02 | `todo` |
-| S05-04 | 跟尾弹簧与回到底部 | S05-03 | `todo` |
-| S05-05 | 历史加载与滚动（替换手动分页） | S05-04 | `todo` |
-| S05-06 | Composer 文本输入与 IME | S00-05, S03-04 | `todo` |
-| S05-07 | Composer 附件（粘贴 / 拖拽 / 选择 / 草稿） | S05-06 | `todo` |
-| S05-08 | 消息行渲染（用户 / 助手 / 流式态 / 错误态） | S04-04, S05-02 | `todo` |
-| S05-09 | 思考块 | S05-08 | `todo` |
-| S05-10 | 工具调用分组（ToolGroup / Deferred） | S05-08 | `todo` |
-| S05-11 | 网络搜索卡片 | S05-10 | `todo` |
-| S05-12 | 图片生成卡片 | S05-10 | `todo` |
-| S05-13 | 提问与审批卡片 | S05-08, S02-07 | `todo` |
-| S05-14 | 消息操作（复制 / 重试 / 编辑） | S05-08 | `todo` |
-| S05-15 | 模型选择器 | S05-06, S02-01 | `todo` |
-| S05-16 | 空态与无 Key 态 | S05-06 | `todo` |
-| S05-17 | 状态实体拆分与细粒度通知 | S05-01 | `todo` |
-| S05-18 | 页面状态机 | S05-16 | `todo` |
+| ID | Spec | 依赖 | 状态 | 文件 |
+|----|------|------|------|------|
+| S05-01 | Transcript 虚拟列表骨架（ListState） | S03-01 | `doing` | `phase-05/S05-01-transcript-list.md` |
+| S05-02 | 块粒度行模型与稳定 id | S05-01 | `todo` | `phase-05/S05-02-row-model.md` |
+| S05-03 | 行高记忆与测量 | S05-02 | `todo` | `phase-05/S05-03-row-heights.md` |
+| S05-04 | 跟尾弹簧与回到底部 | S05-03 | `todo` | `phase-05/S05-04-follow-bottom.md` |
+| S05-05 | 历史加载与滚动（替换手动分页） | S05-04 | `todo` | `phase-05/S05-05-history-loading.md` |
+| S05-06 | Composer 文本输入与 IME | S00-05, S03-04 | `todo` | `phase-05/S05-06-composer-input.md` |
+| S05-07 | Composer 附件（粘贴 / 拖拽 / 选择 / 草稿） | S05-06 | `todo` | `phase-05/S05-07-composer-attachments.md` |
+| S05-08 | 消息行渲染（用户 / 助手 / 流式态 / 错误态） | S04-04, S05-02 | `todo` | `phase-05/S05-08-message-rows.md` |
+| S05-09 | 思考块 | S05-08 | `todo` | `phase-05/S05-09-think-block.md` |
+| S05-10 | 工具调用分组（ToolGroup / Deferred） | S05-08 | `todo` | `phase-05/S05-10-tool-groups.md` |
+| S05-11 | 网络搜索卡片 | S05-10 | `todo` | `phase-05/S05-11-web-search.md` |
+| S05-12 | 图片生成卡片 | S05-10 | `todo` | `phase-05/S05-12-image-gen.md` |
+| S05-13 | 提问与审批卡片 | S05-08, S02-07 | `todo` | `phase-05/S05-13-ask-approval.md` |
+| S05-14 | 消息操作（复制 / 重试 / 编辑） | S05-08 | `todo` | `phase-05/S05-14-message-actions.md` |
+| S05-15 | 模型选择器 | S05-06, S02-01 | `todo` | `phase-05/S05-15-model-picker.md` |
+| S05-16 | 空态与无 Key 态 | S05-06 | `todo` | `phase-05/S05-16-empty-nokey.md` |
+| S05-17 | 状态实体拆分与细粒度通知 | S05-01 | `doing` | `phase-05/S05-17-state-entities.md` |
+| S05-18 | 页面状态机 | S05-16 | `todo` | `phase-05/S05-18-page-state.md` |
 
 ---
 
@@ -299,6 +299,7 @@
 | 2026-09-27 | S04-02 | `doing` → `done` | Comet syntax 接入；v1 语言集 17 种；T03 布局不变（6e-5 px）并反证；+30 包全 MIT。commit `3aa039b` |
 | 2026-09-27 | S04-03 | `todo` → `doing` → `done` | util 替身（−21 包）、10 个未用语法包 feature 化（约 12 MB）、HTML 按 v1 实测转义；新增 GPL patch 同步检查。commit `6c55b0c` |
 | 2026-09-27 | S04-04 | `doing` → `done` | 实测后决定不做增量解析：release 5000 行 9 ms、流式一帧内追上（额外 ≤1.1 ms）。commit `b919826` |
+| 2026-09-28 | Phase 05 | 展开 18 个 spec 文件 | 依据 `05-chat-ui.md` 与 v1 代码；输入段在开始各 spec 时按实读的 v1 组件补充 |
 | 2026-09-28 | S03-05 / S03-06 / S04-06 / S04-07 / S04-08 / S04-09 | `blocked` → `done` | 用户目检 §6.5 全部 7 项通过（含 S02-06 真实对话、S02-09 v1 联网搜索实际可用）。目检中反馈「窗口卡」→ 定位为每帧枚举系统字体（620ms/帧，release 同样），修正后 5.8ms / 1.1ms，commit `b05a24f` |
 | 2026-09-27 | 用户决策 | 5 项定案 | ① 选区色用品牌色（S04-09）② 不做「跟随系统」主题（S03-06）③ 不打包 Fira Code，未安装时用系统字体（S03-05，现有回退规则即满足）④ 启用 v1 之外的 10 种代码高亮语言（S04-02 / S04-03，commit `06057e1`；约 +12 MB，包体积 Phase 08 实测）⑤ 整个重构完成后再推送（S01-05） |
 | 2026-09-27 | S04-06 | `todo` → `doing` → `blocked` | 节奏器（v1 `useSmoothTextRenderer`）+ 尾段 9 字落定 + 呼吸星标 + 减弱动效（NSWorkspace）；vendored 补丁 veil / overlay；15 单测对应 v1 用例；T08 布局不变、T09 端到端（含反证与拦截）。**阻塞于用户目检**（§6.5 第 7 项）。commit `89d90d8` |
