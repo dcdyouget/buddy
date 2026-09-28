@@ -127,16 +127,16 @@
 | S05-02 | 块粒度行模型与稳定 id | S05-01 | `done` | `phase-05/S05-02-row-model.md` |
 | S05-03 | 行高记忆与测量 | S05-02 | `done` | `phase-05/S05-03-row-heights.md` |
 | S05-04 | 跟尾弹簧与回到底部 | S05-03 | `done` | `phase-05/S05-04-follow-bottom.md` |
-| S05-05 | 历史加载与滚动（替换手动分页） | S05-04 | `todo` | `phase-05/S05-05-history-loading.md` |
+| S05-05 | 历史加载与滚动（替换手动分页） | S05-04 | `doing` | `phase-05/S05-05-history-loading.md` |
 | S05-06 | Composer 文本输入与 IME | S00-05, S03-04 | `done` | `phase-05/S05-06-composer-input.md` |
 | S05-07 | Composer 附件（粘贴 / 拖拽 / 选择 / 草稿） | S05-06 | `todo` | `phase-05/S05-07-composer-attachments.md` |
 | S05-08 | 消息行渲染（用户 / 助手 / 流式态 / 错误态） | S04-04, S05-02 | `done` | `phase-05/S05-08-message-rows.md` |
-| S05-09 | 思考块 | S05-08 | `todo` | `phase-05/S05-09-think-block.md` |
-| S05-10 | 工具调用分组（ToolGroup / Deferred） | S05-08 | `todo` | `phase-05/S05-10-tool-groups.md` |
+| S05-09 | 思考块 | S05-08 | `blocked` | `phase-05/S05-09-think-block.md` |
+| S05-10 | 工具调用分组（ToolGroup / Deferred） | S05-08 | `blocked` | `phase-05/S05-10-tool-groups.md` |
 | S05-11 | 网络搜索卡片 | S05-10 | `todo` | `phase-05/S05-11-web-search.md` |
 | S05-12 | 图片生成卡片 | S05-10 | `todo` | `phase-05/S05-12-image-gen.md` |
 | S05-13 | 提问与审批卡片 | S05-08, S02-07 | `todo` | `phase-05/S05-13-ask-approval.md` |
-| S05-14 | 消息操作（复制 / 重试 / 编辑） | S05-08 | `todo` | `phase-05/S05-14-message-actions.md` |
+| S05-14 | 消息操作（复制 / 重试 / 编辑） | S05-08 | `doing` | `phase-05/S05-14-message-actions.md` |
 | S05-15 | 模型选择器 | S05-06, S02-01 | `todo` | `phase-05/S05-15-model-picker.md` |
 | S05-16 | 空态与无 Key 态 | S05-06 | `todo` | `phase-05/S05-16-empty-nokey.md` |
 | S05-17 | 状态实体拆分与细粒度通知 | S05-01 | `done` | `phase-05/S05-17-state-entities.md` |
@@ -299,6 +299,7 @@
 | 2026-09-27 | S04-02 | `doing` → `done` | Comet syntax 接入；v1 语言集 17 种；T03 布局不变（6e-5 px）并反证；+30 包全 MIT。commit `3aa039b` |
 | 2026-09-27 | S04-03 | `todo` → `doing` → `done` | util 替身（−21 包）、10 个未用语法包 feature 化（约 12 MB）、HTML 按 v1 实测转义；新增 GPL patch 同步检查。commit `6c55b0c` |
 | 2026-09-27 | S04-04 | `doing` → `done` | 实测后决定不做增量解析：release 5000 行 9 ms、流式一帧内追上（额外 ≤1.1 ms）。commit `b919826` |
+| 2026-09-28 | S05-09 / S05-10 | `todo` → `doing` → `blocked` | 思考块、工具卡片按 v1；T20；待目检 #12 / #13。commit `6aa8ffa` |
 | 2026-09-28 | S05-01 / S05-04 | `blocked` → `done` | 用户复核无极滚动通过（目检 #8 / #11） |
 | 2026-09-28 | S05-06 / S05-08 | `blocked` → `done` | 用户目检 #9 / #10 通过 |
 | 2026-09-28 | S05-01 / S05-04 | 仍 `blocked` | 目检反馈滚轮「逐行」→ 移植 v1 平滑滚轮（T19），并修 GPUI 贴底位置换算问题；待用户复核 |
