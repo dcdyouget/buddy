@@ -12,7 +12,8 @@
 //! 自检：
 //! - T11 虚拟化（S05-01）：1000 条消息（约 2000+ 行）中，滚动 60 帧，平均每帧布局的行数远小于总行数；
 //! - T12 流式只重测一行（S05-02 / S05-17）：纯正文流式期间，每次行同步最多重测 1 行、行集合不变；
-//! - T13 重绘预算：1000 条消息时整窗重绘中位耗时 < 50ms。
+//! - T13 重绘预算：1000 条消息时整窗重绘中位耗时 < 50ms；
+//! - T14 视口上方行高变化（S05-03）：可见内容不移动（视口首行与行内偏移不变），且只重测那一行。
 
 use buddy_ui::chat::{session::Conversation, transcript::Transcript};
 use buddy_ui::gpui::{
@@ -185,6 +186,55 @@ fn selftest(handle: WindowHandle<ChatPreview>, cx: &mut App) {
         println!("T13: 整窗重绘中位 {median:.2} ms（预算 50 ms）");
         println!("{} S05-01 T13 长列表重绘耗时在预算内", if t13 { "PASS" } else { "FAIL" });
 
+        // ── T14：视口上方的行高变化不移动可见内容（S05-03） ──
+        transcript.update(cx, |t, _| t.list_state().scroll_to(buddy_ui::gpui::ListOffset { item_ix: total_rows / 2, offset_in_item: px(10.0) }));
+        draw(handle, cx).await;
+        let top_before = transcript.read_with(cx, |t, _| t.list_state().logical_scroll_top());
+        let (screen_before, height_before, target_above) = transcript.read_with(cx, |t, _| {
+            let l = t.list_state();
+            (l.bounds_for_item(top_before.item_ix + 1).map(|b| b.origin.y), l.max_offset_for_scrollbar().y, l.item_is_above_viewport(top_before.item_ix - 10))
+        });
+        let remeasured_before = transcript.read_with(cx, |t, _| t.remeasured_rows);
+        // 把视口上方第 10 行所在的助手消息改长（模拟图片加载 / 展开等造成的高度变化）
+        let target = handle
+            .update(cx, |p, _, cx| {
+                let rows = p.transcript.read(cx).rows().to_vec();
+                let row = rows[top_before.item_ix - 10].clone();
+                p.conversation.update(cx, |c, cx| {
+                    let msg = match row.kind {
+                        buddy_ui::chat::rows::RowKind::Block { msg, .. } | buddy_ui::chat::rows::RowKind::User { msg } => msg,
+                        _ => unreachable!(),
+                    };
+                    let longer = format!("{}\n\n{}", c.state.messages[msg].content, ANSWERS[4].repeat(3));
+                    c.state.messages[msg].content = longer.clone();
+                    if let Some(blocks) = c.state.messages[msg].blocks.as_mut() {
+                        blocks[0] = ContentBlock::Text { content: longer };
+                    }
+                    c.state.revision += 1;
+                    cx.notify();
+                });
+                row.id
+            })
+            .unwrap();
+        draw(handle, cx).await;
+        draw(handle, cx).await;
+        let top_after = transcript.read_with(cx, |t, _| t.list_state().logical_scroll_top());
+        let (screen_after, height_after) = transcript.read_with(cx, |t, _| {
+            let l = t.list_state();
+            (l.bounds_for_item(top_before.item_ix + 1).map(|b| b.origin.y), l.max_offset_for_scrollbar().y)
+        });
+        let remeasured = transcript.read_with(cx, |t, _| t.remeasured_rows) - remeasured_before;
+        println!("T14: 视口内某行屏幕位置 {screen_before:?} → {screen_after:?}；内容总高（可滚动量）{height_before:?} → {height_after:?}（反证：须增加）；改动行在视口上方 {target_above:?}");
+        let t14 = top_before.item_ix == top_after.item_ix
+            && top_before.offset_in_item == top_after.offset_in_item
+            && screen_before.is_some()
+            && screen_before == screen_after
+            && height_after > height_before
+            && target_above == Some(true)
+            && remeasured == 1;
+        println!("T14: 改动视口上方的行 {target}（重测 {remeasured} 行）；视口首行 {} + {:?} → {} + {:?}", top_before.item_ix, top_before.offset_in_item, top_after.item_ix, top_after.offset_in_item);
+        println!("{} S05-03 T14 视口上方行高变化不移动可见内容", if t14 { "PASS" } else { "FAIL" });
+
         // ── T12：流式只重测一行 ──
         transcript.update(cx, |t, _| t.list_state().scroll_to_end());
         handle.update(cx, |p, _, cx| p.simulate_reply(cx)).unwrap();
@@ -217,7 +267,7 @@ fn selftest(handle: WindowHandle<ChatPreview>, cx: &mut App) {
         let t12 = syncs > 5 && max_per_sync == 1 && row_count_stable;
         println!("T12: 流式期间行同步 {syncs} 次（按帧采样），单次最多重测 {max_per_sync} 行；行数稳定 {row_count_stable}");
         println!("{} S05-01 T12 流式只重测最后一行", if t12 { "PASS" } else { "FAIL" });
-        std::process::exit(if t11 && t12 && t13 { 0 } else { 1 });
+        std::process::exit(if t11 && t12 && t13 && t14 { 0 } else { 1 });
     })
     .detach();
 }

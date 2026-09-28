@@ -15,13 +15,13 @@
 | 02 | 引擎层移植 | 9 | **9** | S01-01 |
 | 03 | 主题与设计令牌 | 7 | **7** | S01-01 |
 | 04 | Markdown 栈 | 9 | **9** | S01-01 |
-| 05 | 聊天界面 | 18 | 2 | S03-*, S04-* |
+| 05 | 聊天界面 | 18 | 3 | S03-*, S04-* |
 | 06 | 设置界面 | 6 | 0 | S03-* |
 | 07 | 应用外壳与窗口行为 | 13 | 0 | S01-01 |
 | 08 | 更新与发布 | 11 | 0 | S07-* |
 | 09 | 平台对齐（Windows） | 9 | 0 | macOS 全链路验收 |
 | 10 | 测试与验收 | 7 | 0 | 与 02-09 并行 |
-| | **合计** | **104** | **42** | |
+| | **合计** | **104** | **43** | |
 
 > **准入条件是必要条件而非充分条件**：具体以各 spec 自身的「依赖」列为准（`RULES.md` §9.2）。
 > 规范强制 **Phase 单调性**：Phase `NN` 的 spec 只能依赖 Phase ≤ `NN` 的 spec（`RULES.md` §9.1）。
@@ -125,12 +125,12 @@
 |----|------|------|------|------|
 | S05-01 | Transcript 虚拟列表骨架（ListState） | S03-01 | `blocked` | `phase-05/S05-01-transcript-list.md` |
 | S05-02 | 块粒度行模型与稳定 id | S05-01 | `done` | `phase-05/S05-02-row-model.md` |
-| S05-03 | 行高记忆与测量 | S05-02 | `todo` | `phase-05/S05-03-row-heights.md` |
+| S05-03 | 行高记忆与测量 | S05-02 | `done` | `phase-05/S05-03-row-heights.md` |
 | S05-04 | 跟尾弹簧与回到底部 | S05-03 | `todo` | `phase-05/S05-04-follow-bottom.md` |
 | S05-05 | 历史加载与滚动（替换手动分页） | S05-04 | `todo` | `phase-05/S05-05-history-loading.md` |
 | S05-06 | Composer 文本输入与 IME | S00-05, S03-04 | `todo` | `phase-05/S05-06-composer-input.md` |
 | S05-07 | Composer 附件（粘贴 / 拖拽 / 选择 / 草稿） | S05-06 | `todo` | `phase-05/S05-07-composer-attachments.md` |
-| S05-08 | 消息行渲染（用户 / 助手 / 流式态 / 错误态） | S04-04, S05-02 | `todo` | `phase-05/S05-08-message-rows.md` |
+| S05-08 | 消息行渲染（用户 / 助手 / 流式态 / 错误态） | S04-04, S05-02 | `doing` | `phase-05/S05-08-message-rows.md` |
 | S05-09 | 思考块 | S05-08 | `todo` | `phase-05/S05-09-think-block.md` |
 | S05-10 | 工具调用分组（ToolGroup / Deferred） | S05-08 | `todo` | `phase-05/S05-10-tool-groups.md` |
 | S05-11 | 网络搜索卡片 | S05-10 | `todo` | `phase-05/S05-11-web-search.md` |
@@ -299,6 +299,7 @@
 | 2026-09-27 | S04-02 | `doing` → `done` | Comet syntax 接入；v1 语言集 17 种；T03 布局不变（6e-5 px）并反证；+30 包全 MIT。commit `3aa039b` |
 | 2026-09-27 | S04-03 | `todo` → `doing` → `done` | util 替身（−21 包）、10 个未用语法包 feature 化（约 12 MB）、HTML 按 v1 实测转义；新增 GPL patch 同步检查。commit `6c55b0c` |
 | 2026-09-27 | S04-04 | `doing` → `done` | 实测后决定不做增量解析：release 5000 行 9 ms、流式一帧内追上（额外 ≤1.1 ms）。commit `b919826` |
+| 2026-09-28 | S05-03 | `todo` → `doing` → `done` | 行高缓存由 ListState 承担，只重测内容变化的行；T14 视口上方行变高时可见行屏幕坐标不变（反证：总高 +234px） |
 | 2026-09-28 | S05-17 | `doing` → `done` | 对话状态移植 v1 chatStore（14 例 + 4 例）；会话实体只在变化时通知；T12 流式只重测一行。commit `08c1c76` |
 | 2026-09-28 | S05-02 | `todo` → `doing` → `done` | 行模型在 S05-01 进行中先行提交（`cb5eaa5`），如实补走状态；以用户消息为锚的稳定 id（流式 / 落盘重载一致） |
 | 2026-09-28 | S05-01 | `doing` → `blocked` | 虚拟列表：每帧布局 7 行（1000 / 5000 条）；重绘 2.6 ms；`measure_all` 首帧成本记录，交 S05-05 分页控制。**阻塞于用户目检**（§6.5 第 8 项） |
