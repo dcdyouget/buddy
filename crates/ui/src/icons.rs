@@ -50,6 +50,16 @@ icons! {
     Close => "x",
     /// 向下（lucide `chevron-down`）
     ChevronDown => "chevron-down",
+    /// 设置（lucide `settings`）
+    Settings => "settings",
+    /// 模型（lucide `bot`）
+    Bot => "bot",
+    /// 发送（lucide `send`）
+    Send => "send",
+    /// 停止（lucide `square`）
+    Square => "square",
+    /// 添加图片（lucide `image-plus`）
+    ImagePlus => "image-plus",
     /// 流式四角星（Buddy 自绘，v1 `.streaming-next-star`）
     StreamingStar => "streaming-star",
 }

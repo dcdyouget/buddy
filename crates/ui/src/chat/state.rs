@@ -19,7 +19,7 @@
 
 use crate::markdown::streaming::Pacer;
 use buddy_engine::models::{ImageAttachment, Message, MessageRole, ToolCall};
-use buddy_engine::streaming::{ContentBlock, QuestionOption, StreamEvent};
+use buddy_engine::streaming::{ContentBlock, QuestionOption, StopReason, StreamEvent};
 use std::collections::{HashMap, VecDeque};
 
 /// 工具调用的界面状态（v1 `ToolCallStatus`）
@@ -132,8 +132,21 @@ pub struct ChatState {
     pub question: Option<Question>,
     /// 错误提示（v1 `error`）
     pub error: Option<String>,
+    /// 出错后界面追加、待持久化的提示消息（v1 `useStreaming.ts` 按错误类型追加并 `saveMessage`）；
+    /// 会话实体取走后交 engine 保存
+    pub pending_saves: Vec<Message>,
+    /// 出错且为鉴权失败（401 / unauthorized）：应切到「无 API Key」页（v1 `setPage('noapikey')`）
+    pub needs_api_key: bool,
     /// 任何可见变化都递增（视图据此决定是否刷新）
     pub revision: u64,
+}
+
+/// 用户停止：放完已到内容后按完成收尾（v1 `handleStreamDone`）
+fn live_done(state: &mut ChatState, now: f64) {
+    if let Some(live) = state.live.as_mut() {
+        live.done_pending = true;
+    }
+    state.drain(now);
 }
 
 fn now_secs() -> u64 {
@@ -347,7 +360,15 @@ impl ChatState {
                 live.done_pending = true;
                 self.drain(now);
             }
-            StreamEvent::Error { message, .. } => self.handle_error(message, now),
+            // v1：用户停止（aborted）按正常结束处理，不显示错误
+            StreamEvent::Error { reason: StopReason::Aborted, .. } => {
+                self.flush(now);
+                live_done(self, now);
+            }
+            StreamEvent::Error { message, .. } => {
+                self.handle_error(message.clone(), now);
+                self.error_followup(&message);
+            }
             StreamEvent::TextDelta { delta, .. } => {
                 // 相邻正文增量合并；正在放出的正文即队首（v1 中缓冲镜像队首）
                 match live.queue.back_mut() {
@@ -366,6 +387,33 @@ impl ChatState {
                 self.drain(now);
             }
         }
+    }
+
+    /// 出错后的后续动作（v1 `useStreaming.ts` 的 error 分支）
+    fn error_followup(&mut self, message: &str) {
+        let appended = if message.contains("401") || message.contains("unauthorized") {
+            self.needs_api_key = true;
+            None
+        } else if message.contains("429") || message.contains("quota") {
+            Some("API 配额已用尽，请稍后再试或检查您的账户限额。".to_string())
+        } else if message.contains("HTTP 5") || message.contains("server_error") {
+            Some(message.to_string())
+        } else if message.contains("网络错误") || message.contains("network") || message.contains("timeout") {
+            Some("网络错误，请重试".to_string())
+        } else {
+            None
+        };
+        if let Some(content) = appended {
+            let mut notice = assistant_message("");
+            notice.id = format!("err-{}", unique_suffix());
+            notice.model_id = None;
+            notice.blocks = None;
+            notice.content = content;
+            self.messages.push(notice.clone());
+            self.pending_saves.push(notice);
+            self.hydrate();
+        }
+        self.touch();
     }
 
     /// 每帧调用：按节奏放出正文，放完后继续处理排队的事件（v1 `smoothTextDelta`）
@@ -991,7 +1039,8 @@ mod tests {
         // v1「流式报错时不会把未完成调用伪装成可复用的错误调用」
         let mut s = streaming();
         with_active(&mut s, view("partial", "ask_user", "{\"question\":", ToolStatus::Executing));
-        s.push_event(StreamEvent::Error { reason: StopReason::Error, message: "网络错误".into(), partial_text: String::new() }, 0.0);
+        // v1 该用例直接调用 store 的 handleStreamError（按错误类型追加提示消息属 useStreaming 层，另见 error_followups_match_v1）
+        s.handle_error("网络错误".into(), 0.0);
         assert!(s.messages.is_empty(), "空占位应被移除");
         assert!(s.live.is_none());
         assert_eq!(s.error.as_deref(), Some("网络错误"));
@@ -1128,6 +1177,51 @@ mod tests {
         m.content = "<think>想</think>答".into();
         let s = ChatState::from_history(vec![m]);
         assert_blocks(s.messages[0].blocks.as_deref().unwrap(), &[think("想", false), text("答")]);
+    }
+
+    fn error(reason: StopReason, message: &str) -> StreamEvent {
+        StreamEvent::Error { reason, message: message.into(), partial_text: String::new() }
+    }
+
+    #[test]
+    fn aborted_is_a_normal_finish() {
+        // v1：reason === 'aborted' → handleStreamDone，不显示错误
+        let mut s = streaming();
+        s.push_event(delta("已生成"), 0.0);
+        s.push_event(error(StopReason::Aborted, "用户取消"), 0.0);
+        assert!(!s.is_streaming());
+        assert!(s.error.is_none());
+        assert_eq!(s.messages[0].content, "已生成");
+    }
+
+    #[test]
+    fn error_followups_match_v1() {
+        let cases = [
+            ("HTTP 401 unauthorized", None, true),
+            ("HTTP 429: quota exceeded", Some("API 配额已用尽，请稍后再试或检查您的账户限额。"), false),
+            ("HTTP 502 server_error", Some("HTTP 502 server_error"), false),
+            ("请求超时 timeout", Some("网络错误，请重试"), false),
+            ("网络错误：连接被重置", Some("网络错误，请重试"), false),
+            ("其他错误", None, false),
+        ];
+        for (message, appended, needs_key) in cases {
+            let mut s = streaming();
+            s.push_event(delta("部分"), 0.0);
+            s.push_event(error(StopReason::Error, message), 0.0);
+            assert_eq!(s.error.as_deref(), Some(message));
+            assert_eq!(s.needs_api_key, needs_key, "{message}");
+            let last = s.messages.last().unwrap();
+            match appended {
+                Some(text) => {
+                    assert_eq!((last.role.clone(), last.content.as_str()), (MessageRole::Assistant, text), "{message}");
+                    assert_eq!(s.pending_saves.len(), 1);
+                }
+                None => {
+                    assert_eq!(last.content, "部分", "{message}");
+                    assert!(s.pending_saves.is_empty());
+                }
+            }
+        }
     }
 
     #[test]

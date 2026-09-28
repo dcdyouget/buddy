@@ -31,6 +31,7 @@
 //! - [`http`] —— GPUI 图片加载用的 HTTP 客户端（`S04-08`）
 //! - [`accessibility`] —— 系统辅助功能设置（减弱动态效果，`S04-06`）
 //! - [`components`] —— 共用小组件（v1 `components/shared`）
+//! - [`text_area`] —— 多行文本输入框（`S05-06`）
 //! - [`chat_bridge`] —— tokio（engine）↔ GPUI 前台的事件桥接（`S02-06`）
 
 #![warn(missing_docs)]
@@ -55,6 +56,7 @@ pub mod components;
 pub mod http;
 pub mod icons;
 pub mod markdown;
+pub mod text_area;
 pub mod theme_system;
 
 use gpui::{App, Font, Pixels};

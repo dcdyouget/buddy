@@ -16,7 +16,14 @@
 //! - T14 视口上方行高变化（S05-03）：可见内容不移动（视口首行与行内偏移不变），且只重测那一行；
 //! - T15 用户消息保留换行（S05-08，v1 `white-space: pre-wrap`）。
 
-use buddy_ui::chat::{session::Conversation, transcript::Transcript};
+use buddy_ui::chat::{
+    composer::{Composer, ComposerEvent},
+    session::Conversation,
+    transcript::Transcript,
+};
+use buddy_ui::gpui::{EntityInputHandler, Focusable, KeyDownEvent, Keystroke, PlatformInput};
+use std::cell::Cell;
+use std::rc::Rc;
 use buddy_ui::gpui::{
     App, AppContext, AsyncApp, Bounds, Context, Entity, Render, Window, WindowBounds, WindowHandle, WindowOptions, div, prelude::*, px, size,
 };
@@ -72,6 +79,11 @@ fn history(count: usize) -> Vec<Message> {
 struct ChatPreview {
     conversation: Entity<Conversation>,
     transcript: Entity<Transcript>,
+    composer: Entity<Composer>,
+    /// 发送过的草稿（T16 计数）
+    sent: Vec<String>,
+    /// 模拟流式的停止标志
+    stop: Rc<Cell<bool>>,
     _subscriptions: Vec<buddy_ui::gpui::Subscription>,
 }
 
@@ -83,9 +95,28 @@ impl ChatPreview {
                 let active = window.is_window_active();
                 this.conversation.update(cx, |c, cx| if active { c.window_shown(cx) } else { c.window_hidden(cx) });
             }),
-            cx.observe(&conversation, |_, _, cx| cx.notify()),
+            // 流式状态同步到输入区（流式中显示「生成中」+ 停止按钮）
+            cx.observe_in(&conversation, window, |this: &mut Self, conversation, window, cx| {
+                let streaming = conversation.read(cx).state.is_streaming();
+                this.composer.update(cx, |c, cx| c.set_streaming(streaming, Some("mock-model".into()), window, cx));
+                cx.notify();
+            }),
         ];
-        Self { conversation, transcript, _subscriptions: subscriptions }
+        let composer = cx.new(|cx| Composer::new(window, cx));
+        let mut subscriptions = subscriptions;
+        subscriptions.push(cx.subscribe(&composer, |this: &mut Self, composer, event: &ComposerEvent, cx| match event {
+            ComposerEvent::Send(text) => {
+                this.sent.push(text.clone());
+                composer.update(cx, |c, cx| c.set_draft("", cx));
+                let text = text.clone();
+                this.simulate_reply(&text, cx);
+            }
+            // v1：停止 → engine 发出 Error(Aborted) → 按正常结束处理
+            ComposerEvent::Stop => this.stop.set(true),
+            ComposerEvent::OpenSettings | ComposerEvent::PickModel => {}
+        }));
+        window.focus(&composer.focus_handle(cx), cx);
+        Self { conversation, transcript, composer, sent: Vec::new(), stop: Rc::default(), _subscriptions: subscriptions }
     }
 
     /// 模拟一次出错：发送后先到一段正文，再收到网络错误（v1：已显示正文保留、提示条显示错误）
@@ -105,16 +136,24 @@ impl ChatPreview {
     }
 
     /// 模拟一次流式回复：固定种子切片，20–120ms 间隔到达
-    fn simulate_reply(&mut self, cx: &mut Context<Self>) {
+    fn simulate_reply(&mut self, question: &str, cx: &mut Context<Self>) {
         let conversation = self.conversation.clone();
-        let user = message(format!("u-live-{}", buddy_ui::chat::state::unique_suffix()), MessageRole::User, "请模拟一段流式回复");
+        let user = message(format!("u-live-{}", buddy_ui::chat::state::unique_suffix()), MessageRole::User, question);
         conversation.update(cx, |c, cx| c.begin_send(user, "mock-model", cx));
+        let stop = self.stop.clone();
+        stop.set(false);
         cx.spawn(async move |_, cx: &mut AsyncApp| {
             let mut seed: u64 = 7;
             let chars: Vec<char> = STREAM_REPLY.chars().collect();
             let mut i = 0;
             let _ = conversation.update(cx, |c, cx| c.apply_events(vec![StreamEvent::Start, StreamEvent::TextStart { content_index: 0 }], cx));
             while i < chars.len() {
+                if stop.get() {
+                    let _ = conversation.update(cx, |c, cx| {
+                        c.apply_events(vec![StreamEvent::Error { reason: StopReason::Aborted, message: "用户取消".into(), partial_text: String::new() }], cx)
+                    });
+                    return;
+                }
                 seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
                 let n = (1 + (seed >> 33) % 8) as usize;
                 let piece: String = chars[i..(i + n).min(chars.len())].iter().collect();
@@ -170,7 +209,7 @@ impl Render for ChatPreview {
                     .p(px(metrics::SPACE_3))
                     .child(button("toggle", if next == Appearance::Dark { "切换到深色" } else { "切换到浅色" }).on_click(move |_, _, cx| set_appearance(next, cx)))
                     .when(!streaming, |d| {
-                        d.child(button("reply", "模拟流式回复").on_click(cx.listener(|this, _, _, cx| this.simulate_reply(cx))))
+                        d.child(button("reply", "模拟流式回复").on_click(cx.listener(|this, _, _, cx| this.simulate_reply("请模拟一段流式回复", cx))))
                             .child(button("error", "模拟出错").on_click(cx.listener(|this, _, _, cx| this.simulate_error(cx))))
                     })
                     .child(div().text_color(theme.colors.text_muted).child(format!("{} 行", self.transcript.read(cx).rows().len()))),
@@ -190,6 +229,7 @@ impl Render for ChatPreview {
                     cx,
                 ))
             })
+            .child(self.composer.clone())
     }
 }
 
@@ -200,6 +240,73 @@ async fn draw(handle: WindowHandle<ChatPreview>, cx: &mut AsyncApp) -> f64 {
         window.draw(cx).clear(cx);
     });
     t.elapsed().as_secs_f64() * 1000.0
+}
+
+/// 模拟按键（经真实键位绑定与动作分发）
+async fn press(handle: WindowHandle<ChatPreview>, keys: &str, cx: &mut AsyncApp) {
+    let key = PlatformInput::KeyDown(KeyDownEvent { keystroke: Keystroke::parse(keys).expect("按键"), is_held: false, prefer_character_input: false });
+    let _ = cx.update_window(handle.into(), |_, window, cx| window.dispatch_event(key, cx));
+    draw(handle, cx).await;
+}
+
+/// T16 回车三态 / T17 组字选区（缺陷 4 回归）
+async fn selftest_keyboard(handle: WindowHandle<ChatPreview>, cx: &mut AsyncApp) -> (bool, bool) {
+    // 等上一段流式结束，输入区回到可发送状态
+    while handle.read_with(cx, |p, cx| p.conversation.read(cx).state.is_streaming()).unwrap() {
+        cx.background_executor().timer(Duration::from_millis(50)).await;
+    }
+    let area = handle.read_with(cx, |p, cx| p.composer.read(cx).text_area().clone()).unwrap();
+    let focus = area.read_with(cx, |a, cx| a.focus_handle(cx));
+    let _ = cx.update_window(handle.into(), |_, window, cx| window.focus(&focus, cx));
+    draw(handle, cx).await;
+    let sent = |cx: &mut AsyncApp| handle.read_with(cx, |p, _| p.sent.len()).unwrap();
+    let text = |cx: &mut AsyncApp| area.read_with(cx, |a, _| a.text().to_string());
+    let with_input = |f: Box<dyn FnOnce(&mut buddy_ui::text_area::TextArea, &mut Window, &mut Context<buddy_ui::text_area::TextArea>)>, cx: &mut AsyncApp| {
+        let area = area.clone();
+        let _ = cx.update_window(handle.into(), move |_, window, cx| area.update(cx, |a, cx| f(a, window, cx)));
+    };
+    let base = sent(cx);
+
+    // 1) 组字中（拼音 "ni" 为标记文本）按 Enter：不发送
+    with_input(Box::new(|a, w, cx| a.replace_and_mark_text_in_range(None, "ni", Some(2..2), w, cx)), cx);
+    press(handle, "enter", cx).await;
+    let composing_blocked = sent(cx) == base && text(cx) == "ni";
+    // 2) 上屏「你」，再按 Enter：发送 "你"
+    with_input(Box::new(|a, w, cx| a.replace_text_in_range(None, "你", w, cx)), cx);
+    press(handle, "enter", cx).await;
+    let enter_sends = sent(cx) == base + 1 && handle.read_with(cx, |p, _| p.sent.last().cloned()).unwrap().as_deref() == Some("你") && text(cx).is_empty();
+    // 等模拟回复结束
+    while handle.read_with(cx, |p, cx| p.conversation.read(cx).state.is_streaming()).unwrap() {
+        cx.background_executor().timer(Duration::from_millis(50)).await;
+    }
+    // 3) Cmd+Enter 换行、不发送
+    with_input(Box::new(|a, w, cx| a.replace_text_in_range(None, "第一行", w, cx)), cx);
+    press(handle, &format!("{}-enter", if cfg!(target_os = "macos") { "cmd" } else { "ctrl" }), cx).await;
+    let newline = sent(cx) == base + 1 && text(cx) == "第一行\n";
+    // 4) Shift+Enter：v1 同样发送
+    with_input(Box::new(|a, w, cx| a.replace_text_in_range(None, "第二行", w, cx)), cx);
+    press(handle, "shift-enter", cx).await;
+    let shift_sends = sent(cx) == base + 2;
+    println!("T16: 组字中 Enter 不发送 {composing_blocked}；Enter 发送 {enter_sends}；Cmd+Enter 换行 {newline}；Shift+Enter 发送 {shift_sends}（v1 同）");
+    let t16 = composing_blocked && enter_sends && newline && shift_sends;
+    println!("{} S05-06 T16 回车三态与 v1 一致", if t16 { "PASS" } else { "FAIL" });
+    while handle.read_with(cx, |p, cx| p.conversation.read(cx).state.is_streaming()).unwrap() {
+        cx.background_executor().timer(Duration::from_millis(50)).await;
+    }
+
+    // T17：「你好」之后组字 "dian"，输入法给出相对标记文本的光标 1..1（在 d 之后）→ 正确为字节 6+1=7；
+    // 按整段内容换算（官方示例 / S00-05 缺陷 4 根因）会得到 6+3=9 —— 仍在长度内，防御性 clamp 掩盖不了
+    with_input(Box::new(|a, w, cx| {
+        a.set_text("你好", cx);
+        a.replace_and_mark_text_in_range(None, "dian", Some(1..1), w, cx);
+    }), cx);
+    let (content, selection) = area.read_with(cx, |a, _| (a.text().to_string(), a.selected_range_for_test()));
+    press(handle, &format!("{}-c", if cfg!(target_os = "macos") { "cmd" } else { "ctrl" }), cx).await;
+    let expected = "你好d".len();
+    let t17 = content == "你好dian" && selection == (expected..expected);
+    println!("T17: 内容 {content:?}，选区 {selection:?}（期望 {expected}..{expected}）；组字中 Cmd+C 未崩溃");
+    println!("{} S05-06 T17 组字选区按标记文本换算（S00-05 缺陷 4 回归）", if t17 { "PASS" } else { "FAIL" });
+    (t16, t17)
 }
 
 fn selftest(handle: WindowHandle<ChatPreview>, cx: &mut App) {
@@ -301,7 +408,7 @@ fn selftest(handle: WindowHandle<ChatPreview>, cx: &mut App) {
 
         // ── T12：流式只重测一行 ──
         transcript.update(cx, |t, _| t.list_state().scroll_to_end());
-        handle.update(cx, |p, _, cx| p.simulate_reply(cx)).unwrap();
+        handle.update(cx, |p, _, cx| p.simulate_reply("请模拟一段流式回复", cx)).unwrap();
         draw(handle, cx).await;
         let start_rows = transcript.read_with(cx, |t, _| t.rows().len());
         let (mut max_per_sync, mut syncs, mut prev_remeasured) = (0usize, 0usize, transcript.read_with(cx, |t, _| t.remeasured_rows));
@@ -331,7 +438,8 @@ fn selftest(handle: WindowHandle<ChatPreview>, cx: &mut App) {
         let t12 = syncs > 5 && max_per_sync == 1 && row_count_stable;
         println!("T12: 流式期间行同步 {syncs} 次（按帧采样），单次最多重测 {max_per_sync} 行；行数稳定 {row_count_stable}");
         println!("{} S05-01 T12 流式只重测最后一行", if t12 { "PASS" } else { "FAIL" });
-        std::process::exit(if t11 && t12 && t13 && t14 && t15 { 0 } else { 1 });
+        let (t16, t17) = selftest_keyboard(handle, cx).await;
+        std::process::exit(if t11 && t12 && t13 && t14 && t15 && t16 && t17 { 0 } else { 1 });
     })
     .detach();
 }
@@ -349,6 +457,7 @@ fn main() {
         Theme::install(Appearance::Light, cx);
         fonts::install_text_rendering(cx);
         markdown::init(cx);
+        buddy_ui::chat::init(cx);
         let bounds = Bounds::centered(None, size(px(560.0), px(760.0)), cx);
         let handle = cx
             .open_window(WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() }, |window, cx| {

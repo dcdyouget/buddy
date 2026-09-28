@@ -5,9 +5,16 @@
 //! - [`session`] —— 会话实体：接收事件批次、按帧推进节奏器、只在变化时通知（S05-17）
 //! - [`transcript`] —— 虚拟化消息列表（S05-01）
 //! - [`message_row`] —— 消息行外观（S05-08）
+//! - [`composer`] —— 输入区（S05-06）
 
+pub mod composer;
 pub mod message_row;
 pub mod rows;
 pub mod session;
 pub mod state;
 pub mod transcript;
+
+/// 注册聊天界面所需的键位（输入框）。须在创建窗口前调用一次。
+pub fn init(cx: &mut gpui::App) {
+    crate::text_area::bind_keys(cx);
+}
