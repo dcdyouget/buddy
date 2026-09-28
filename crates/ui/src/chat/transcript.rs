@@ -13,11 +13,17 @@
 //! 3. `ListAlignment::Bottom` 必须 `measure_all()`，否则行高未知、视口空白；
 //! 4. `FollowMode::Tail` 只记状态，贴底须显式 `scroll_to_end()`。
 //!
-//! 行的外观在本 spec 中只做占位，按 v1 的样式渲染由 S05-08 起逐行型完成。
+//! 行外观见 [`message_row`]（S05-08）；思考块 / 工具行的完整外观由 S05-09 / S05-10 完成。
 
+use super::message_row;
 use super::rows::{self, Row, RowKind};
 use super::session::Conversation;
-use crate::markdown::{self, code_block, normalize::normalize_markdown, zed_markdown::{Markdown, MarkdownElement, syntax::LanguageRegistry}};
+use crate::markdown::{
+    self, code_block,
+    normalize::normalize_markdown,
+    streaming,
+    zed_markdown::{Markdown, MarkdownElement, MarkdownOptions, syntax::LanguageRegistry},
+};
 use crate::theme_system::{BuddyTheme, tokens::metrics as m};
 use buddy_engine::streaming::ContentBlock;
 use gpui::{
@@ -102,23 +108,33 @@ impl Transcript {
     /// 正文行的 markdown 实体：新行创建，内容变化时替换（规范化见 S04-05）
     fn update_markdown(&mut self, cx: &mut Context<Self>) {
         let state = &self.conversation.read(cx).state;
-        let mut wanted: Vec<(String, String, u64)> = Vec::new();
+        // (行 id, 源文本, 版本, 是否纯文本)
+        let mut wanted: Vec<(String, String, u64, bool)> = Vec::new();
         for row in &self.rows {
-            if let RowKind::Block { msg, block, live } = &row.kind {
-                let blocks = if *live { state.live.as_ref().map(|l| l.blocks.as_slice()) } else { state.messages[*msg].blocks.as_deref() };
-                if let Some(ContentBlock::Text { content }) = blocks.and_then(|b| b.get(*block)) {
-                    wanted.push((row.id.clone(), normalize_markdown(content), row.version));
+            match &row.kind {
+                RowKind::Block { msg, block, live } => {
+                    let blocks = if *live { state.live.as_ref().map(|l| l.blocks.as_slice()) } else { state.messages[*msg].blocks.as_deref() };
+                    if let Some(ContentBlock::Text { content }) = blocks.and_then(|b| b.get(*block)) {
+                        wanted.push((row.id.clone(), normalize_markdown(content), row.version, false));
+                    }
                 }
+                // 用户消息为纯文本（v1 `white-space: pre-wrap`，不解析 markdown），但要能选择复制 → 同样走 markdown 实体
+                RowKind::User { msg } => wanted.push((row.id.clone(), state.messages[*msg].content.clone(), row.version, true)),
+                _ => {}
             }
         }
         let registry = self.registry.clone();
         let mut next = HashMap::new();
-        for (id, source, version) in wanted {
+        for (id, source, version, plain) in wanted {
             let entry = match self.markdown.remove(&id) {
                 Some((md, v)) if v == version => (md, v),
                 Some((md, _)) => {
                     md.update(cx, |m, cx| m.replace(source, cx));
                     (md, version)
+                }
+                None if plain => {
+                    let options = MarkdownOptions { parse_links_only: true, ..Default::default() };
+                    (cx.new(|cx| Markdown::new_with_options(source.into(), None, None, options, cx)), version)
                 }
                 None => {
                     let registry = registry.clone();
@@ -135,48 +151,65 @@ impl Transcript {
         let Some(row) = self.rows.get(ix).cloned() else { return div().into_any_element() };
         let theme = *cx.buddy_theme();
         let c = theme.colors;
-        let state = &self.conversation.read(cx).state;
-        let body: AnyElement = match &row.kind {
-            RowKind::User { msg } => div()
-                .flex()
-                .justify_end()
-                .child(
-                    div()
-                        .max_w(gpui::relative(0.8))
-                        .px(px(m::SPACE_3))
-                        .py(px(m::SPACE_2))
-                        .rounded(px(m::RADIUS_MD))
-                        .bg(c.primary_tint_soft)
-                        .text_color(c.text_primary)
-                        .child(SharedString::from(state.messages[*msg].content.clone())),
-                )
-                .into_any_element(),
+        let conversation = self.conversation.read(cx);
+        let now = conversation.now_ms();
+        let state = &conversation.state;
+        let reduce_motion = crate::accessibility::prefers_reduced_motion();
+        match &row.kind {
+            RowKind::User { .. } => match self.markdown.get(&row.id) {
+                Some((md, _)) => message_row::user_row(
+                    // 纯文本：网址不作链接（v1 不识别链接），点击无动作
+                    MarkdownElement::new(md.clone(), message_row::user_text_style(window, cx)).on_url_click(|_, _, _| {}),
+                    cx,
+                ),
+                None => div().into_any_element(),
+            },
             RowKind::Block { msg, block, live } => {
                 let blocks = if *live { state.live.as_ref().map(|l| l.blocks.clone()) } else { state.messages[*msg].blocks.clone() };
-                match blocks.and_then(|b| b.get(*block).cloned()) {
+                let content: AnyElement = match blocks.and_then(|b| b.get(*block).cloned()) {
+                    // 思考块外观由 S05-09 完成
                     Some(ContentBlock::Thinking { content, .. }) => div()
                         .text_color(c.text_muted)
                         .text_size(px(m::FONT_SIZE_BASE))
                         .child(SharedString::from(format!("思考：{}", content.chars().take(80).collect::<String>())))
                         .into_any_element(),
-                    Some(ContentBlock::Text { .. }) => match self.markdown.get(&row.id) {
-                        Some((md, _)) => MarkdownElement::new(md.clone(), markdown::message_style(window, cx))
-                            .code_block_renderer(code_block::renderer(md.downgrade(), *live))
-                            .on_url_click(|url, _, cx| markdown::gfm::open_link(&url, cx))
-                            .into_any_element(),
+                    Some(ContentBlock::Text { content }) => match self.markdown.get(&row.id) {
+                        Some((md, _)) => {
+                            let mut style = markdown::message_style(window, cx);
+                            // 流式中的最后一个正文块：落定渐显 + 星标（S04-06）
+                            if let Some(live_turn) = state.live.as_ref().filter(|_| *live && row.pos.last) {
+                                let tail = streaming::tail(&normalize_markdown(&content), true, live_turn.reveal_count);
+                                if streaming::decorate(&mut style, &tail, now - live_turn.batch_at, &theme, reduce_motion) {
+                                    window.request_animation_frame();
+                                }
+                            }
+                            MarkdownElement::new(md.clone(), style)
+                                .code_block_renderer(code_block::renderer(md.downgrade(), *live))
+                                .on_url_click(|url, _, cx| markdown::gfm::open_link(&url, cx))
+                                .image_resolver(|url, _| markdown::gfm::image_source(url))
+                                .into_any_element()
+                        }
                         None => div().into_any_element(),
                     },
                     None => div().into_any_element(),
-                }
+                };
+                message_row::assistant_row(row.pos, content).into_any_element()
             }
+            // 工具行外观由 S05-10 完成
             RowKind::Tool { call, .. } => {
                 let label = state.tools.get(call).map_or_else(|| call.clone(), |t| format!("工具 {}（{:?}）", t.name, t.status));
-                div().text_color(c.text_muted).text_size(px(m::FONT_SIZE_SM)).child(SharedString::from(label)).into_any_element()
+                message_row::assistant_row(row.pos, div().text_color(c.text_muted).text_size(px(m::FONT_SIZE_SM)).child(SharedString::from(label)))
+                    .into_any_element()
             }
-            RowKind::Pending { .. } => div().h(px(m::SPACE_6)).into_any_element(),
-        };
-        // v1 `.message-row`：左右 space-4、上下 space-2
-        div().w_full().px(px(m::SPACE_4)).py(px(m::SPACE_2)).child(body).into_any_element()
+            // 回答尚无内容：只显示呼吸星标（v1 `StreamingNextStar`）
+            RowKind::Pending { .. } => {
+                let since = state.live.as_ref().map_or(0.0, |l| now - l.batch_at);
+                if !reduce_motion {
+                    window.request_animation_frame();
+                }
+                message_row::assistant_row(row.pos, streaming::star_element(&theme, since, reduce_motion)).into_any_element()
+            }
+        }
     }
 }
 

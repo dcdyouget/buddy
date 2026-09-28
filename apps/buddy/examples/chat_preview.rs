@@ -13,7 +13,8 @@
 //! - T11 虚拟化（S05-01）：1000 条消息（约 2000+ 行）中，滚动 60 帧，平均每帧布局的行数远小于总行数；
 //! - T12 流式只重测一行（S05-02 / S05-17）：纯正文流式期间，每次行同步最多重测 1 行、行集合不变；
 //! - T13 重绘预算：1000 条消息时整窗重绘中位耗时 < 50ms；
-//! - T14 视口上方行高变化（S05-03）：可见内容不移动（视口首行与行内偏移不变），且只重测那一行。
+//! - T14 视口上方行高变化（S05-03）：可见内容不移动（视口首行与行内偏移不变），且只重测那一行；
+//! - T15 用户消息保留换行（S05-08，v1 `white-space: pre-wrap`）。
 
 use buddy_ui::chat::{session::Conversation, transcript::Transcript};
 use buddy_ui::gpui::{
@@ -56,7 +57,10 @@ fn message(id: String, role: MessageRole, text: &str) -> Message {
 fn history(count: usize) -> Vec<Message> {
     (0..count)
         .map(|i| {
-            if i % 2 == 0 {
+            if i == 0 {
+                // T15：多行用户消息（v1 `white-space: pre-wrap` 保留换行）
+                message("u0".into(), MessageRole::User, "第一行\n第二行\n第三行")
+            } else if i % 2 == 0 {
                 message(format!("u{i}"), MessageRole::User, &format!("第 {} 个问题：请解释一下这个概念？", i / 2 + 1))
             } else {
                 message(format!("a{i}"), MessageRole::Assistant, ANSWERS[(i / 2) % ANSWERS.len()])
@@ -68,9 +72,38 @@ fn history(count: usize) -> Vec<Message> {
 struct ChatPreview {
     conversation: Entity<Conversation>,
     transcript: Entity<Transcript>,
+    _subscriptions: Vec<buddy_ui::gpui::Subscription>,
 }
 
 impl ChatPreview {
+    fn new(conversation: Entity<Conversation>, transcript: Entity<Transcript>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let subscriptions = vec![
+            // v1：窗口失焦 / 隐藏时立即放出缓冲，重新聚焦后追赶再恢复逐字
+            cx.observe_window_activation(window, |this: &mut Self, window, cx| {
+                let active = window.is_window_active();
+                this.conversation.update(cx, |c, cx| if active { c.window_shown(cx) } else { c.window_hidden(cx) });
+            }),
+            cx.observe(&conversation, |_, _, cx| cx.notify()),
+        ];
+        Self { conversation, transcript, _subscriptions: subscriptions }
+    }
+
+    /// 模拟一次出错：发送后先到一段正文，再收到网络错误（v1：已显示正文保留、提示条显示错误）
+    fn simulate_error(&mut self, cx: &mut Context<Self>) {
+        let user = message(format!("u-err-{}", buddy_ui::chat::state::unique_suffix()), MessageRole::User, "请模拟一次出错");
+        self.conversation.update(cx, |c, cx| {
+            c.begin_send(user, "mock-model", cx);
+            c.apply_events(
+                vec![
+                    StreamEvent::TextStart { content_index: 0 },
+                    StreamEvent::TextDelta { content_index: 0, delta: "这是出错前已经生成的一段内容。".into() },
+                    StreamEvent::Error { reason: StopReason::Error, message: "网络错误：连接被重置（模拟）".into(), partial_text: String::new() },
+                ],
+                cx,
+            );
+        });
+    }
+
     /// 模拟一次流式回复：固定种子切片，20–120ms 间隔到达
     fn simulate_reply(&mut self, cx: &mut Context<Self>) {
         let conversation = self.conversation.clone();
@@ -112,6 +145,7 @@ impl Render for ChatPreview {
             Appearance::Dark => Appearance::Light,
         };
         let streaming = self.conversation.read(cx).state.is_streaming();
+        let error = self.conversation.read(cx).state.error.clone();
         let button = |id: &'static str, label: &'static str| {
             div()
                 .id(id)
@@ -135,10 +169,27 @@ impl Render for ChatPreview {
                     .gap(px(metrics::SPACE_2))
                     .p(px(metrics::SPACE_3))
                     .child(button("toggle", if next == Appearance::Dark { "切换到深色" } else { "切换到浅色" }).on_click(move |_, _, cx| set_appearance(next, cx)))
-                    .when(!streaming, |d| d.child(button("reply", "模拟流式回复").on_click(cx.listener(|this, _, _, cx| this.simulate_reply(cx)))))
+                    .when(!streaming, |d| {
+                        d.child(button("reply", "模拟流式回复").on_click(cx.listener(|this, _, _, cx| this.simulate_reply(cx))))
+                            .child(button("error", "模拟出错").on_click(cx.listener(|this, _, _, cx| this.simulate_error(cx))))
+                    })
                     .child(div().text_color(theme.colors.text_muted).child(format!("{} 行", self.transcript.read(cx).rows().len()))),
             )
             .child(div().flex_1().min_h_0().child(self.transcript.clone()))
+            .when_some(error, |d, error| {
+                let conversation = self.conversation.clone();
+                d.child(buddy_ui::chat::message_row::error_banner(
+                    &error,
+                    move |_, cx| {
+                        conversation.update(cx, |c, cx| {
+                            c.state.error = None;
+                            c.state.revision += 1;
+                            cx.notify();
+                        })
+                    },
+                    cx,
+                ))
+            })
     }
 }
 
@@ -235,6 +286,19 @@ fn selftest(handle: WindowHandle<ChatPreview>, cx: &mut App) {
         println!("T14: 改动视口上方的行 {target}（重测 {remeasured} 行）；视口首行 {} + {:?} → {} + {:?}", top_before.item_ix, top_before.offset_in_item, top_after.item_ix, top_after.offset_in_item);
         println!("{} S05-03 T14 视口上方行高变化不移动可见内容", if t14 { "PASS" } else { "FAIL" });
 
+        // ── T15：用户消息保留换行 ──
+        transcript.update(cx, |t, _| t.list_state().scroll_to(buddy_ui::gpui::ListOffset { item_ix: 0, offset_in_item: px(0.0) }));
+        draw(handle, cx).await;
+        draw(handle, cx).await;
+        let (h_multi, h_single) = transcript.read_with(cx, |t, _| {
+            let l = t.list_state();
+            (l.bounds_for_item(0).map(|b| f32::from(b.size.height)), l.bounds_for_item(2).map(|b| f32::from(b.size.height)))
+        });
+        let extra = h_multi.zip(h_single).map(|(a, b)| a - b);
+        let t15 = extra.is_some_and(|d| (d - 2.0 * metrics::FONT_SIZE_MD * 1.5).abs() < 4.0);
+        println!("T15: 三行用户消息高 {h_multi:?}，单行 {h_single:?}，差 {extra:?}（期望约 2 × 21px）");
+        println!("{} S05-08 T15 用户消息按换行分行（v1 pre-wrap）", if t15 { "PASS" } else { "FAIL" });
+
         // ── T12：流式只重测一行 ──
         transcript.update(cx, |t, _| t.list_state().scroll_to_end());
         handle.update(cx, |p, _, cx| p.simulate_reply(cx)).unwrap();
@@ -267,7 +331,7 @@ fn selftest(handle: WindowHandle<ChatPreview>, cx: &mut App) {
         let t12 = syncs > 5 && max_per_sync == 1 && row_count_stable;
         println!("T12: 流式期间行同步 {syncs} 次（按帧采样），单次最多重测 {max_per_sync} 行；行数稳定 {row_count_stable}");
         println!("{} S05-01 T12 流式只重测最后一行", if t12 { "PASS" } else { "FAIL" });
-        std::process::exit(if t11 && t12 && t13 && t14 { 0 } else { 1 });
+        std::process::exit(if t11 && t12 && t13 && t14 && t15 { 0 } else { 1 });
     })
     .detach();
 }
@@ -287,10 +351,10 @@ fn main() {
         markdown::init(cx);
         let bounds = Bounds::centered(None, size(px(560.0), px(760.0)), cx);
         let handle = cx
-            .open_window(WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() }, |_, cx| {
+            .open_window(WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() }, |window, cx| {
                 let conversation = cx.new(|_| Conversation::new(history(count)));
                 let transcript = cx.new(|cx| Transcript::new(conversation.clone(), cx));
-                cx.new(|_| ChatPreview { conversation, transcript })
+                cx.new(|cx| ChatPreview::new(conversation, transcript, window, cx))
             })
             .expect("open_window 失败");
         if self_test {

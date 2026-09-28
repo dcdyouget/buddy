@@ -61,6 +61,19 @@ pub enum RowKind {
     },
 }
 
+/// 行在所属消息中的位置（决定上下留白，v1 的留白按整条消息计算）
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct RowPos {
+    /// 本消息的第一行
+    pub first: bool,
+    /// 本消息的最后一行
+    pub last: bool,
+    /// 助手消息紧接在另一条助手消息之后（v1 `isContinuation`：工具循环的续段）
+    pub continuation: bool,
+    /// 下一条可见消息仍是助手消息（v1 `continuesToNext`）
+    pub continues: bool,
+}
+
 /// 一行
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Row {
@@ -68,8 +81,16 @@ pub struct Row {
     pub id: String,
     /// 内容指向
     pub kind: RowKind,
-    /// 内容指纹：内容变化时改变（决定是否重新测量这一行）
+    /// 内容指纹：内容或位置变化时改变（决定是否重新测量这一行）
     pub version: u64,
+    /// 在所属消息中的位置
+    pub pos: RowPos,
+}
+
+fn msg_of(kind: &RowKind) -> usize {
+    match kind {
+        RowKind::User { msg } | RowKind::Block { msg, .. } | RowKind::Tool { msg, .. } | RowKind::Pending { msg } => *msg,
+    }
 }
 
 fn fingerprint(parts: impl Hash) -> u64 {
@@ -145,6 +166,7 @@ pub fn build_rows(state: &ChatState) -> Vec<Row> {
                     id: message.id.clone(),
                     kind: RowKind::User { msg: ix },
                     version: fingerprint((&message.content, message.images.iter().map(|i| &i.id).collect::<Vec<_>>())),
+                    pos: RowPos::default(),
                 });
             }
             MessageRole::Tool => {}
@@ -160,6 +182,7 @@ pub fn build_rows(state: &ChatState) -> Vec<Row> {
                             id: format!("{anchor}#{m}.t.{call}"),
                             kind: RowKind::Tool { msg: ix, call: call.clone() },
                             version: tool_fingerprint(state.tools.get(call)),
+                            pos: RowPos::default(),
                         });
                     }
                 };
@@ -173,6 +196,7 @@ pub fn build_rows(state: &ChatState) -> Vec<Row> {
                             id: format!("{anchor}#{m}.{i}"),
                             kind: RowKind::Block { msg: ix, block: i, live },
                             version: block_fingerprint(block),
+                            pos: RowPos::default(),
                         });
                     }
                     push_tools(&mut rows, i as i32);
@@ -181,12 +205,39 @@ pub fn build_rows(state: &ChatState) -> Vec<Row> {
                     push_tools(&mut rows, blocks.len() as i32);
                 }
                 if live && rows.len() == rows_before {
-                    rows.push(Row { id: format!("{anchor}#{m}.pending"), kind: RowKind::Pending { msg: ix }, version: 0 });
+                    rows.push(Row { id: format!("{anchor}#{m}.pending"), kind: RowKind::Pending { msg: ix }, version: 0, pos: RowPos::default() });
                 }
             }
         }
     }
+    assign_positions(state, &mut rows);
     rows
+}
+
+/// 第二遍：按消息分组标出首 / 末行与续段关系，并把位置并入版本
+fn assign_positions(state: &ChatState, rows: &mut [Row]) {
+    // 可见消息序列（tool 消息不显示）中，每条消息前后是否为助手
+    let visible: Vec<usize> = (0..state.messages.len()).filter(|&i| state.messages[i].role != MessageRole::Tool).collect();
+    let neighbor = |msg: usize, delta: isize| -> bool {
+        visible
+            .iter()
+            .position(|&v| v == msg)
+            .and_then(|p| visible.get(p.checked_add_signed(delta)?))
+            .is_some_and(|&n| state.messages[n].role == MessageRole::Assistant)
+    };
+    let n = rows.len();
+    for i in 0..n {
+        let msg = msg_of(&rows[i].kind);
+        let assistant = state.messages[msg].role == MessageRole::Assistant;
+        let pos = RowPos {
+            first: i == 0 || msg_of(&rows[i - 1].kind) != msg,
+            last: i + 1 == n || msg_of(&rows[i + 1].kind) != msg,
+            continuation: assistant && neighbor(msg, -1),
+            continues: assistant && neighbor(msg, 1),
+        };
+        rows[i].version = fingerprint((rows[i].version, pos));
+        rows[i].pos = pos;
+    }
 }
 
 /// 把行集合从 `old` 变为 `new` 的最小改动
@@ -225,10 +276,7 @@ pub fn diff(old: &[Row], new: &[Row]) -> Splice {
 
 /// 该行所属消息（行渲染取数用）
 pub fn message<'a>(state: &'a ChatState, row: &Row) -> &'a Message {
-    let ix = match &row.kind {
-        RowKind::User { msg } | RowKind::Block { msg, .. } | RowKind::Tool { msg, .. } | RowKind::Pending { msg } => *msg,
-    };
-    &state.messages[ix]
+    &state.messages[msg_of(&row.kind)]
 }
 
 #[cfg(test)]
@@ -310,6 +358,28 @@ mod tests {
     }
 
     #[test]
+    fn positions_and_continuations() {
+        let state = ChatState::from_history(vec![
+            user("u1", "问"),
+            assistant("a1", vec![text("一"), text("二")], vec!["c1"]),
+            tool("t1", "c1"),
+            assistant("a2", vec![text("答")], vec![]),
+        ]);
+        let rows = build_rows(&state);
+        let pos: Vec<(bool, bool, bool, bool)> = rows.iter().map(|r| (r.pos.first, r.pos.last, r.pos.continuation, r.pos.continues)).collect();
+        assert_eq!(
+            pos,
+            vec![
+                (true, true, false, false),  // u1
+                (true, false, false, true),  // a1 第一块：后面还有助手续段
+                (false, false, false, true), // a1 第二块
+                (false, true, false, true),  // a1 的工具行（末行）
+                (true, true, true, false),   // a2：续段（隔着 tool 消息仍算紧接）
+            ]
+        );
+    }
+
+    #[test]
     fn insert_after_buckets_match_v1() {
         let mut state = ChatState::from_history(vec![user("u", "q"), assistant("a", vec![text("一"), text("二")], vec!["before", "mid", "unplaced"])]);
         state.tools.get_mut("before").unwrap().insert_after = Some(-1);
@@ -383,7 +453,7 @@ mod tests {
 
     #[test]
     fn diff_is_minimal_splice() {
-        let r = |id: &str, v: u64| Row { id: id.into(), kind: RowKind::User { msg: 0 }, version: v };
+        let r = |id: &str, v: u64| Row { id: id.into(), kind: RowKind::User { msg: 0 }, version: v, pos: RowPos::default() };
         let old = vec![r("a", 1), r("b", 1), r("c", 1)];
         let new = vec![r("a", 1), r("b", 2), r("x", 1), r("c", 1)];
         assert_eq!(diff(&old, &new), Splice { old_range: 2..2, new_count: 1, remeasure: vec![1] });

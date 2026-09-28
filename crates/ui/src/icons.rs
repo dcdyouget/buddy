@@ -10,36 +10,48 @@
 use gpui::{AssetSource, Pixels, Result, SharedString, Svg, prelude::*, svg};
 use std::borrow::Cow;
 
-/// 图标名（按需增加；每项须在 `assets/icons/` 有同名文件）
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IconName {
-    /// 复制（lucide `copy`）
-    Copy,
-    /// 对勾（lucide `check`）
-    Check,
-    /// 流式四角星（v1 `.streaming-next-star`）
-    StreamingStar,
+/// 声明图标：变体名 => 文件名（`assets/icons/<文件名>.svg`）。
+/// Lucide 图标用 `scripts/icons/lucide_svg.py <名字>` 从 v1 的 lucide-react 生成。
+macro_rules! icons {
+    ($($(#[$doc:meta])* $variant:ident => $file:literal,)*) => {
+        /// 图标名（按需增加；每项须在 `assets/icons/` 有同名文件）
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum IconName {
+            $($(#[$doc])* $variant,)*
+        }
+
+        impl IconName {
+            const ALL: &[IconName] = &[$(IconName::$variant,)*];
+
+            /// 资源路径
+            pub fn path(self) -> &'static str {
+                match self {
+                    $(IconName::$variant => concat!("icons/", $file, ".svg"),)*
+                }
+            }
+
+            fn bytes(self) -> &'static [u8] {
+                match self {
+                    $(IconName::$variant => include_bytes!(concat!("../assets/icons/", $file, ".svg")),)*
+                }
+            }
+        }
+    };
 }
 
-impl IconName {
-    const ALL: [IconName; 3] = [IconName::Copy, IconName::Check, IconName::StreamingStar];
-
-    /// 资源路径
-    pub fn path(self) -> &'static str {
-        match self {
-            IconName::Copy => "icons/copy.svg",
-            IconName::Check => "icons/check.svg",
-            IconName::StreamingStar => "icons/streaming-star.svg",
-        }
-    }
-
-    fn bytes(self) -> &'static [u8] {
-        match self {
-            IconName::Copy => include_bytes!("../assets/icons/copy.svg"),
-            IconName::Check => include_bytes!("../assets/icons/check.svg"),
-            IconName::StreamingStar => include_bytes!("../assets/icons/streaming-star.svg"),
-        }
-    }
+icons! {
+    /// 复制（lucide `copy`）
+    Copy => "copy",
+    /// 对勾（lucide `check`）
+    Check => "check",
+    /// 错误提示（lucide `circle-alert`，v1 `AlertCircle`）
+    CircleAlert => "circle-alert",
+    /// 关闭（lucide `x`）
+    Close => "x",
+    /// 向下（lucide `chevron-down`）
+    ChevronDown => "chevron-down",
+    /// 流式四角星（Buddy 自绘，v1 `.streaming-next-star`）
+    StreamingStar => "streaming-star",
 }
 
 /// 方形图标；颜色随父元素或自身的 `text_color`
@@ -52,11 +64,11 @@ pub struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
-        Ok(IconName::ALL.into_iter().find(|i| i.path() == path).map(|i| Cow::Borrowed(i.bytes())))
+        Ok(IconName::ALL.iter().find(|i| i.path() == path).map(|i| Cow::Borrowed(i.bytes())))
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
-        Ok(IconName::ALL.into_iter().map(IconName::path).filter(|p| p.starts_with(path)).map(Into::into).collect())
+        Ok(IconName::ALL.iter().map(|i| i.path()).filter(|p| p.starts_with(path)).map(Into::into).collect())
     }
 }
 
@@ -66,7 +78,7 @@ mod tests {
 
     #[test]
     fn every_icon_loads_as_svg() {
-        for i in IconName::ALL {
+        for &i in IconName::ALL {
             let bytes = Assets.load(i.path()).unwrap().expect("资源应存在");
             assert!(std::str::from_utf8(&bytes).unwrap().starts_with("<svg"), "{:?}", i);
         }
