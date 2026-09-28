@@ -29,6 +29,8 @@ reqwest.workspace = true
 anyhow.workspace = true
 # markdown::streaming：定位流式尾段中的可见字符（与 vendored markdown 同一解析器，已在闭包中）
 pulldown-cmark.workspace = true
+# chat::state：工具参数是否为完整 JSON 对象（v1 同一判定）
+serde_json.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc.workspace = true

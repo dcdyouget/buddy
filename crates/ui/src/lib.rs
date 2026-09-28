@@ -24,7 +24,8 @@
 //!
 //! - `theme_system` —— 设计令牌（`S03-*`）
 //! - [`markdown`] —— vendored zed markdown 的接入（`S04-*`，渲染器在 `crates/markdown`）
-//! - `chat` / `settings` —— 页面（`S05-*` / `S06-*`）
+//! - [`chat`] —— 聊天界面（`S05-*`）
+//! - `settings` —— 设置页（`S06-*`）
 //! - `shell` —— 窗口外壳（`S07-*`）
 //! - [`icons`] —— SVG 图标与资源源（`S04-07` 起）
 //! - [`http`] —— GPUI 图片加载用的 HTTP 客户端（`S04-08`）
@@ -47,6 +48,7 @@ pub use gpui_platform;
 pub use theme::{self, ActiveTheme};
 
 pub mod accessibility;
+pub mod chat;
 pub mod chat_bridge;
 pub mod http;
 pub mod icons;

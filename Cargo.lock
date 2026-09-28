@@ -858,6 +858,7 @@ dependencies = [
  "objc",
  "pulldown-cmark",
  "reqwest",
+ "serde_json",
  "theme",
  "tokio",
  "ui",
