@@ -35,6 +35,7 @@
 | 实体 | `chat/session.rs` `Conversation`：接收事件批次、流式期间约每 16ms 推进节奏器，**只在 `revision` 变化时 notify**；视图 `observe` 它 |
 | v1 用例 | `src/stores/chatStore.test.ts` 14 例逐一移植 + 4 例（历史 `<think>` 拆块、隐藏窗口立即放出、真实时钟节奏、队列中增量合并），`cargo test -p buddy-ui chat::state` 全过 |
 | 拦截 | 去掉「结构事件等正文放完」→ 3 例失败；已恢复 |
+| 出错分支（补，commit `c2299d6`） | v1 `useStreaming.ts` error 分支：`aborted` 按正常结束（不显示错误）；401 / unauthorized → `needs_api_key`；429 / quota、HTTP 5 / server_error、网络错误 / timeout → 追加并待持久化提示消息（`pending_saves`）；单测 `aborted_is_a_normal_finish`、`error_followups_match_v1`。持久化与切页由会话实体接入 engine 时处理（S05-18） |
 | 只重绘一行 | `chat_preview -- --selftest` T12：流式期间 66 次行同步，单次最多重测 1 行，行数不变；拦截（行版本不含正文）→ FAIL |
 
 ## 决策记录
