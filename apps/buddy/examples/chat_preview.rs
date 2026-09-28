@@ -261,6 +261,47 @@ async fn wheel(handle: WindowHandle<ChatPreview>, dy: f32, cx: &mut AsyncApp) {
         let _ = cx.update_window(handle.into(), |_, window, cx| window.dispatch_event(e, cx));
         draw(handle, cx).await;
     }
+    // 等平滑滚动停稳（S05-04 修订：滚轮按 v1 逐帧缓动）
+    for _ in 0..40 {
+        cx.background_executor().timer(Duration::from_millis(16)).await;
+        draw(handle, cx).await;
+    }
+}
+
+/// T19 滚轮平滑滚动（v1 `useSmoothWheelScroll`）：一次「向上 3 行」应在多帧内逐渐走完 60px
+async fn selftest_wheel(handle: WindowHandle<ChatPreview>, cx: &mut AsyncApp) -> bool {
+    use buddy_ui::gpui::{Modifiers, MouseMoveEvent, ScrollDelta, ScrollWheelEvent, TouchPhase, point};
+    let transcript = handle.read_with(cx, |p, _| p.transcript.clone()).unwrap();
+    wait_idle(handle, cx).await;
+    transcript.update(cx, |t, _| t.list_state().scroll_to(buddy_ui::gpui::ListOffset { item_ix: 400, offset_in_item: px(0.0) }));
+    draw(handle, cx).await;
+    let offset = |cx: &mut AsyncApp| transcript.read_with(cx, |t, _| -f32::from(t.list_state().scroll_px_offset_for_scrollbar().y));
+    let position = point(px(280.0), px(300.0));
+    let _ = cx.update_window(handle.into(), |_, window, cx| {
+        window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: None, modifiers: Modifiers::default() }), cx)
+    });
+    draw(handle, cx).await;
+    let start = offset(cx);
+    let _ = cx.update_window(handle.into(), |_, window, cx| {
+        window.dispatch_event(
+            PlatformInput::ScrollWheel(ScrollWheelEvent { position, delta: ScrollDelta::Lines(point(0.0, 3.0)), modifiers: Modifiers::default(), touch_phase: TouchPhase::Moved }),
+            cx,
+        )
+    });
+    draw(handle, cx).await;
+    let mut trace = vec![start - offset(cx)];
+    for _ in 0..40 {
+        cx.background_executor().timer(Duration::from_millis(16)).await;
+        draw(handle, cx).await;
+        trace.push(start - offset(cx));
+    }
+    let moving_frames = trace.windows(2).filter(|w| (w[1] - w[0]).abs() > 0.01).count();
+    let monotonic = trace.windows(2).all(|w| w[1] >= w[0] - 0.01);
+    let total = *trace.last().unwrap();
+    println!("T19: 向上 3 行：首帧后已移动 {:.1}px，逐帧移动 {moving_frames} 帧，最终 {total:.1}px（期望 60px）；前 8 帧 {:?}", trace[0], trace.iter().take(8).map(|v| (v * 10.0).round() / 10.0).collect::<Vec<_>>());
+    let ok = trace[0] < 30.0 && moving_frames >= 5 && monotonic && (total - 60.0).abs() < 1.0;
+    println!("{} S05-04 T19 滚轮逐帧缓动（无极滚动，v1 useSmoothWheelScroll）", if ok { "PASS" } else { "FAIL" });
+    ok
 }
 
 async fn wait_idle(handle: WindowHandle<ChatPreview>, cx: &mut AsyncApp) {
@@ -511,7 +552,8 @@ fn selftest(handle: WindowHandle<ChatPreview>, cx: &mut App) {
         println!("{} S05-01 T12 流式只重测最后一行", if t12 { "PASS" } else { "FAIL" });
         let (t16, t17) = selftest_keyboard(handle, cx).await;
         let t18 = selftest_follow(handle, cx).await;
-        std::process::exit(if t11 && t12 && t13 && t14 && t15 && t16 && t17 && t18 { 0 } else { 1 });
+        let t19 = selftest_wheel(handle, cx).await;
+        std::process::exit(if t11 && t12 && t13 && t14 && t15 && t16 && t17 && t18 && t19 { 0 } else { 1 });
     })
     .detach();
 }

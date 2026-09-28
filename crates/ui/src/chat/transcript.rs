@@ -30,7 +30,7 @@ use crate::icons::{IconName, icon};
 use crate::theme_system::box_shadows;
 use buddy_engine::models::MessageRole;
 use gpui::{
-    AnyElement, App, Context, Entity, FollowMode, Hsla, ListAlignment, ListState, Render, SharedString, Subscription, Task, Window, div,
+    AnyElement, App, Context, Entity, FollowMode, Hsla, ListAlignment, ListState, Pixels, Render, SharedString, Subscription, Task, Window, div,
     list, prelude::*, px,
 };
 use std::time::{Duration, Instant};
@@ -60,6 +60,8 @@ pub struct Transcript {
     unseen_pulse: Option<Instant>,
     /// 点击「回到底部」后的平滑滚动
     scroll_animation: Option<Task<()>>,
+    /// 滚轮平滑滚动（v1 `useSmoothWheelScroll`）
+    wheel: WheelScroll,
     _observe: Subscription,
 }
 
@@ -89,6 +91,7 @@ impl Transcript {
             last_seen: 0,
             unseen_pulse: None,
             scroll_animation: None,
+            wheel: WheelScroll::default(),
             _observe: observe,
         };
         this.sync(cx);
@@ -244,7 +247,145 @@ impl Transcript {
     }
 }
 
+/// 滚轮平滑滚动的参数（v1 `useSmoothWheelScroll.ts`）
+const WHEEL_LINE_PX: f32 = 20.0;
+const WHEEL_EASING: f32 = 0.28;
+const WHEEL_SETTLE_PX: f32 = 0.5;
+const WHEEL_EXTERNAL_TOLERANCE_PX: f32 = 1.0;
+
+/// 滚轮平滑滚动状态：连续滚轮累加目标位置，每帧走剩余距离的 28%（v1 同）
+#[derive(Default)]
+struct WheelScroll {
+    /// 目标滚动位置（距顶部像素）
+    target: Pixels,
+    /// 上一帧动画写入后的位置；与当前位置不符 = 外部改动了滚动（历史补位、跟随等）→ 放弃旧目标
+    last_animated: Option<Pixels>,
+    task: Option<Task<()>>,
+}
+
+/// v1 `normalizeWheelDelta`：行 × 20px；返回「向下为正」的像素（DOM 约定）。
+/// GPUI 只有像素 / 行两种增量（v1 的「页」模式无对应）。
+pub fn wheel_delta_px(delta: &gpui::ScrollDelta) -> Pixels {
+    match delta {
+        // GPUI 的 y 向上为正（内容下移），DOM 的 deltaY 向下为正
+        gpui::ScrollDelta::Pixels(p) => -p.y,
+        gpui::ScrollDelta::Lines(l) => px(-l.y * WHEEL_LINE_PX),
+    }
+}
+
 impl Transcript {
+    fn scroll_offset(&self) -> Pixels {
+        -self.list.scroll_px_offset_for_scrollbar().y
+    }
+
+    /// GPUI 列表贴底时以「最后一项之后、偏移 0」表示位置，`scroll_by` 会把它当作「内容总高」
+    /// 而非「总高 − 视口」来计算 → 从贴底上滑不足一屏时被夹回底部、毫无反应（T18 发现）。
+    /// 先换成等价的显式位置（从第 0 项起算当前像素位置），再做增量滚动。
+    fn make_position_explicit(&self, current: Pixels) {
+        if self.list.logical_scroll_top().item_ix >= self.list.item_count() {
+            let following = self.list.is_following_tail();
+            self.list.scroll_to(gpui::ListOffset { item_ix: 0, offset_in_item: px(0.) });
+            self.list.scroll_by(current);
+            if !following {
+                self.list.pause_following_tail();
+            }
+        }
+    }
+
+    /// 接管列表区域的滚轮：换算成像素、累加目标、逐帧缓动（v1 `useSmoothWheelScroll`）
+    fn on_wheel(&mut self, delta: Pixels, cx: &mut Context<Self>) {
+        let current = self.scroll_offset();
+        let max = self.list.max_offset_for_scrollbar().y;
+        // 已到边缘且继续同向：停止动画（v1）
+        if (delta < px(0.) && current <= px(0.)) || (delta > px(0.) && current >= max) {
+            self.wheel.task = None;
+            self.wheel.last_animated = None;
+            return;
+        }
+        // v1 `onUserScrollIntent`：向上滚立即脱离跟随，不等首个动画帧（否则流式跟随会在这一帧把列表拉回）
+        if delta < px(0.) {
+            self.list.pause_following_tail();
+        }
+        self.make_position_explicit(current);
+        let animating = self.wheel.task.is_some();
+        if animating && self.wheel.last_animated.is_some_and(|last| (current - last).abs() > px(WHEEL_EXTERNAL_TOLERANCE_PX)) {
+            self.wheel.task = None;
+        }
+        if self.wheel.task.is_none() {
+            self.wheel.target = current;
+        }
+        self.wheel.target = (self.wheel.target + delta).clamp(px(0.), max);
+        if self.wheel.task.is_some() {
+            return;
+        }
+        // 立即走第一步：否则下一次布局时视口仍在底部，列表会重新进入跟随并贴底，
+        // 随后被动画当作「外部改动」而放弃 —— 流式中上滑就脱离不了（T18 发现）
+        let first = (self.wheel.target - current) * WHEEL_EASING;
+        self.list.scroll_by(first);
+        self.wheel.last_animated = Some(self.scroll_offset());
+        cx.notify();
+        self.wheel.task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_millis(16)).await;
+                let keep = this.update(cx, |t, cx| {
+                    let current = t.scroll_offset();
+                    if t.wheel.last_animated.is_some_and(|last| (current - last).abs() > px(WHEEL_EXTERNAL_TOLERANCE_PX)) {
+                        t.wheel.last_animated = None;
+                        return false;
+                    }
+                    let max = t.list.max_offset_for_scrollbar().y;
+                    t.wheel.target = t.wheel.target.clamp(px(0.), max);
+                    let distance = t.wheel.target - current;
+                    let step = if distance.abs() <= px(WHEEL_SETTLE_PX) { distance } else { distance * WHEEL_EASING };
+                    t.list.scroll_by(step);
+                    t.wheel.last_animated = Some(t.scroll_offset());
+                    cx.notify();
+                    distance.abs() > px(WHEEL_SETTLE_PX)
+                });
+                if !matches!(keep, Ok(true)) {
+                    let _ = this.update(cx, |t, _| {
+                        t.wheel.task = None;
+                        t.wheel.last_animated = None;
+                    });
+                    break;
+                }
+            }
+        }));
+    }
+
+    /// 在捕获阶段接管列表区域的纵向滚轮（先于列表自身的冒泡处理），交给平滑滚动。
+    /// Ctrl / Cmd / Shift 或横向为主的滚动不接管（v1 同），代码块的横向滚动照常。
+    fn wheel_interceptor(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let weak = cx.entity().downgrade();
+        gpui::canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                let weak = weak.clone();
+                window.on_mouse_event(move |event: &gpui::ScrollWheelEvent, phase, _, cx| {
+                    if phase != gpui::DispatchPhase::Capture || !bounds.contains(&event.position) {
+                        return;
+                    }
+                    let m = event.modifiers;
+                    let (dx, dy) = match event.delta {
+                        gpui::ScrollDelta::Pixels(p) => (p.x.abs(), p.y.abs()),
+                        gpui::ScrollDelta::Lines(l) => (px(l.x.abs()), px(l.y.abs())),
+                    };
+                    if m.control || m.platform || m.shift || dx > dy {
+                        return;
+                    }
+                    let delta = wheel_delta_px(&event.delta);
+                    if delta == px(0.) {
+                        return;
+                    }
+                    let _ = weak.update(cx, |t, cx| t.on_wheel(delta, cx));
+                    cx.stop_propagation();
+                });
+            },
+        )
+        .absolute()
+        .size_full()
+    }
+
     /// 可见消息数（tool 消息不显示）
     fn visible_messages(&self, cx: &App) -> usize {
         self.conversation.read(cx).state.messages.iter().filter(|m| m.role != MessageRole::Tool).count()
@@ -359,6 +500,7 @@ impl Render for Transcript {
             .pt(px(m::SPACE_3))
             .pb(px(m::SPACE_2))
             .child(list(self.list.clone(), cx.processor(|this, ix, window, cx| this.render_row(ix, window, cx))).flex_grow(1.).size_full())
+            .child(self.wheel_interceptor(cx))
             .when(show_button, |d| d.child(self.scroll_button(window, cx)))
     }
 }
