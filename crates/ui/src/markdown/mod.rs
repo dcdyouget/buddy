@@ -117,6 +117,23 @@ pub const COPY_KEYSTROKE: &str = if cfg!(target_os = "macos") { "cmd-c" } else {
 /// 选区色的不透明度（叠在文字上，需保证文字可读）
 pub const SELECTION_ALPHA: f32 = 0.25;
 
+/// 工具卡片详情的样式：代码块为紧凑变体（v1 `.tool-section .markdown-code-block pre`）
+pub fn tool_detail_style(window: &Window, cx: &App) -> MarkdownStyle {
+    let theme = *cx.buddy_theme();
+    let mut style = message_style(window, cx);
+    style.code_block = code_block::compact_code_area_style(&theme, cx);
+    style
+}
+
+/// 思考块展开内容的样式：13px、弱化色（v1 `.think-section-content`：`--font-size-base`、`--text-muted`）
+pub fn thinking_style(window: &Window, cx: &App) -> MarkdownStyle {
+    let c = cx.buddy_theme().colors;
+    let mut style = message_style(window, cx);
+    style.base_text_style.font_size = px(metrics::FONT_SIZE_BASE).into();
+    style.base_text_style.color = c.text_muted.into();
+    style
+}
+
 /// 助手消息正文行高（v1 写死值，见模块文档表格）
 pub const ASSISTANT_LINE_HEIGHT: f32 = 1.6;
 

@@ -133,10 +133,26 @@ pub fn renderer(markdown: WeakEntity<Markdown>, streaming: bool) -> CodeBlockRen
     CodeBlockRenderer::Custom {
         render: Arc::new(move |kind, parsed, range, metadata: CodeBlockMetadata, _window, cx| {
             let copyable = !(streaming && !metadata.is_fenced_closed && !matches!(kind, CodeBlockKind::Indented));
-            render_container(&markdown, kind, parsed, range, copyable, cx)
+            render_container(&markdown, kind, parsed, range, copyable, false, cx)
         }),
         transform: None,
     }
+}
+
+/// 工具卡片中的紧凑代码块（v1 `.tool-section .markdown-code-*` 覆盖规则）：
+/// 外边距 0、细边框、无阴影；头部最小高 28px、内边距 space-1 × space-2；行高统一 1.5
+pub fn compact_renderer(markdown: WeakEntity<Markdown>) -> CodeBlockRenderer {
+    CodeBlockRenderer::Custom {
+        render: Arc::new(move |kind, parsed, range, _: CodeBlockMetadata, _window, cx| render_container(&markdown, kind, parsed, range, true, true, cx)),
+        transform: None,
+    }
+}
+
+/// 紧凑代码区：内边距 space-2 × space-3、字号 xs（v1 `.tool-section .markdown-code-block pre`）
+pub fn compact_code_area_style(theme: &Theme, cx: &App) -> StyleRefinement {
+    let mut style = code_area_style(theme, cx).px(px(m::SPACE_3)).py(px(m::SPACE_2));
+    style.text.font_size = Some(px(m::FONT_SIZE_XS).into());
+    style
 }
 
 /// 复制按钮图标；变为对勾时播放 v1 的 `markdown-copy-success`：
@@ -174,6 +190,7 @@ fn render_container(
     parsed: &ParsedMarkdown,
     range: Range<usize>,
     copyable: bool,
+    compact: bool,
     cx: &App,
 ) -> Div {
     let theme = cx.buddy_theme();
@@ -234,8 +251,9 @@ fn render_container(
         .flex()
         .items_center()
         .when_else(label.is_some(), |h| h.justify_between(), |h| h.justify_end())
-        .px(px(m::SPACE_3))
+        .px(px(if compact { m::SPACE_2 } else { m::SPACE_3 }))
         .py(px(m::SPACE_1))
+        .when(compact, |h| h.min_h(px(m::SPACE_6 + m::SPACE_1)))
         .border_b_1()
         .border_color(c.code_border)
         .bg(c.code_header_bg)
@@ -244,14 +262,13 @@ fn render_container(
 
     div()
         .w_full()
-        .my(px(m::SPACE_2))
+        .when(!compact, |d| d.my(px(m::SPACE_2)).shadow(shadows))
         .rounded(px(m::RADIUS_MD))
         .overflow_hidden()
         .border_1()
-        .border_color(c.code_border)
+        .border_color(if compact { c.border_subtle } else { c.code_border })
         .bg(c.code_bg)
-        .shadow(shadows)
-        .line_height(relative(if plain { 1.75 } else { m::LINE_HEIGHT_BASE }))
+        .line_height(relative(if plain && !compact { 1.75 } else { m::LINE_HEIGHT_BASE }))
         .child(header)
 }
 

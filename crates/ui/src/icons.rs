@@ -64,6 +64,36 @@ icons! {
     Brain => "brain",
     /// 向右（lucide `chevron-right`）
     ChevronRight => "chevron-right",
+    /// 参数（lucide `braces`）
+    Braces => "braces",
+    /// 完成（lucide `circle-check`，v1 `CheckCircle2`）
+    CircleCheck => "circle-check",
+    /// 准备中（lucide `circle-dashed`）
+    CircleDashed => "circle-dashed",
+    /// 执行结果（lucide `file-check-corner`，v1 `FileCheck2`）
+    FileCheck => "file-check-corner",
+    /// 编辑文件（lucide `file-diff`）
+    FileDiff => "file-diff",
+    /// 追加文件（lucide `file-output`）
+    FileOutput => "file-output",
+    /// 覆盖文件（lucide `file-pen-line`）
+    FilePenLine => "file-pen-line",
+    /// 创建文件（lucide `file-plus-corner`，v1 `FilePlus2`）
+    FilePlus => "file-plus-corner",
+    /// 读取文件（lucide `file-text`）
+    FileText => "file-text",
+    /// 浏览目录（lucide `folder-tree`）
+    FolderTree => "folder-tree",
+    /// 询问用户（lucide `circle-question-mark`，v1 `HelpCircle`）
+    CircleHelp => "circle-question-mark",
+    /// 执行中（lucide `loader-circle`，v1 `Loader2`）
+    LoaderCircle => "loader-circle",
+    /// 搜索（lucide `search`）
+    Search => "search",
+    /// 调用工具（lucide `wrench`）
+    Wrench => "wrench",
+    /// 失败（lucide `circle-x`，v1 `XCircle`）
+    CircleX => "circle-x",
     /// 流式四角星（Buddy 自绘，v1 `.streaming-next-star`）
     StreamingStar => "streaming-star",
 }

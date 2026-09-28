@@ -135,6 +135,55 @@ impl ChatPreview {
         });
     }
 
+    /// 模拟思考 + 工具调用（S05-09 / S05-10）：思考流式 → 读取文件（成功，长结果）→ 浏览目录（失败）→ 最终回答。
+    /// `hold` 期间工具停在「执行中」，便于观察与自检
+    fn simulate_tools(&mut self, hold: Duration, cx: &mut Context<Self>) {
+        let conversation = self.conversation.clone();
+        let user = message(format!("u-tool-{}", buddy_ui::chat::state::unique_suffix()), MessageRole::User, "帮我看看项目里的配置文件");
+        conversation.update(cx, |c, cx| c.begin_send(user, "mock-model", cx));
+        cx.spawn(async move |_, cx: &mut AsyncApp| {
+            let send = |events: Vec<StreamEvent>, cx: &mut AsyncApp| {
+                let _ = conversation.update(cx, |c, cx| c.apply_events(events, cx));
+            };
+            let tick = Duration::from_millis(60);
+            send(vec![StreamEvent::Start, StreamEvent::ThinkingStart { content_index: 0 }], cx);
+            for piece in ["用户想看配置文件。", "先读取 Cargo.toml，", "再列一下 config 目录，", "然后总结给用户。"] {
+                send(vec![StreamEvent::ThinkingDelta { content_index: 0, delta: piece.into() }], cx);
+                cx.background_executor().timer(tick * 4).await;
+            }
+            send(vec![StreamEvent::ThinkingEnd { content_index: 0, content: "用户想看配置文件。先读取 Cargo.toml，再列一下 config 目录，然后总结给用户。".into() }], cx);
+            let args1 = r#"{"path":"/Users/me/buddy/Cargo.toml"}"#;
+            let args2 = r#"{"path":"/Users/me/buddy/config"}"#;
+            send(
+                vec![
+                    StreamEvent::ToolCallStart { id: "call-read".into(), name: "read_file".into(), content_index: 0 },
+                    StreamEvent::ToolCallEnd { id: "call-read".into(), name: "read_file".into(), arguments: args1.into() },
+                    StreamEvent::ToolCallStart { id: "call-list".into(), name: "list_directory".into(), content_index: 1 },
+                    StreamEvent::ToolCallEnd { id: "call-list".into(), name: "list_directory".into(), arguments: args2.into() },
+                    StreamEvent::TurnEnd { tool_calls_pending: 2 },
+                    StreamEvent::ToolExecuting { id: "call-read".into(), name: "read_file".into() },
+                    StreamEvent::ToolExecuting { id: "call-list".into(), name: "list_directory".into() },
+                ],
+                cx,
+            );
+            cx.background_executor().timer(hold).await;
+            let long: String = (1..=40).map(|i| format!("line {i:02} = \"value\"\n")).collect();
+            send(
+                vec![
+                    StreamEvent::ToolResult { id: "call-read".into(), name: "read_file".into(), content: format!("[package]\nname = \"buddy\"\n{long}"), images: Vec::new(), is_error: false },
+                    StreamEvent::ToolResult { id: "call-list".into(), name: "list_directory".into(), content: "目录不存在：/Users/me/buddy/config".into(), images: Vec::new(), is_error: true },
+                    StreamEvent::TextStart { content_index: 0 },
+                    StreamEvent::TextDelta { content_index: 0, delta: "已读取 `Cargo.toml`：包名为 **buddy**。config 目录不存在。".into() },
+                    StreamEvent::TextEnd { content_index: 0, content: "已读取 `Cargo.toml`：包名为 **buddy**。config 目录不存在。".into() },
+                    StreamEvent::TurnEnd { tool_calls_pending: 0 },
+                    StreamEvent::Done { reason: StopReason::Stop, full_text: String::new() },
+                ],
+                cx,
+            );
+        })
+        .detach();
+    }
+
     /// 模拟一次流式回复：固定种子切片，20–120ms 间隔到达
     fn simulate_reply(&mut self, question: &str, cx: &mut Context<Self>) {
         let conversation = self.conversation.clone();
@@ -211,6 +260,7 @@ impl Render for ChatPreview {
                     .when(!streaming, |d| {
                         d.child(button("reply", "模拟流式回复").on_click(cx.listener(|this, _, _, cx| this.simulate_reply("请模拟一段流式回复", cx))))
                             .child(button("error", "模拟出错").on_click(cx.listener(|this, _, _, cx| this.simulate_error(cx))))
+                            .child(button("tools", "模拟思考与工具").on_click(cx.listener(|this, _, _, cx| this.simulate_tools(Duration::from_secs(3), cx))))
                     })
                     .child(div().text_color(theme.colors.text_muted).child(format!("{} 行", self.transcript.read(cx).rows().len()))),
             )
@@ -358,6 +408,92 @@ async fn selftest_follow(handle: WindowHandle<ChatPreview>, cx: &mut AsyncApp) -
     );
     let ok = at_rest && detached && stays && hidden_while_streaming && shown_after && back && detached_again && refollow;
     println!("{} S05-04 T18 跟随 / 脱离 / 回到底部与 v1 一致", if ok { "PASS" } else { "FAIL" });
+    ok
+}
+
+/// T20 思考块与工具卡片（S05-09 / S05-10）
+async fn selftest_tools(handle: WindowHandle<ChatPreview>, cx: &mut AsyncApp) -> bool {
+    use buddy_ui::chat::rows::RowKind;
+    let transcript = handle.read_with(cx, |p, _| p.transcript.clone()).unwrap();
+    wait_idle(handle, cx).await;
+    handle.update(cx, |p, _, cx| p.simulate_tools(Duration::from_millis(1500), cx)).unwrap();
+    // 等到两个工具进入「执行中」
+    // 只有已渲染的行才有边界：先把该行滚入视口、画一帧再量
+    async fn row_height(transcript: &Entity<Transcript>, handle: WindowHandle<ChatPreview>, id: &str, cx: &mut AsyncApp) -> Option<f32> {
+        let ix = transcript.read_with(cx, |t, _| t.rows().iter().rposition(|r| r.id.ends_with(id)))?;
+        // 贴底列表对末尾几行的 bounds_for_item 恒为 None → 读取行的实际绘制边界
+        let row_id = transcript.read_with(cx, |t, _| t.rows()[ix].id.clone());
+        draw(handle, cx).await;
+        draw(handle, cx).await;
+        transcript.read_with(cx, |t, _| t.painted_row_bounds(&row_id).map(|b| f32::from(b.size.height)))
+    }
+    let mut executing_h = None;
+    for _ in 0..80 {
+        cx.background_executor().timer(Duration::from_millis(25)).await;
+        draw(handle, cx).await;
+        let executing = handle.read_with(cx, |p, cx| {
+            p.conversation.read(cx).state.tools.get("call-read").map(|t| t.status == buddy_ui::chat::state::ToolStatus::Executing)
+        }).unwrap();
+        if executing == Some(true) {
+            draw(handle, cx).await;
+            executing_h = row_height(&transcript, handle, ".t.call-read", cx).await;
+            break;
+        }
+    }
+    let kinds = transcript.read_with(cx, |t, cx| {
+        let state = &t.conversation_state(cx);
+        t.rows().iter().filter_map(|r| match &r.kind {
+            RowKind::Block { msg, block, .. } => state.messages[*msg].blocks.as_ref().and_then(|b| b.get(*block)).map(|b| matches!(b, buddy_engine::streaming::ContentBlock::Thinking { .. })).filter(|t| *t).map(|_| "think"),
+            RowKind::Tool { .. } => Some("tool"),
+            _ => None,
+        }).collect::<Vec<_>>()
+    });
+    wait_idle(handle, cx).await;
+    draw(handle, cx).await;
+    let done_h = row_height(&transcript, handle, ".t.call-read", cx).await;
+    // 执行中默认展开（有详情）→ 完成后收起：高度应明显变小
+    let collapsed_after_done = executing_h.zip(done_h).is_some_and(|(e, d)| e > d + 40.0);
+    // 用户点开：行重测、高度变大
+    let (id, before) = transcript.read_with(cx, |t, _| {
+        let row = t.rows().iter().rev().find(|r| r.id.ends_with(".t.call-read")).unwrap();
+        (row.id.clone(), t.remeasured_rows)
+    });
+    transcript.update(cx, |t, cx| t.toggle_tool_for_test(&id, cx));
+    draw(handle, cx).await;
+    draw(handle, cx).await;
+    let expanded_h = row_height(&transcript, handle, ".t.call-read", cx).await;
+    let remeasured = transcript.read_with(cx, |t, _| t.remeasured_rows) - before;
+    let expands = expanded_h.zip(done_h).is_some_and(|(e, d)| e > d + 100.0) && remeasured >= 1;
+    // 滚轮落在展开的长结果上：先滚卡片内部，列表不动
+    transcript.update(cx, |t, _| {
+        let ix = t.rows().iter().position(|r| r.id == id).unwrap();
+        t.list_state().scroll_to(buddy_ui::gpui::ListOffset { item_ix: ix, offset_in_item: px(0.0) })
+    });
+    draw(handle, cx).await;
+    let detail_center = transcript.read_with(cx, |t, _| t.detail_scroll_for_test(&format!("{id}#result")).map(|h| h.bounds().center()));
+    let list_before = transcript.read_with(cx, |t, _| t.list_state().logical_scroll_top());
+    let inner_before = transcript.read_with(cx, |t, _| t.detail_scroll_for_test(&format!("{id}#result")).map(|h| h.offset().y));
+    if let Some(p) = detail_center {
+        use buddy_ui::gpui::{Modifiers, MouseMoveEvent, ScrollDelta, ScrollWheelEvent, TouchPhase, point};
+        for e in [
+            PlatformInput::MouseMove(MouseMoveEvent { position: p, pressed_button: None, modifiers: Modifiers::default() }),
+            PlatformInput::ScrollWheel(ScrollWheelEvent { position: p, delta: ScrollDelta::Pixels(point(px(0.0), px(-60.0))), modifiers: Modifiers::default(), touch_phase: TouchPhase::Moved }),
+        ] {
+            let _ = cx.update_window(handle.into(), |_, window, cx| window.dispatch_event(e, cx));
+            draw(handle, cx).await;
+        }
+    }
+    let list_after = transcript.read_with(cx, |t, _| t.list_state().logical_scroll_top());
+    let inner_after = transcript.read_with(cx, |t, _| t.detail_scroll_for_test(&format!("{id}#result")).map(|h| h.offset().y));
+    let inner_first = list_before.item_ix == list_after.item_ix
+        && list_before.offset_in_item == list_after.offset_in_item
+        && inner_before.zip(inner_after).is_some_and(|(b, a)| a < b);
+    println!(
+        "T20: 行类型 {kinds:?}；执行中高 {executing_h:?} → 完成后 {done_h:?}（自动收起 {collapsed_after_done}）；点开后 {expanded_h:?}、重测 {remeasured} 行；卡内滚动 {inner_before:?} → {inner_after:?}，列表不动 {}",
+        list_before.item_ix == list_after.item_ix
+    );
+    let ok = kinds.contains(&"think") && kinds.iter().filter(|k| **k == "tool").count() == 2 && collapsed_after_done && expands && inner_first;
+    println!("{} S05-09 / S05-10 T20 思考块与工具卡片（展开规则、行重测、卡内滚动优先）", if ok { "PASS" } else { "FAIL" });
     ok
 }
 
@@ -553,7 +689,8 @@ fn selftest(handle: WindowHandle<ChatPreview>, cx: &mut App) {
         let (t16, t17) = selftest_keyboard(handle, cx).await;
         let t18 = selftest_follow(handle, cx).await;
         let t19 = selftest_wheel(handle, cx).await;
-        std::process::exit(if t11 && t12 && t13 && t14 && t15 && t16 && t17 && t18 && t19 { 0 } else { 1 });
+        let t20 = selftest_tools(handle, cx).await;
+        std::process::exit(if t11 && t12 && t13 && t14 && t15 && t16 && t17 && t18 && t19 && t20 { 0 } else { 1 });
     })
     .detach();
 }

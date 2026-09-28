@@ -16,6 +16,11 @@
 //! 行外观见 [`message_row`]（S05-08）；思考块 / 工具行的完整外观由 S05-09 / S05-10 完成。
 
 use super::message_row;
+use super::think_block;
+use super::tool_card;
+use gpui::ScrollHandle;
+use std::cell::RefCell;
+use std::rc::Rc;
 use super::rows::{self, Row, RowKind};
 use super::session::Conversation;
 use crate::markdown::{
@@ -62,6 +67,17 @@ pub struct Transcript {
     scroll_animation: Option<Task<()>>,
     /// 滚轮平滑滚动（v1 `useSmoothWheelScroll`）
     wheel: WheelScroll,
+    /// 用户点过的思考块展开状态（按行 id；未点过则默认折叠，v1 `userToggled`）
+    think_expanded: HashMap<String, bool>,
+    /// 用户点过的工具卡片展开状态（按行 id；未点过则按 v1 `initialExpanded`）
+    tool_expanded: HashMap<String, bool>,
+    /// 工具详情的卡内滚动句柄（按详情 id）
+    detail_scroll: HashMap<String, ScrollHandle>,
+    /// 本帧可见的内层滚动区域：滚轮落在其中且它还能滚时，让给它（v1 `canNestedScrollerConsume`）
+    nested_scroll: Rc<RefCell<Vec<ScrollHandle>>>,
+    /// 最近一次绘制时各行的屏幕边界（按行 id）。GPUI 贴底列表的 `bounds_for_item`
+    /// 对末尾几行恒为 None，自检与定位需要以实际绘制为准
+    painted_rows: Rc<RefCell<HashMap<String, gpui::Bounds<Pixels>>>>,
     _observe: Subscription,
 }
 
@@ -92,6 +108,11 @@ impl Transcript {
             unseen_pulse: None,
             scroll_animation: None,
             wheel: WheelScroll::default(),
+            think_expanded: HashMap::new(),
+            tool_expanded: HashMap::new(),
+            detail_scroll: HashMap::new(),
+            nested_scroll: Rc::default(),
+            painted_rows: Rc::default(),
             _observe: observe,
         };
         this.sync(cx);
@@ -148,8 +169,22 @@ impl Transcript {
             match &row.kind {
                 RowKind::Block { msg, block, live } => {
                     let blocks = if *live { state.live.as_ref().map(|l| l.blocks.as_slice()) } else { state.messages[*msg].blocks.as_deref() };
-                    if let Some(ContentBlock::Text { content }) = blocks.and_then(|b| b.get(*block)) {
-                        wanted.push((row.id.clone(), normalize_markdown(content), row.version, false));
+                    match blocks.and_then(|b| b.get(*block)) {
+                        // 思考内容同样以 markdown 显示（v1 `ThinkSection` 展开后用 StreamingMarkdown）
+                        Some(ContentBlock::Text { content } | ContentBlock::Thinking { content, .. }) => {
+                            wanted.push((row.id.clone(), normalize_markdown(content), row.version, false));
+                        }
+                        None => {}
+                    }
+                }
+                // 工具详情：调用参数 / 执行结果（紧凑代码块）
+                RowKind::Tool { call, .. } => {
+                    if let Some(tool) = state.tools.get(call) {
+                        let (args, result) = tool_card::detail_sources(tool);
+                        wanted.push((format!("{}#args", row.id), args, row.version, false));
+                        if let Some((result, _)) = result {
+                            wanted.push((format!("{}#result", row.id), result, row.version, false));
+                        }
                     }
                 }
                 // 用户消息为纯文本（v1 `white-space: pre-wrap`，不解析 markdown），但要能选择复制 → 同样走 markdown 实体
@@ -183,8 +218,30 @@ impl Transcript {
     fn render_row(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         self.rendered_rows += 1;
         let Some(row) = self.rows.get(ix).cloned() else { return div().into_any_element() };
+        let painted = self.painted_rows.clone();
+        let id = row.id.clone();
+        let content = self.render_row_content(row, window, cx);
+        div()
+            .relative()
+            .w_full()
+            .child(content)
+            .child(
+                gpui::canvas(|_, _, _| {}, move |bounds, _, _, _| {
+                    painted.borrow_mut().insert(id.clone(), bounds);
+                })
+                .absolute()
+                .size_full(),
+            )
+            .into_any_element()
+    }
+
+    /// 某行最近一次绘制的屏幕边界
+    pub fn painted_row_bounds(&self, row_id: &str) -> Option<gpui::Bounds<Pixels>> {
+        self.painted_rows.borrow().get(row_id).copied()
+    }
+
+    fn render_row_content(&mut self, row: Row, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = *cx.buddy_theme();
-        let c = theme.colors;
         let conversation = self.conversation.read(cx);
         let now = conversation.now_ms();
         let state = &conversation.state;
@@ -201,12 +258,39 @@ impl Transcript {
             RowKind::Block { msg, block, live } => {
                 let blocks = if *live { state.live.as_ref().map(|l| l.blocks.clone()) } else { state.messages[*msg].blocks.clone() };
                 let content: AnyElement = match blocks.and_then(|b| b.get(*block).cloned()) {
-                    // 思考块外观由 S05-09 完成
-                    Some(ContentBlock::Thinking { content, .. }) => div()
-                        .text_color(c.text_muted)
-                        .text_size(px(m::FONT_SIZE_BASE))
-                        .child(SharedString::from(format!("思考：{}", content.chars().take(80).collect::<String>())))
-                        .into_any_element(),
+                    Some(ContentBlock::Thinking { content, is_open }) => {
+                        // v1：流式思考 = 本消息最后一块、未闭合、且在流式中
+                        let thinking_live = *live && is_open && row.pos.last && state.live.is_some();
+                        let expanded = self.think_expanded.get(&row.id).copied().unwrap_or(false);
+                        let view = expanded.then(|| self.markdown.get(&row.id)).flatten().map(|(md, _)| {
+                            MarkdownElement::new(md.clone(), markdown::thinking_style(window, cx))
+                                .on_url_click(|url, _, cx| markdown::gfm::open_link(&url, cx))
+                                .into_any_element()
+                        });
+                        let id = row.id.clone();
+                        let weak = cx.entity().downgrade();
+                        think_block::think_block(
+                            SharedString::from(format!("think-{}", row.id)),
+                            &content,
+                            thinking_live,
+                            expanded,
+                            view,
+                            now,
+                            move |_, _, cx| {
+                                let _ = weak.update(cx, |t, cx| {
+                                    let e = t.think_expanded.entry(id.clone()).or_insert(false);
+                                    *e = !*e;
+                                    // 展开 / 折叠改变行高
+                                    if let Some(ix) = t.rows.iter().position(|r| r.id == id) {
+                                        t.list.remeasure_items(ix..ix + 1);
+                                    }
+                                    cx.notify();
+                                });
+                            },
+                            window,
+                            cx,
+                        )
+                    }
                     Some(ContentBlock::Text { content }) => match self.markdown.get(&row.id) {
                         Some((md, _)) => {
                             let mut style = markdown::message_style(window, cx);
@@ -229,11 +313,46 @@ impl Transcript {
                 };
                 message_row::assistant_row(row.pos, content).into_any_element()
             }
-            // 工具行外观由 S05-10 完成
-            RowKind::Tool { call, .. } => {
-                let label = state.tools.get(call).map_or_else(|| call.clone(), |t| format!("工具 {}（{:?}）", t.name, t.status));
-                message_row::assistant_row(row.pos, div().text_color(c.text_muted).text_size(px(m::FONT_SIZE_SM)).child(SharedString::from(label)))
-                    .into_any_element()
+            RowKind::Tool { call, msg } => {
+                let Some(tool) = state.tools.get(call).cloned() else { return div().into_any_element() };
+                let awaiting = state.question.as_ref().is_some_and(|q| &q.id == call);
+                let live_msg = state.live.is_some() && state.messages.iter().rposition(|m| m.role == MessageRole::Assistant) == Some(*msg);
+                let expanded = self.tool_expanded.get(&row.id).copied().unwrap_or_else(|| tool_card::default_expanded(&tool, live_msg, awaiting));
+                let mut details = Vec::new();
+                if expanded {
+                    let (_, result) = tool_card::detail_sources(&tool);
+                    let mut detail = |key: &str, label: &str, icon: IconName, is_error: bool, this: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
+                        let id = format!("{}#{key}", row.id);
+                        let Some((md, _)) = this.markdown.get(&id).cloned() else { return };
+                        let scroll = this.detail_scroll.entry(id.clone()).or_default().clone();
+                        this.nested_scroll.borrow_mut().push(scroll.clone());
+                        let content = MarkdownElement::new(md.clone(), markdown::tool_detail_style(window, cx))
+                            .code_block_renderer(code_block::compact_renderer(md.downgrade()))
+                            .into_any_element();
+                        details.push(tool_card::detail_block(SharedString::from(format!("detail-{id}")), label, icon, is_error, content, &scroll, cx));
+                    };
+                    detail("args", "调用参数", IconName::Braces, false, self, window, cx);
+                    if let Some((_, is_error)) = result {
+                        detail("result", if is_error { "执行错误" } else { "执行结果" }, IconName::FileCheck, is_error, self, window, cx);
+                    }
+                }
+                let id = row.id.clone();
+                let weak = cx.entity().downgrade();
+                let now = self.conversation.read(cx).now_ms();
+                let card = tool_card::tool_card(
+                    SharedString::from(format!("tool-{}", row.id)),
+                    &tool,
+                    awaiting,
+                    expanded,
+                    details,
+                    now,
+                    move |_, _, cx| {
+                        let _ = weak.update(cx, |t, cx| t.set_tool_expanded(&id, !expanded, cx));
+                    },
+                    window,
+                    cx,
+                );
+                message_row::assistant_row(row.pos, card).into_any_element()
             }
             // 回答尚无内容：只显示呼吸星标（v1 `StreamingNextStar`）
             RowKind::Pending { .. } => {
@@ -357,10 +476,12 @@ impl Transcript {
     /// Ctrl / Cmd / Shift 或横向为主的滚动不接管（v1 同），代码块的横向滚动照常。
     fn wheel_interceptor(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let weak = cx.entity().downgrade();
+        let nested = self.nested_scroll.clone();
         gpui::canvas(
             |_, _, _| {},
             move |bounds, _, window, _| {
                 let weak = weak.clone();
+                let nested = nested.clone();
                 window.on_mouse_event(move |event: &gpui::ScrollWheelEvent, phase, _, cx| {
                     if phase != gpui::DispatchPhase::Capture || !bounds.contains(&event.position) {
                         return;
@@ -377,6 +498,15 @@ impl Transcript {
                     if delta == px(0.) {
                         return;
                     }
+                    // 落在还能继续滚的内层区域（工具详情）：让给它
+                    let yield_to_inner = nested.borrow().iter().any(|h| {
+                        h.bounds().contains(&event.position)
+                            && if delta < px(0.) { h.offset().y < px(0.) } else { -h.offset().y < h.max_offset().y }
+                    });
+                    if yield_to_inner {
+                        let _ = weak.update(cx, |t, _| t.wheel.task = None);
+                        return;
+                    }
                     let _ = weak.update(cx, |t, cx| t.on_wheel(delta, cx));
                     cx.stop_propagation();
                 });
@@ -384,6 +514,38 @@ impl Transcript {
         )
         .absolute()
         .size_full()
+    }
+
+    /// 会话状态（自检用）
+    pub fn conversation_state<'a>(&self, cx: &'a App) -> &'a super::state::ChatState {
+        &self.conversation.read(cx).state
+    }
+
+    /// 切换工具卡片展开（自检用，与点击标题行同一路径）
+    pub fn toggle_tool_for_test(&mut self, row_id: &str, cx: &mut Context<Self>) {
+        let state = &self.conversation.read(cx).state;
+        let current = self.tool_expanded.get(row_id).copied().unwrap_or_else(|| {
+            self.rows.iter().find(|r| r.id == row_id).and_then(|r| match &r.kind {
+                RowKind::Tool { call, .. } => state.tools.get(call).map(|t| tool_card::default_expanded(t, false, false)),
+                _ => None,
+            }).unwrap_or(false)
+        });
+        self.set_tool_expanded(row_id, !current, cx);
+    }
+
+    /// 设置工具卡片展开（用户点击）：记住用户选择并重测该行
+    fn set_tool_expanded(&mut self, row_id: &str, expanded: bool, cx: &mut Context<Self>) {
+        self.tool_expanded.insert(row_id.to_string(), expanded);
+        if let Some(ix) = self.rows.iter().position(|r| r.id == row_id) {
+            self.list.remeasure_items(ix..ix + 1);
+            self.remeasured_rows += 1;
+        }
+        cx.notify();
+    }
+
+    /// 工具详情的卡内滚动句柄（自检用）
+    pub fn detail_scroll_for_test(&self, detail_id: &str) -> Option<ScrollHandle> {
+        self.detail_scroll.get(detail_id).cloned()
     }
 
     /// 可见消息数（tool 消息不显示）
@@ -491,6 +653,8 @@ impl Render for Transcript {
             self.unseen_pulse = Some(Instant::now());
         }
         let show_button = self.scroll_button_visible(cx);
+        // 本帧重新登记可见的内层滚动区域（行渲染时写入）
+        self.nested_scroll.borrow_mut().clear();
         // 陷阱 1：`list()` 自己 flex_grow；v1 列表上下内边距 space-3 / space-2
         div()
             .relative()
