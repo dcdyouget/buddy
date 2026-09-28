@@ -130,7 +130,7 @@
 | S05-05 | 历史加载与滚动（替换手动分页） | S05-04 | `todo` | `phase-05/S05-05-history-loading.md` |
 | S05-06 | Composer 文本输入与 IME | S00-05, S03-04 | `todo` | `phase-05/S05-06-composer-input.md` |
 | S05-07 | Composer 附件（粘贴 / 拖拽 / 选择 / 草稿） | S05-06 | `todo` | `phase-05/S05-07-composer-attachments.md` |
-| S05-08 | 消息行渲染（用户 / 助手 / 流式态 / 错误态） | S04-04, S05-02 | `doing` | `phase-05/S05-08-message-rows.md` |
+| S05-08 | 消息行渲染（用户 / 助手 / 流式态 / 错误态） | S04-04, S05-02 | `blocked` | `phase-05/S05-08-message-rows.md` |
 | S05-09 | 思考块 | S05-08 | `todo` | `phase-05/S05-09-think-block.md` |
 | S05-10 | 工具调用分组（ToolGroup / Deferred） | S05-08 | `todo` | `phase-05/S05-10-tool-groups.md` |
 | S05-11 | 网络搜索卡片 | S05-10 | `todo` | `phase-05/S05-11-web-search.md` |
@@ -299,6 +299,7 @@
 | 2026-09-27 | S04-02 | `doing` → `done` | Comet syntax 接入；v1 语言集 17 种；T03 布局不变（6e-5 px）并反证；+30 包全 MIT。commit `3aa039b` |
 | 2026-09-27 | S04-03 | `todo` → `doing` → `done` | util 替身（−21 包）、10 个未用语法包 feature 化（约 12 MB）、HTML 按 v1 实测转义；新增 GPL patch 同步检查。commit `6c55b0c` |
 | 2026-09-27 | S04-04 | `doing` → `done` | 实测后决定不做增量解析：release 5000 行 9 ms、流式一帧内追上（额外 ≤1.1 ms）。commit `b919826` |
+| 2026-09-28 | S05-08 | `todo` → `doing` → `blocked` | 用户气泡 / 助手留白 / 流式渐显 / 错误条按 v1；用户文字可选择复制；T15 盒模型与 v1 一致。**阻塞于用户目检**（§6.5 第 9 项）。commit `65635b3` |
 | 2026-09-28 | S05-03 | `todo` → `doing` → `done` | 行高缓存由 ListState 承担，只重测内容变化的行；T14 视口上方行变高时可见行屏幕坐标不变（反证：总高 +234px） |
 | 2026-09-28 | S05-17 | `doing` → `done` | 对话状态移植 v1 chatStore（14 例 + 4 例）；会话实体只在变化时通知；T12 流式只重测一行。commit `08c1c76` |
 | 2026-09-28 | S05-02 | `todo` → `doing` → `done` | 行模型在 S05-01 进行中先行提交（`cb5eaa5`），如实补走状态；以用户消息为锚的稳定 id（流式 / 落盘重载一致） |
