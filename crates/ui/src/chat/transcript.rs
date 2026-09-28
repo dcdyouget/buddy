@@ -45,12 +45,37 @@ use std::sync::Arc;
 
 /// 预渲染区（视口上下额外布局的高度）。取 Comet `OVERDRAW_PX`
 pub const OVERDRAW_PX: f32 = 320.0;
+/// 距顶多近时加载更早历史（v1 `el.scrollTop <= 56`）
+pub const LOAD_OLDER_THRESHOLD_PX: f32 = 56.0;
+
+/// 「正在加载更早消息…」（v1 列表顶部的提示行：space-2 / space-4 内边距、xs 字号、三级文字色、居中）。
+/// 叠在列表顶部而非作为一行插入：插成行会被视口保持挪到视口外，看不到
+fn loading_older_banner(cx: &App) -> impl IntoElement {
+    let c = cx.buddy_theme().colors;
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .right_0()
+        .px(px(m::SPACE_4))
+        .py(px(m::SPACE_2))
+        .bg(c.bg_surface)
+        .text_size(px(m::FONT_SIZE_XS))
+        .text_color(c.text_tertiary)
+        .flex()
+        .justify_center()
+        .child("正在加载更早消息…")
+}
 
 /// 消息列表视图
 pub struct Transcript {
     conversation: Entity<Conversation>,
     list: ListState,
     rows: Vec<Row>,
+    /// 各行的 [`rows::stable_key`]（与 `rows` 一一对应）
+    row_keys: Vec<String>,
+    /// 上一帧看到的历史起点：刚并入更早一页的那一帧新行尚未测量、滚动位置算作 0，不据此再触发加载
+    seen_history_offset: Option<u64>,
     /// 每个正文行一个 markdown 实体（按行 id；行 id 稳定 → 流式结束后实体沿用，不重建）
     markdown: HashMap<String, (Entity<Markdown>, u64)>,
     registry: Arc<LanguageRegistry>,
@@ -60,8 +85,9 @@ pub struct Transcript {
     pub remeasured_rows: usize,
     /// 上一次同步时是否在流式（检测「开始流式」以恢复跟随）
     was_streaming: bool,
-    /// 在底部时看到的可见消息数（v1 `lastSeenMessageCountRef`）
-    last_seen: usize,
+    /// 在底部时看到的最后一条可见消息（v1 `lastSeenMessageCountRef` 记条数；
+    /// 这里记 id —— 顶部并入更早历史时条数会变，但不算新消息）
+    last_seen: Option<String>,
     /// 出现未读新消息的时刻：按钮外圈脉冲一次（v1 `.has-new-message::after`）
     unseen_pulse: Option<Instant>,
     /// 点击「回到底部」后的平滑滚动
@@ -102,12 +128,14 @@ impl Transcript {
             conversation,
             list,
             rows: Vec::new(),
+            row_keys: Vec::new(),
+            seen_history_offset: None,
             markdown: HashMap::new(),
             registry: Arc::new(LanguageRegistry::default()),
             rendered_rows: 0,
             remeasured_rows: 0,
             was_streaming: false,
-            last_seen: 0,
+            last_seen: None,
             unseen_pulse: None,
             scroll_animation: None,
             wheel: WheelScroll::default(),
@@ -149,6 +177,13 @@ impl Transcript {
             return;
         }
         let following = self.list.is_following_tail();
+        // 视口首行落在被替换的区间内（典型：顶部并入更早历史后，分页边界的行改了锚点），
+        // GPUI 会把位置重置到区间起点、行内偏移清零 → 视口跳动。记下它的行键，替换后按键还原
+        let top = self.list.logical_scroll_top();
+        let keep_top = (!following && change.old_range.contains(&top.item_ix))
+            .then(|| self.row_keys.get(top.item_ix).cloned())
+            .flatten()
+            .map(|key| (key, top.offset_in_item));
         if !change.old_range.is_empty() || change.new_count > 0 {
             self.list.splice(change.old_range.clone(), change.new_count);
         }
@@ -156,7 +191,13 @@ impl Transcript {
             self.list.remeasure_items(ix..ix + 1);
         }
         self.remeasured_rows += change.remeasure.len();
+        self.row_keys = new_rows.iter().map(|r| rows::stable_key(state, r)).collect();
         self.rows = new_rows;
+        if let Some((key, offset_in_item)) = keep_top
+            && let Some(item_ix) = self.row_keys.iter().position(|k| *k == key)
+        {
+            self.list.scroll_to(gpui::ListOffset { item_ix, offset_in_item });
+        }
         self.update_markdown(cx);
         if following {
             self.list.scroll_to_end();
@@ -611,9 +652,9 @@ impl Transcript {
         self.detail_scroll.get(detail_id).cloned()
     }
 
-    /// 可见消息数（tool 消息不显示）
-    fn visible_messages(&self, cx: &App) -> usize {
-        self.conversation.read(cx).state.messages.iter().filter(|m| m.role != MessageRole::Tool).count()
+    /// 最后一条可见消息（tool 消息不显示）
+    fn last_visible_message(&self, cx: &App) -> Option<String> {
+        self.conversation.read(cx).state.messages.iter().rev().find(|m| m.role != MessageRole::Tool).map(|m| m.id.clone())
     }
 
     /// 是否显示「滚动到底部」按钮（v1：离开底部、不在流式、且有消息）
@@ -623,7 +664,7 @@ impl Transcript {
 
     /// 是否有未读新消息（v1 `hasUnseenMessages`）
     pub fn has_unseen(&self, cx: &App) -> bool {
-        !self.list.is_following_tail() && self.visible_messages(cx) > self.last_seen
+        !self.list.is_following_tail() && self.last_visible_message(cx) != self.last_seen
     }
 
     /// 平滑滚到底部后恢复跟随（v1 `scrollTo({ behavior: 'smooth' })`）
@@ -708,14 +749,27 @@ impl Transcript {
 impl Render for Transcript {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // 到达底部即把现有消息标为已看（v1）；离开底部后新消息到达 → 外圈脉冲一次
-        let visible = self.visible_messages(cx);
+        let visible = self.last_visible_message(cx);
         if self.list.is_following_tail() {
             self.last_seen = visible;
             self.unseen_pulse = None;
-        } else if visible > self.last_seen && self.unseen_pulse.is_none() {
+        } else if visible != self.last_seen && self.unseen_pulse.is_none() {
             self.unseen_pulse = Some(Instant::now());
         }
         let show_button = self.scroll_button_visible(cx);
+        // 距顶 ≤56px 时加载更早一页（v1 `handleScroll`）。v1 只在滚动事件里判断，内容不足一屏时永远不加载；
+        // 这里每帧判断 → 不足一屏会自动补到一屏以上
+        let history = self.conversation.read(cx).state.history;
+        let just_prepended = self.seen_history_offset.is_some_and(|o| o != history.offset);
+        self.seen_history_offset = Some(history.offset);
+        if history.has_more && !history.loading && !just_prepended && self.scroll_offset() <= px(LOAD_OLDER_THRESHOLD_PX) {
+            // v1 `loadOlderHistory` 先取消平滑滚轮（并入后位置会整体变化）
+            self.wheel.task = None;
+            self.wheel.last_animated = None;
+            let conversation = self.conversation.clone();
+            cx.defer(move |cx| conversation.update(cx, |c, cx| c.load_older(cx)));
+        }
+        let loading_older = history.has_more && history.loading;
         // 本帧重新登记可见的内层滚动区域（行渲染时写入）
         self.nested_scroll.borrow_mut().clear();
         // 行绘制边界同样只保留本帧（否则未重绘的行留着过期位置）
@@ -730,6 +784,7 @@ impl Render for Transcript {
             .pb(px(m::SPACE_2))
             .child(list(self.list.clone(), cx.processor(|this, ix, window, cx| this.render_row(ix, window, cx))).flex_grow(1.).size_full())
             .child(self.wheel_interceptor(cx))
+            .when(loading_older, |d| d.child(loading_older_banner(cx)))
             .when(show_button, |d| d.child(self.scroll_button(window, cx)))
     }
 }

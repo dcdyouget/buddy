@@ -127,7 +127,7 @@
 | S05-02 | 块粒度行模型与稳定 id | S05-01 | `done` | `phase-05/S05-02-row-model.md` |
 | S05-03 | 行高记忆与测量 | S05-02 | `done` | `phase-05/S05-03-row-heights.md` |
 | S05-04 | 跟尾弹簧与回到底部 | S05-03 | `done` | `phase-05/S05-04-follow-bottom.md` |
-| S05-05 | 历史加载与滚动（替换手动分页） | S05-04 | `doing` | `phase-05/S05-05-history-loading.md` |
+| S05-05 | 历史加载与滚动（替换手动分页） | S05-04 | `blocked` | `phase-05/S05-05-history-loading.md` |
 | S05-06 | Composer 文本输入与 IME | S00-05, S03-04 | `done` | `phase-05/S05-06-composer-input.md` |
 | S05-07 | Composer 附件（粘贴 / 拖拽 / 选择 / 草稿） | S05-06 | `todo` | `phase-05/S05-07-composer-attachments.md` |
 | S05-08 | 消息行渲染（用户 / 助手 / 流式态 / 错误态） | S04-04, S05-02 | `done` | `phase-05/S05-08-message-rows.md` |
@@ -319,3 +319,4 @@
 | 2026-09-27 | S04-07 | `todo` → `doing` → `blocked` | 代码块按 v1 渲染（头部语言标签、复制 / 已复制 + 动画）；vendored 补丁接通 `CodeBlockRenderer::Custom`；T04 复制内容逐字节一致（含反证与拦截）。**阻塞于用户目检**（handoff §6.5 第 4 项）。commit `200d6ad`、`0a83f01` |
 | 2026-09-27 | S04-05 | `doing` → `done` | 移植 v1 normalizer 两项规范化（6 测试含反证）；**不做 Comet 流式 mend**（v1 无此行为）；流式观感目检移交 S05-08。commit `c956292` |
 | 2026-09-28 | S05-14 | `doing` → `blocked` | 回答操作栏按 v1（复制 / 回到问题 / 时间）；T21 真实点击含拦截；待目检 #14 |
+| 2026-09-28 | S05-05 | `doing` → `blocked` | 按 v1 分页（10 条 / 距顶 56px）；视口按行键保持；`head` 锚带消息 id；T22 含三项拦截；待目检 #15 |

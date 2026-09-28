@@ -137,8 +137,24 @@ pub struct ChatState {
     pub pending_saves: Vec<Message>,
     /// 出错且为鉴权失败（401 / unauthorized）：应切到「无 API Key」页（v1 `setPage('noapikey')`）
     pub needs_api_key: bool,
+    /// 历史分页（v1 `historyOffset` / `hasMoreHistory` / `isLoadingHistory`）
+    pub history: HistoryPaging,
     /// 任何可见变化都递增（视图据此决定是否刷新）
     pub revision: u64,
+}
+
+/// 每页历史条数（v1 `HISTORY_PAGE_SIZE`）
+pub const HISTORY_PAGE_SIZE: u64 = 10;
+
+/// 历史分页状态
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct HistoryPaging {
+    /// 已加载的最早一条在存储中的序号
+    pub offset: u64,
+    /// 是否还有更早的
+    pub has_more: bool,
+    /// 正在加载更早的一页
+    pub loading: bool,
 }
 
 /// 用户停止：放完已到内容后按完成收尾（v1 `handleStreamDone`）
@@ -244,6 +260,41 @@ impl ChatState {
         let mut state = Self { messages, ..Default::default() };
         state.hydrate();
         state
+    }
+
+    /// 以最新一页历史建立：`offset` 为这一页首条在存储中的序号（v1 `loadMessages`）
+    pub fn from_history_page(messages: Vec<Message>, offset: u64) -> Self {
+        let mut state = Self::from_history(messages);
+        state.history = HistoryPaging { offset, has_more: offset > 0, loading: false };
+        state
+    }
+
+    /// 开始加载更早一页：返回要读取的 `(offset, limit)`；无更早或已在加载时返回 `None`
+    pub fn begin_load_older(&mut self) -> Option<(u64, u64)> {
+        let h = self.history;
+        if !h.has_more || h.loading {
+            return None;
+        }
+        let next = h.offset.saturating_sub(HISTORY_PAGE_SIZE);
+        self.history.loading = true;
+        self.touch();
+        Some((next, h.offset - next))
+    }
+
+    /// 更早一页读取完成（`offset` 为 [`Self::begin_load_older`] 给出的起点）；失败时保持原分页（v1 只记日志）
+    pub fn finish_load_older(&mut self, offset: u64, result: Result<Vec<Message>, String>) {
+        self.history.loading = false;
+        match result {
+            Ok(older) => {
+                self.history.offset = offset;
+                self.history.has_more = offset > 0;
+                self.prepend_history(older);
+            }
+            Err(e) => {
+                log::error!("[Buddy] 加载更早历史消息失败: {e}");
+                self.touch();
+            }
+        }
     }
 
     /// 在开头并入更早的历史（v1 `loadOlderMessages`：按 id 去重）
@@ -1177,6 +1228,37 @@ mod tests {
         m.content = "<think>想</think>答".into();
         let s = ChatState::from_history(vec![m]);
         assert_blocks(s.messages[0].blocks.as_deref().unwrap(), &[think("想", false), text("答")]);
+    }
+
+    #[test]
+    fn history_paging_matches_v1() {
+        let page = |ids: std::ops::Range<u64>| ids.map(|i| { let mut m = assistant_message("m"); m.id = format!("m{i}"); m }).collect::<Vec<_>>();
+        // 共 25 条：先载最新 10 条（offset 15）
+        let mut s = ChatState::from_history_page(page(15..25), 15);
+        assert_eq!(s.history, HistoryPaging { offset: 15, has_more: true, loading: false });
+        assert_eq!(s.begin_load_older(), Some((5, 10)));
+        // 加载中不重复触发
+        assert_eq!(s.begin_load_older(), None);
+        // 与已有消息重复的按 id 去掉
+        let mut older = page(5..15);
+        older.push(s.messages[0].clone());
+        s.finish_load_older(5, Ok(older));
+        assert_eq!(s.messages.len(), 20);
+        assert_eq!(s.messages[0].id, "m5");
+        assert_eq!(s.history, HistoryPaging { offset: 5, has_more: true, loading: false });
+        // 最后一页不足 10 条：只读剩下的 5 条，之后没有更早的
+        assert_eq!(s.begin_load_older(), Some((0, 5)));
+        s.finish_load_older(0, Ok(page(0..5)));
+        assert_eq!(s.history, HistoryPaging { offset: 0, has_more: false, loading: false });
+        assert_eq!(s.begin_load_older(), None);
+        // 失败：分页不变，可再次尝试
+        let mut s = ChatState::from_history_page(page(15..25), 15);
+        s.begin_load_older();
+        s.finish_load_older(5, Err("磁盘错误".into()));
+        assert_eq!(s.history, HistoryPaging { offset: 15, has_more: true, loading: false });
+        assert_eq!(s.messages.len(), 10);
+        // 全部历史不足一页：没有更早的
+        assert!(!ChatState::from_history_page(page(0..3), 0).history.has_more);
     }
 
     fn error(reason: StopReason, message: &str) -> StreamEvent {

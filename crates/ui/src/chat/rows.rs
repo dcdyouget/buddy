@@ -160,7 +160,9 @@ fn bucket(state: &ChatState, calls: &[String], block_count: usize) -> HashMap<i3
 /// 由对话状态生成全部行（纯函数）
 pub fn build_rows(state: &ChatState) -> Vec<Row> {
     let mut rows = Vec::new();
-    let mut anchor = "head".to_string();
+    // 开头没有用户消息的助手行（分页边界）锚在首条消息上：各页开头的 `head` 行 id 不能相同，
+    // 否则并入更早一页时 diff 会把两页的开头行误认作同一行（S05-05 T22 发现）
+    let mut anchor = format!("head-{}", state.messages.first().map_or("", |m| m.id.as_str()));
     let mut assistant_ordinal = 0usize;
     for (ix, message) in state.messages.iter().enumerate() {
         match message.role {
@@ -293,6 +295,19 @@ pub fn diff(old: &[Row], new: &[Row]) -> Splice {
     Splice { old_range: prefix..old.len() - suffix, new_count: new.len() - suffix - prefix, remeasure }
 }
 
+/// 与轮次锚点无关的行键（消息 id + 行内位置）。行 id 以本轮用户消息为锚；分页边界处的
+/// 助手消息在更早一页并入前锚为 `head`，并入后改锚 → 行 id 变了但行键不变（S05-05 保持视口用）
+pub fn stable_key(state: &ChatState, row: &Row) -> String {
+    let id = &state.messages[msg_of(&row.kind)].id;
+    match &row.kind {
+        RowKind::User { .. } => id.clone(),
+        RowKind::Block { block, .. } => format!("{id}.{block}"),
+        RowKind::Tool { call, .. } => format!("{id}.t.{call}"),
+        RowKind::Actions { .. } => format!("{id}.actions"),
+        RowKind::Pending { .. } => format!("{id}.pending"),
+    }
+}
+
 /// 该行所属消息（行渲染取数用）
 pub fn message<'a>(state: &'a ChatState, row: &Row) -> &'a Message {
     &state.messages[msg_of(&row.kind)]
@@ -397,6 +412,25 @@ mod tests {
                 (false, true, true, false),  // a2 的操作栏（末行）
             ]
         );
+    }
+
+    #[test]
+    fn prepending_history_keeps_stable_keys() {
+        let text = |s: &str| vec![ContentBlock::Text { content: s.into() }];
+        // 最新一页以助手消息开头（它的提问在更早一页）
+        let mut s = ChatState::from_history(vec![assistant("a3", text("答二"), vec![]), user("u4", "问三"), assistant("a5", text("答三"), vec![])]);
+        let old = build_rows(&s);
+        assert_eq!(old[0].id, "head-a3#0.0");
+        let old_top_key = stable_key(&s, &old[0]);
+        // 更早一页同样以助手消息开头：两页的开头行 id 不能相同
+        s.prepend_history(vec![assistant("a1", text("答一"), vec![]), user("u2", "问二")]);
+        let new = build_rows(&s);
+        assert_eq!(new[0].id, "head-a1#0.0");
+        let change = diff(&old, &new);
+        assert_eq!(change.old_range.start, 0, "边界行改锚 → 在替换区间内");
+        // 改锚后的边界行可按行键找回
+        let found = new.iter().position(|r| stable_key(&s, r) == old_top_key).unwrap();
+        assert_eq!(new[found].id, "u2#0.0");
     }
 
     #[test]

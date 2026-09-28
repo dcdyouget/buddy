@@ -14,7 +14,11 @@
 //! - T12 流式只重测一行（S05-02 / S05-17）：纯正文流式期间，每次行同步最多重测 1 行、行集合不变；
 //! - T13 重绘预算：1000 条消息时整窗重绘中位耗时 < 50ms；
 //! - T14 视口上方行高变化（S05-03）：可见内容不移动（视口首行与行内偏移不变），且只重测那一行；
-//! - T15 用户消息保留换行（S05-08，v1 `white-space: pre-wrap`）。
+//! - T15 用户消息保留换行（S05-08，v1 `white-space: pre-wrap`）；
+//! - T22 历史分页（S05-05）：另开窗口，5001 条只载入最新 10 条（首条是助手消息 → 行锚 `head-a4991`）；
+//!   真实滚轮滚到顶 → 加载更早 10 条，视口首行（改锚的边界行）与行内偏移、可见行屏幕位置均不变。
+//!
+//! 目检模式按 v1 分页：先载最新 10 条，滚到顶再读更早的（读取延迟 150ms，便于看到「正在加载更早消息…」）。
 
 use buddy_ui::chat::{
     composer::{Composer, ComposerEvent},
@@ -74,6 +78,26 @@ fn history(count: usize) -> Vec<Message> {
             }
         })
         .collect()
+}
+
+/// 分页读取合成历史（替代 engine `load_messages`）。`gate` 为 `Some` 时读取挂起到放行（自检用）
+fn paged_conversation(all: Vec<Message>, delay: Duration, gate: Option<Rc<Cell<bool>>>) -> Conversation {
+    let all = Rc::new(all);
+    let offset = all.len().saturating_sub(buddy_ui::chat::state::HISTORY_PAGE_SIZE as usize);
+    let page = all[offset..].to_vec();
+    let loader: buddy_ui::chat::session::HistoryLoader = Rc::new(move |offset, limit, cx: &mut App| {
+        let all = all.clone();
+        let gate = gate.clone();
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            cx.background_executor().timer(delay).await;
+            while gate.as_ref().is_some_and(|g| !g.get()) {
+                cx.background_executor().timer(Duration::from_millis(10)).await;
+            }
+            let (start, end) = (offset as usize, (offset + limit) as usize);
+            Ok(all[start..end.min(all.len())].to_vec())
+        })
+    });
+    Conversation::with_history_page(page, offset as u64, loader)
 }
 
 struct ChatPreview {
@@ -613,6 +637,81 @@ async fn selftest_keyboard(handle: WindowHandle<ChatPreview>, cx: &mut AsyncApp)
     (t16, t17)
 }
 
+/// T22：历史分页 —— 触顶加载更早一页，可见内容不移动
+async fn selftest_paging(cx: &mut AsyncApp) -> bool {
+    let gate = Rc::new(Cell::new(false));
+    // 矮窗口：最新一页（10 条）须超过一屏，才能真正滚到「距顶 ≤56px」而不是整页贴底
+    let bounds = cx.update(|cx| Bounds::centered(None, size(px(560.0), px(460.0)), cx));
+    let g = gate.clone();
+    let handle = cx
+        .update(|cx| {
+            cx.open_window(WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() }, |window, cx| {
+                let conversation = cx.new(|_| paged_conversation(history(5001), Duration::ZERO, Some(g)));
+                let transcript = cx.new(|cx| Transcript::new(conversation.clone(), cx));
+                cx.new(|cx| ChatPreview::new(conversation, transcript, window, cx))
+            })
+        })
+        .expect("open_window 失败");
+    let (transcript, conversation) = handle.read_with(cx, |p, _| (p.transcript.clone(), p.conversation.clone())).unwrap();
+    for _ in 0..3 {
+        draw(handle, cx).await;
+    }
+    let paging = |cx: &mut AsyncApp| conversation.read_with(cx, |c, _| c.state.history);
+    let initial = paging(cx);
+    let first_row = transcript.read_with(cx, |t, _| t.rows().first().map(|r| r.id.clone())).unwrap_or_default();
+    // 真实滚轮滚到顶：距顶 ≤56px 触发加载，读取被闸门挂起
+    wheel(handle, 4000.0, cx).await;
+    let during = paging(cx);
+    let top_before = transcript.read_with(cx, |t, _| t.list_state().logical_scroll_top());
+    let top_id_before = transcript.read_with(cx, |t, _| t.rows().get(top_before.item_ix).map(|r| r.id.clone())).unwrap_or_default();
+    // 可见的一条用户消息（行 id 不随并入而变）的屏幕位置
+    let probe = transcript.read_with(cx, |t, _| {
+        t.rows().iter().filter(|r| matches!(r.kind, buddy_ui::chat::rows::RowKind::User { .. })).find_map(|r| t.painted_row_bounds(&r.id).map(|b| (r.id.clone(), b.origin.y)))
+    });
+    let rows_before = transcript.read_with(cx, |t, _| t.rows().len());
+    gate.set(true);
+    for _ in 0..20 {
+        cx.background_executor().timer(Duration::from_millis(16)).await;
+        draw(handle, cx).await;
+    }
+    let after = paging(cx);
+    let top_after = transcript.read_with(cx, |t, _| t.list_state().logical_scroll_top());
+    let top_id_after = transcript.read_with(cx, |t, _| t.rows().get(top_after.item_ix).map(|r| r.id.clone())).unwrap_or_default();
+    let probe_after = probe.as_ref().and_then(|(id, _)| transcript.read_with(cx, |t, _| t.painted_row_bounds(id).map(|b| b.origin.y)));
+    let rows_after = transcript.read_with(cx, |t, _| t.rows().len());
+    let at_end = transcript.read_with(cx, |t, _| t.list_state().logical_scroll_top().item_ix >= t.rows().len());
+    println!("T22: 加载后仍贴底 {at_end}（须 false：否则没有真正滚动过）");
+    println!(
+        "T22: 初始 offset {} 更早 {}，首行 {first_row}；触顶后加载中 {}；首行 {top_id_before} + {:?} → {top_id_after} + {:?}；探针 {:?} → {probe_after:?}；行 {rows_before} → {rows_after}；offset {} → {}",
+        initial.offset,
+        initial.has_more,
+        during.loading,
+        top_before.offset_in_item,
+        top_after.offset_in_item,
+        probe,
+        during.offset,
+        after.offset
+    );
+    let ok = initial.offset == 4991
+        && initial.has_more
+        && first_row.starts_with("head-a4991#")
+        && during.loading
+        && !after.loading
+        && after.offset == 4981
+        && rows_after > rows_before
+        && top_id_before.starts_with("head-a4991#")
+        && !top_id_after.starts_with("head-")
+        // 边界行 a4991（回答 u4990）并入前锚为 head，并入后改锚为 u4990：视口首行应仍是它
+        && top_id_after == top_id_before.replacen("head-a4991", "u4990", 1)
+        && top_before.offset_in_item == top_after.offset_in_item
+        && probe.as_ref().map(|(_, y)| *y) == probe_after
+        && probe.is_some()
+        && !at_end;
+    let _ = cx.update_window(handle.into(), |_, window, _| window.remove_window());
+    println!("{} S05-05 T22 触顶加载更早历史，可见内容不移动", if ok { "PASS" } else { "FAIL" });
+    ok
+}
+
 fn selftest(handle: WindowHandle<ChatPreview>, cx: &mut App) {
     cx.spawn(async move |cx: &mut AsyncApp| {
         let transcript = handle.read_with(cx, |p, _| p.transcript.clone()).unwrap();
@@ -749,7 +848,8 @@ fn selftest(handle: WindowHandle<ChatPreview>, cx: &mut App) {
         let t19 = selftest_wheel(handle, cx).await;
         let t20 = selftest_tools(handle, cx).await;
         let t21 = selftest_actions(handle, cx).await;
-        std::process::exit(if t11 && t12 && t13 && t14 && t15 && t16 && t17 && t18 && t19 && t20 && t21 { 0 } else { 1 });
+        let t22 = selftest_paging(cx).await;
+        std::process::exit(if t11 && t12 && t13 && t14 && t15 && t16 && t17 && t18 && t19 && t20 && t21 && t22 { 0 } else { 1 });
     })
     .detach();
 }
@@ -771,7 +871,9 @@ fn main() {
         let bounds = Bounds::centered(None, size(px(560.0), px(760.0)), cx);
         let handle = cx
             .open_window(WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() }, |window, cx| {
-                let conversation = cx.new(|_| Conversation::new(history(count)));
+                let conversation = cx.new(|_| {
+                    if self_test { Conversation::new(history(count)) } else { paged_conversation(history(count), Duration::from_millis(150), None) }
+                });
                 let transcript = cx.new(|cx| Transcript::new(conversation.clone(), cx));
                 cx.new(|cx| ChatPreview::new(conversation, transcript, window, cx))
             })

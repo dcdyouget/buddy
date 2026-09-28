@@ -6,8 +6,12 @@
 use super::state::ChatState;
 use buddy_engine::models::Message;
 use buddy_engine::streaming::StreamEvent;
-use gpui::{AsyncApp, Context, Task, WeakEntity};
+use gpui::{App, AsyncApp, Context, Task, WeakEntity};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
+
+/// 读取一段历史 `(offset, limit)`（engine `load_messages`；预览里为内存数据）
+pub type HistoryLoader = Rc<dyn Fn(u64, u64, &mut App) -> Task<Result<Vec<Message>, String>>>;
 
 /// 流式期间推进节奏器的间隔（约一帧）
 const PUMP_INTERVAL: Duration = Duration::from_millis(16);
@@ -18,12 +22,35 @@ pub struct Conversation {
     pub state: ChatState,
     started: Instant,
     pump: Option<Task<()>>,
+    loader: Option<HistoryLoader>,
+    loading: Option<Task<()>>,
 }
 
 impl Conversation {
     /// 以历史消息建立
     pub fn new(history: Vec<Message>) -> Self {
-        Self { state: ChatState::from_history(history), started: Instant::now(), pump: None }
+        Self { state: ChatState::from_history(history), started: Instant::now(), pump: None, loader: None, loading: None }
+    }
+
+    /// 以最新一页历史建立，更早的按需经 `loader` 读取（v1 `loadMessages` / `loadOlderMessages`）
+    pub fn with_history_page(page: Vec<Message>, offset: u64, loader: HistoryLoader) -> Self {
+        Self { state: ChatState::from_history_page(page, offset), started: Instant::now(), pump: None, loader: Some(loader), loading: None }
+    }
+
+    /// 加载更早一页并并入开头；无更早、已在加载或没有加载器时忽略
+    pub fn load_older(&mut self, cx: &mut Context<Self>) {
+        let Some(loader) = self.loader.clone() else { return };
+        let Some((offset, limit)) = self.state.begin_load_older() else { return };
+        cx.notify();
+        let read = loader(offset, limit, cx);
+        self.loading = Some(cx.spawn(async move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let result = read.await;
+            let _ = this.update(cx, |c, cx| {
+                c.state.finish_load_older(offset, result);
+                c.loading = None;
+                cx.notify();
+            });
+        }));
     }
 
     /// 单调时钟（毫秒），节奏器与落定效果共用
