@@ -60,6 +60,10 @@ icons! {
     Square => "square",
     /// 添加图片（lucide `image-plus`）
     ImagePlus => "image-plus",
+    /// 思考（lucide `brain`）
+    Brain => "brain",
+    /// 向右（lucide `chevron-right`）
+    ChevronRight => "chevron-right",
     /// 流式四角星（Buddy 自绘，v1 `.streaming-next-star`）
     StreamingStar => "streaming-star",
 }

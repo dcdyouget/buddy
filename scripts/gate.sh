@@ -9,6 +9,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 python3 scripts/check-discipline.py >/tmp/buddy-gate.log 2>&1 || { cat /tmp/buddy-gate.log; echo "gate: 纪律检查失败"; exit 1; }
+python3 scripts/icons/lucide_svg.py --check >/tmp/buddy-gate.log 2>&1 || { cat /tmp/buddy-gate.log; echo "gate: 图标与 lucide 不一致"; exit 1; }
 python3 scripts/check-discipline.py --self-test >/tmp/buddy-gate.log 2>&1 || { cat /tmp/buddy-gate.log; echo "gate: 拦截验证失败"; exit 1; }
 # buddy-markdown 只查 lib：vendored zed 源码自带的单元测试依赖 zed 测试设施与被 stub 的 language，
 # 无法也无需编译（不改 vendored 源码以保持与 zed 原文一致，见 crates/markdown/Cargo.toml）
