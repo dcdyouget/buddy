@@ -126,7 +126,7 @@
 | S05-01 | Transcript 虚拟列表骨架（ListState） | S03-01 | `blocked` | `phase-05/S05-01-transcript-list.md` |
 | S05-02 | 块粒度行模型与稳定 id | S05-01 | `done` | `phase-05/S05-02-row-model.md` |
 | S05-03 | 行高记忆与测量 | S05-02 | `done` | `phase-05/S05-03-row-heights.md` |
-| S05-04 | 跟尾弹簧与回到底部 | S05-03 | `doing` | `phase-05/S05-04-follow-bottom.md` |
+| S05-04 | 跟尾弹簧与回到底部 | S05-03 | `blocked` | `phase-05/S05-04-follow-bottom.md` |
 | S05-05 | 历史加载与滚动（替换手动分页） | S05-04 | `todo` | `phase-05/S05-05-history-loading.md` |
 | S05-06 | Composer 文本输入与 IME | S00-05, S03-04 | `blocked` | `phase-05/S05-06-composer-input.md` |
 | S05-07 | Composer 附件（粘贴 / 拖拽 / 选择 / 草稿） | S05-06 | `todo` | `phase-05/S05-07-composer-attachments.md` |
@@ -299,6 +299,7 @@
 | 2026-09-27 | S04-02 | `doing` → `done` | Comet syntax 接入；v1 语言集 17 种；T03 布局不变（6e-5 px）并反证；+30 包全 MIT。commit `3aa039b` |
 | 2026-09-27 | S04-03 | `todo` → `doing` → `done` | util 替身（−21 包）、10 个未用语法包 feature 化（约 12 MB）、HTML 按 v1 实测转义；新增 GPL patch 同步检查。commit `6c55b0c` |
 | 2026-09-27 | S04-04 | `doing` → `done` | 实测后决定不做增量解析：release 5000 行 9 ms、流式一帧内追上（额外 ≤1.1 ms）。commit `b919826` |
+| 2026-09-28 | S05-04 | `todo` → `doing` → `blocked` | 跟随按 v1 直接贴底（弹簧不做，理由见 spec）、流式开始恢复跟随、回到底部按钮 + 未读脉冲；T18 含拦截。**阻塞于用户目检**（§6.5 第 11 项） |
 | 2026-09-28 | S05-06 | `todo` → `doing` → `blocked` | 多行输入框（IME、软换行、自动增高、撤销等）+ v1 输入区；键盘语义按 v1 代码更正（Shift+Enter 发送）；S00-05 缺陷 4 根因定位；T16 / T17 含拦截。**阻塞于用户目检**（§6.5 第 10 项）。commit `c2299d6` |
 | 2026-09-28 | S05-08 | `todo` → `doing` → `blocked` | 用户气泡 / 助手留白 / 流式渐显 / 错误条按 v1；用户文字可选择复制；T15 盒模型与 v1 一致。**阻塞于用户目检**（§6.5 第 9 项）。commit `65635b3` |
 | 2026-09-28 | S05-03 | `todo` → `doing` → `done` | 行高缓存由 ListState 承担，只重测内容变化的行；T14 视口上方行变高时可见行屏幕坐标不变（反证：总高 +234px） |

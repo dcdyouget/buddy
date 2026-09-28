@@ -249,6 +249,77 @@ async fn press(handle: WindowHandle<ChatPreview>, keys: &str, cx: &mut AsyncApp)
     draw(handle, cx).await;
 }
 
+/// 在列表上滚动滚轮（正值 = 向上翻看历史）
+async fn wheel(handle: WindowHandle<ChatPreview>, dy: f32, cx: &mut AsyncApp) {
+    use buddy_ui::gpui::{Modifiers, MouseMoveEvent, ScrollDelta, ScrollWheelEvent, TouchPhase, point};
+    let position = point(px(280.0), px(300.0));
+    let events = [
+        PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: None, modifiers: Modifiers::default() }),
+        PlatformInput::ScrollWheel(ScrollWheelEvent { position, delta: ScrollDelta::Pixels(point(px(0.0), px(dy))), modifiers: Modifiers::default(), touch_phase: TouchPhase::Moved }),
+    ];
+    for e in events {
+        let _ = cx.update_window(handle.into(), |_, window, cx| window.dispatch_event(e, cx));
+        draw(handle, cx).await;
+    }
+}
+
+async fn wait_idle(handle: WindowHandle<ChatPreview>, cx: &mut AsyncApp) {
+    while handle.read_with(cx, |p, cx| p.conversation.read(cx).state.is_streaming()).unwrap() {
+        cx.background_executor().timer(Duration::from_millis(50)).await;
+        draw(handle, cx).await;
+    }
+    draw(handle, cx).await;
+}
+
+/// T18 跟随与回到底部（S05-04）
+async fn selftest_follow(handle: WindowHandle<ChatPreview>, cx: &mut AsyncApp) -> bool {
+    let transcript = handle.read_with(cx, |p, _| p.transcript.clone()).unwrap();
+    wait_idle(handle, cx).await;
+    let following = |cx: &mut AsyncApp| transcript.read_with(cx, |t, _| t.list_state().is_following_tail());
+    let button = |cx: &mut AsyncApp| transcript.read_with(cx, |t, cx| t.scroll_button_visible(cx));
+    let at_rest = following(cx) && !button(cx);
+
+    // (a) 流式中上滑：脱离跟随，视口不再被新内容拉动；流式中不显示按钮
+    handle.update(cx, |p, _, cx| p.simulate_reply("请模拟一段流式回复", cx)).unwrap();
+    for _ in 0..10 {
+        cx.background_executor().timer(Duration::from_millis(30)).await;
+        draw(handle, cx).await;
+    }
+    wheel(handle, 400.0, cx).await;
+    let detached = !following(cx);
+    let top_a = transcript.read_with(cx, |t, _| t.list_state().logical_scroll_top());
+    for _ in 0..20 {
+        cx.background_executor().timer(Duration::from_millis(30)).await;
+        draw(handle, cx).await;
+    }
+    let top_b = transcript.read_with(cx, |t, _| t.list_state().logical_scroll_top());
+    let stays = top_a.item_ix == top_b.item_ix && top_a.offset_in_item == top_b.offset_in_item;
+    let hidden_while_streaming = !button(cx);
+    // (b) 结束后显示按钮
+    wait_idle(handle, cx).await;
+    let shown_after = button(cx);
+    // (c) 点按钮：平滑回到底部并恢复跟随
+    transcript.update(cx, |t, cx| t.scroll_to_bottom(cx));
+    for _ in 0..30 {
+        cx.background_executor().timer(Duration::from_millis(16)).await;
+        draw(handle, cx).await;
+    }
+    let back = following(cx) && transcript.read_with(cx, |t, _| t.list_state().is_scrolled_to_end()) == Some(true) && !button(cx);
+    // (d) 脱离状态下发送：v1 流式开始时重置为跟随
+    wheel(handle, 400.0, cx).await;
+    let detached_again = !following(cx);
+    handle.update(cx, |p, _, cx| p.simulate_reply("再来一段", cx)).unwrap();
+    draw(handle, cx).await;
+    let refollow = following(cx);
+    wait_idle(handle, cx).await;
+    println!(
+        "T18: 静止时贴底 {at_rest}；流式中上滑脱离 {detached}、视口不动 {stays}、流式中无按钮 {hidden_while_streaming}；结束后显示按钮 {shown_after}；点按钮回底并跟随 {back}；再次脱离 {detached_again} 后发送恢复跟随 {refollow}"
+    );
+    let ok = at_rest && detached && stays && hidden_while_streaming && shown_after && back && detached_again && refollow;
+    println!("{} S05-04 T18 跟随 / 脱离 / 回到底部与 v1 一致", if ok { "PASS" } else { "FAIL" });
+    ok
+}
+
 /// T16 回车三态 / T17 组字选区（缺陷 4 回归）
 async fn selftest_keyboard(handle: WindowHandle<ChatPreview>, cx: &mut AsyncApp) -> (bool, bool) {
     // 等上一段流式结束，输入区回到可发送状态
@@ -439,7 +510,8 @@ fn selftest(handle: WindowHandle<ChatPreview>, cx: &mut App) {
         println!("T12: 流式期间行同步 {syncs} 次（按帧采样），单次最多重测 {max_per_sync} 行；行数稳定 {row_count_stable}");
         println!("{} S05-01 T12 流式只重测最后一行", if t12 { "PASS" } else { "FAIL" });
         let (t16, t17) = selftest_keyboard(handle, cx).await;
-        std::process::exit(if t11 && t12 && t13 && t14 && t15 && t16 && t17 { 0 } else { 1 });
+        let t18 = selftest_follow(handle, cx).await;
+        std::process::exit(if t11 && t12 && t13 && t14 && t15 && t16 && t17 && t18 { 0 } else { 1 });
     })
     .detach();
 }

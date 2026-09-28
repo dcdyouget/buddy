@@ -26,10 +26,14 @@ use crate::markdown::{
 };
 use crate::theme_system::{BuddyTheme, tokens::metrics as m};
 use buddy_engine::streaming::ContentBlock;
+use crate::icons::{IconName, icon};
+use crate::theme_system::box_shadows;
+use buddy_engine::models::MessageRole;
 use gpui::{
-    AnyElement, Context, Entity, FollowMode, ListAlignment, ListState, Render, SharedString, Subscription, Window, div, list,
-    prelude::*, px,
+    AnyElement, App, Context, Entity, FollowMode, Hsla, ListAlignment, ListState, Render, SharedString, Subscription, Task, Window, div,
+    list, prelude::*, px,
 };
+use std::time::{Duration, Instant};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -48,6 +52,14 @@ pub struct Transcript {
     pub rendered_rows: usize,
     /// 行重测计数（自检用：验证流式只重测一行）
     pub remeasured_rows: usize,
+    /// 上一次同步时是否在流式（检测「开始流式」以恢复跟随）
+    was_streaming: bool,
+    /// 在底部时看到的可见消息数（v1 `lastSeenMessageCountRef`）
+    last_seen: usize,
+    /// 出现未读新消息的时刻：按钮外圈脉冲一次（v1 `.has-new-message::after`）
+    unseen_pulse: Option<Instant>,
+    /// 点击「回到底部」后的平滑滚动
+    scroll_animation: Option<Task<()>>,
     _observe: Subscription,
 }
 
@@ -56,6 +68,14 @@ impl Transcript {
     pub fn new(conversation: Entity<Conversation>, cx: &mut Context<Self>) -> Self {
         let list = ListState::new(0, ListAlignment::Bottom, px(OVERDRAW_PX)).measure_all();
         list.set_follow_mode(FollowMode::Tail);
+        // 陷阱 2：回调内不得访问 ListState（此时它被可变借用）→ 只安排一次延后的重绘，渲染时再读跟随状态
+        let weak = cx.entity().downgrade();
+        list.set_scroll_handler(move |_, _, cx| {
+            let weak = weak.clone();
+            cx.defer(move |cx| {
+                let _ = weak.update(cx, |_, cx| cx.notify());
+            });
+        });
         let observe = cx.observe(&conversation, |this: &mut Self, _, cx| this.sync(cx));
         let mut this = Self {
             conversation,
@@ -65,6 +85,10 @@ impl Transcript {
             registry: Arc::new(LanguageRegistry::default()),
             rendered_rows: 0,
             remeasured_rows: 0,
+            was_streaming: false,
+            last_seen: 0,
+            unseen_pulse: None,
+            scroll_animation: None,
             _observe: observe,
         };
         this.sync(cx);
@@ -84,7 +108,14 @@ impl Transcript {
 
     /// 按会话状态更新行：一次最小 splice + 只重测内容变化的行
     fn sync(&mut self, cx: &mut Context<Self>) {
-        let new_rows = rows::build_rows(&self.conversation.read(cx).state);
+        let state = &self.conversation.read(cx).state;
+        let streaming = state.is_streaming();
+        let new_rows = rows::build_rows(state);
+        // v1：流式开始时重置为跟随（`useEffect([isStreaming])`）
+        if streaming && !self.was_streaming {
+            self.list.set_follow_mode(FollowMode::Tail);
+        }
+        self.was_streaming = streaming;
         let change = rows::diff(&self.rows, &new_rows);
         if change.is_noop() {
             return;
@@ -213,11 +244,121 @@ impl Transcript {
     }
 }
 
+impl Transcript {
+    /// 可见消息数（tool 消息不显示）
+    fn visible_messages(&self, cx: &App) -> usize {
+        self.conversation.read(cx).state.messages.iter().filter(|m| m.role != MessageRole::Tool).count()
+    }
+
+    /// 是否显示「滚动到底部」按钮（v1：离开底部、不在流式、且有消息）
+    pub fn scroll_button_visible(&self, cx: &App) -> bool {
+        !self.list.is_following_tail() && !self.conversation.read(cx).state.is_streaming() && !self.rows.is_empty()
+    }
+
+    /// 是否有未读新消息（v1 `hasUnseenMessages`）
+    pub fn has_unseen(&self, cx: &App) -> bool {
+        !self.list.is_following_tail() && self.visible_messages(cx) > self.last_seen
+    }
+
+    /// 平滑滚到底部后恢复跟随（v1 `scrollTo({ behavior: 'smooth' })`）
+    pub fn scroll_to_bottom(&mut self, cx: &mut Context<Self>) {
+        if crate::accessibility::prefers_reduced_motion() {
+            self.list.set_follow_mode(FollowMode::Tail);
+            cx.notify();
+            return;
+        }
+        let list = self.list.clone();
+        self.scroll_animation = Some(cx.spawn(async move |this, cx| {
+            // 每帧走剩余距离的一部分，约 250ms 内到底（缓动由距离递减自然形成）
+            for _ in 0..16 {
+                let remaining = list.max_offset_for_scrollbar().y - list.scroll_px_offset_for_scrollbar().y.abs();
+                if remaining <= px(1.0) {
+                    break;
+                }
+                list.scroll_by(remaining * 0.3);
+                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                    return;
+                }
+                cx.background_executor().timer(Duration::from_millis(16)).await;
+            }
+            let _ = this.update(cx, |this, cx| {
+                this.list.set_follow_mode(FollowMode::Tail);
+                this.scroll_animation = None;
+                cx.notify();
+            });
+        }));
+    }
+
+    /// v1 `.scroll-to-bottom-button`：32px 圆、`--bg-elevated`、`--border-default`、`--shadow-floating-sm`、ChevronDown 16px
+    fn scroll_button(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = *cx.buddy_theme();
+        let c = theme.colors;
+        let pulse = self.unseen_pulse.map(|t| t.elapsed().as_secs_f64() * 1000.0);
+        // 新消息脉冲：v1 `scroll-new-message-pulse`（--duration-slow，0%→45%→100%：不透明 0→0.55→0、缩放 0.88→1.08）
+        let ring = pulse.filter(|ms| *ms < f64::from(crate::theme_system::tokens::motion::DURATION_SLOW)).map(|ms| {
+            let t = (ms / f64::from(crate::theme_system::tokens::motion::DURATION_SLOW)) as f32;
+            let ease = crate::theme_system::easing::cubic_bezier(crate::theme_system::tokens::motion::EASE_STANDARD);
+            let opacity = if t < 0.45 { 0.55 * ease(t / 0.45) } else { 0.55 * (1.0 - ease((t - 0.45) / 0.55)) };
+            let grow = (m::SPACE_1) * (0.88 + 0.2 * ease(t));
+            div()
+                .absolute()
+                .top(px(-grow))
+                .left(px(-grow))
+                .size(px(m::SPACE_8 + 2.0 * grow))
+                .rounded(px(m::RADIUS_FULL))
+                .border_1()
+                .border_color(Hsla::from(c.buddy_primary).opacity(opacity))
+        });
+        if ring.is_some() && !crate::accessibility::prefers_reduced_motion() {
+            window.request_animation_frame();
+        }
+        div()
+            .absolute()
+            .bottom(px(m::SPACE_4))
+            .right(px(m::SPACE_4))
+            .child(
+                div()
+                    .id("scroll-to-bottom")
+                    .relative()
+                    .size(px(m::SPACE_8))
+                    .rounded(px(m::RADIUS_FULL))
+                    .bg(c.bg_elevated)
+                    .border_1()
+                    .border_color(c.border_default)
+                    .shadow(box_shadows(theme.shadows.shadow_floating_sm))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .text_color(c.text_muted)
+                    .hover(|s| s.text_color(c.text_primary).bg(c.bg_surface))
+                    .children(ring)
+                    .child(icon(IconName::ChevronDown, px(16.0)))
+                    .on_click(cx.listener(|this, _, _, cx| this.scroll_to_bottom(cx))),
+            )
+    }
+}
+
 impl Render for Transcript {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 到达底部即把现有消息标为已看（v1）；离开底部后新消息到达 → 外圈脉冲一次
+        let visible = self.visible_messages(cx);
+        if self.list.is_following_tail() {
+            self.last_seen = visible;
+            self.unseen_pulse = None;
+        } else if visible > self.last_seen && self.unseen_pulse.is_none() {
+            self.unseen_pulse = Some(Instant::now());
+        }
+        let show_button = self.scroll_button_visible(cx);
         // 陷阱 1：`list()` 自己 flex_grow；v1 列表上下内边距 space-3 / space-2
-        div().size_full().flex().flex_col().pt(px(m::SPACE_3)).pb(px(m::SPACE_2)).child(
-            list(self.list.clone(), cx.processor(|this, ix, window, cx| this.render_row(ix, window, cx))).flex_grow(1.).size_full(),
-        )
+        div()
+            .relative()
+            .size_full()
+            .flex()
+            .flex_col()
+            .pt(px(m::SPACE_3))
+            .pb(px(m::SPACE_2))
+            .child(list(self.list.clone(), cx.processor(|this, ix, window, cx| this.render_row(ix, window, cx))).flex_grow(1.).size_full())
+            .when(show_button, |d| d.child(self.scroll_button(window, cx)))
     }
 }
