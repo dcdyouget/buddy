@@ -110,6 +110,13 @@ pub struct LiveTurn {
     pub batch_at: f64,
 }
 
+impl LiveTurn {
+    /// 本轮工具调用 id，按出现顺序
+    pub fn active_ids(&self) -> Vec<String> {
+        self.active.iter().map(|t| t.id.clone()).collect()
+    }
+}
+
 /// 聊天界面的状态
 #[derive(Debug, Default)]
 pub struct ChatState {
