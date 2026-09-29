@@ -75,6 +75,18 @@ impl Render for EmptyPage {
             .flex_col()
             .justify_end()
             .overflow_hidden()
+            .when_some(self.error.clone(), |d, message| {
+                let this = cx.entity().downgrade();
+                d.child(error_banner(
+                    &message,
+                    move |_, cx| {
+                        let _ = this.update(cx, |_, cx| cx.emit(EmptyPageEvent::DismissError));
+                    },
+                    cx,
+                ))
+            })
+            .child(self.composer.clone())
+            // 展开按钮盖在输入区之上（v1 `z-index: 2`）：必须排在输入区之后绘制
             .child(
                 div()
                     .id("empty-expand")
@@ -99,16 +111,5 @@ impl Render for EmptyPage {
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(EmptyPageEvent::Expand)))
                     .child(icon(IconName::ChevronUp, px(14.0))),
             )
-            .when_some(self.error.clone(), |d, message| {
-                let this = cx.entity().downgrade();
-                d.child(error_banner(
-                    &message,
-                    move |_, cx| {
-                        let _ = this.update(cx, |_, cx| cx.emit(EmptyPageEvent::DismissError));
-                    },
-                    cx,
-                ))
-            })
-            .child(self.composer.clone())
     }
 }

@@ -177,6 +177,27 @@ async fn selftest_empty(compact: WindowHandle<EmptyPage>, compact_log: &Log, tal
     let single_line = 24.0;
     let no_growth = (f32::from(c2.size.height) - single_line).abs() < 0.5 && (f32::from(t2.size.height) - single_line).abs() < 0.5;
 
+    // 多行时滚轮可向上翻看，且不会在下一帧被拽回光标处（此前输入框每帧都把光标拉回视野，滚轮无效）
+    let area = compact.read_with(cx, |p, cx| p.composer().read(cx).text_area().clone()).unwrap();
+    let scroll_of = |cx: &mut AsyncApp| area.read_with(cx, |a, _| f32::from(a.scroll_y_for_test()));
+    let at_end = scroll_of(cx);
+    {
+        use buddy_ui::gpui::{ScrollDelta, ScrollWheelEvent, TouchPhase};
+        let position = point(px(200.0), px(COMPACT_HEIGHT / 2.0));
+        for e in [
+            PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: None, modifiers: Modifiers::default() }),
+            PlatformInput::ScrollWheel(ScrollWheelEvent { position, delta: ScrollDelta::Pixels(point(px(0.0), px(40.0))), modifiers: Modifiers::default(), touch_phase: TouchPhase::Moved }),
+        ] {
+            let _ = cx.update_window(compact.into(), |_, window, cx| window.dispatch_event(e, cx));
+            draw(compact, cx).await;
+        }
+        for _ in 0..3 {
+            draw(compact, cx).await;
+        }
+    }
+    let after_wheel = scroll_of(cx);
+    let wheel_scrolls = at_end > 0.0 && after_wheel < at_end;
+
     // 错误条：出现在输入区上方；点关闭发出关闭事件（自检的订阅方随即清除错误）
     let _ = tall.update(cx, |p, _, cx| p.set_error(Some(ERROR_TEXT.into()), cx));
     draw(tall, cx).await;
@@ -201,13 +222,13 @@ async fn selftest_empty(compact: WindowHandle<EmptyPage>, compact_log: &Log, tal
     let banner_above_input = dismissed_at.is_some_and(|yy| yy < f32::from(t2.origin.y));
     println!(
         "T24: 展开 {expand}（按钮之外不触发 {expand_only_on_button}）；紧凑窗口输入框中心 {center:.1}（窗口中心 {:.1}）、较高窗口 {tall_center:.1}/{TALL_HEIGHT}；\
-         四行草稿时输入框高 {:.1} / {:.1}（一行 {single_line}）；错误条显示 {shown}，关闭点 y={dismissed_at:?}（输入框顶 {:.1}），已清除 {cleared}",
+         四行草稿时输入框高 {:.1} / {:.1}（一行 {single_line}）；滚轮上翻 {at_end:.1} → {after_wheel:.1}；错误条显示 {shown}，关闭点 y={dismissed_at:?}（输入框顶 {:.1}），已清除 {cleared}",
         COMPACT_HEIGHT / 2.0,
         f32::from(c2.size.height),
         f32::from(t2.size.height),
         f32::from(t2.origin.y),
     );
-    let ok = expand && expand_only_on_button && filled && bottom_aligned && no_growth && shown && banner_above_input && cleared;
+    let ok = expand && expand_only_on_button && filled && bottom_aligned && no_growth && wheel_scrolls && shown && banner_above_input && cleared;
     println!("{} S05-16 T24 空态页（展开 / 独立气泡撑满与贴底 / 不撑高 / 错误条）", if ok { "PASS" } else { "FAIL" });
     ok
 }

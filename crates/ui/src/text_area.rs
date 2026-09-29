@@ -229,6 +229,9 @@ pub struct TextArea {
     last_edit_at: Option<Instant>,
     layout: Option<Layout>,
     scroll_y: Pixels,
+    /// 上一次为「保持光标可见」调整滚动时的 (光标位置, 内容长度)：只在它们变化时才把光标拉回视野，
+    /// 否则滚轮向上翻看会在下一帧被拽回光标处
+    revealed: Option<(usize, usize)>,
     /// 光标闪烁：最近一次活动时刻
     last_activity: Instant,
     blink: Option<gpui::Task<()>>,
@@ -307,6 +310,7 @@ impl TextArea {
             last_edit_at: None,
             layout: None,
             scroll_y: px(0.),
+            revealed: None,
             last_activity: Instant::now(),
             blink: None,
             style,
@@ -321,6 +325,11 @@ impl TextArea {
     /// 当前选区（字节偏移，自检用）
     pub fn selected_range_for_test(&self) -> Range<usize> {
         self.selected_range.clone()
+    }
+
+    /// 当前滚动偏移（自检用）
+    pub fn scroll_y_for_test(&self) -> Pixels {
+        self.scroll_y
     }
 
     /// 上一帧绘制的文字区域（自检用；尚未绘制时为 `None`）
@@ -856,11 +865,15 @@ impl Element for TextAreaElement {
             // 保持光标可见（内容超过最大高度时）
             let content_h = area.layout.as_ref().and_then(|l| l.lines.last()).map_or(px(0.), |l| l.top + l.height);
             let max_scroll = (content_h - bounds.size.height).max(px(0.));
-            if let Some(p) = area.position_for(area.cursor_offset()) {
-                if p.y < area.scroll_y {
-                    area.scroll_y = p.y;
-                } else if p.y + line_height > area.scroll_y + bounds.size.height {
-                    area.scroll_y = p.y + line_height - bounds.size.height;
+            let key = (area.cursor_offset(), area.content.len());
+            if area.revealed != Some(key) {
+                area.revealed = Some(key);
+                if let Some(p) = area.position_for(area.cursor_offset()) {
+                    if p.y < area.scroll_y {
+                        area.scroll_y = p.y;
+                    } else if p.y + line_height > area.scroll_y + bounds.size.height {
+                        area.scroll_y = p.y + line_height - bounds.size.height;
+                    }
                 }
             }
             area.scroll_y = area.scroll_y.clamp(px(0.), max_scroll);
