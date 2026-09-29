@@ -9,6 +9,7 @@
 //! | engine 事件 | [`Conversation::apply_events`]；流式结束时按是否 401 落点（`noapikey` / `conversation`） |
 //! | 界面生成的提示消息（配额 / 服务器 / 网络） | 取走 `pending_saves` → `save_message`（v1 `saveMessage`） |
 //! | 历史分页 | [`Conversation::with_history_page`] + `load_messages`（读取前先把偏移换算为「最新一页」） |
+//! | 模型按钮 | [`super::model_menu`] 在按钮上方打开菜单；选择后保存配置（串行） |
 //! | 设置 | 叠加层（[`PageState::base_page`] 保持底层页不卸载）；设置页本体归 S06-01，此处是占位 |
 //!
 //! **页面切换不改变窗口尺寸**：路由器不接触窗口，只发出 [`RouterEvent::PageChanged`]，
@@ -17,6 +18,7 @@
 use super::chat_page::ChatPage;
 use super::composer::{Composer, ComposerEvent};
 use super::empty_page::{EmptyPage, EmptyPageEvent};
+use super::model_menu::{ModelMenu, menu_rows, open_model_menu};
 use super::no_key_page::{NoKeyPage, NoKeyPageEvent};
 use super::page_state::{EmptySend, Page, PageState, classify_empty_send, has_valid_config};
 use super::session::{Conversation, HistoryLoader};
@@ -25,7 +27,7 @@ use crate::chat_bridge::{self, spawn_engine};
 use crate::theme_system::{BuddyTheme, tokens::metrics as m};
 use buddy_engine::chat::ChatEngine;
 use buddy_engine::models::{AppConfig, Message};
-use gpui::{AnyElement, App, Context, Entity, EventEmitter, Focusable, FontWeight, SharedString, Subscription, Task, Window, div, prelude::*, px};
+use gpui::{AnyElement, App, Context, Entity, EventEmitter, Focusable, FontWeight, SharedString, Subscription, Task, Window, WindowHandle, div, prelude::*, px};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -91,6 +93,10 @@ pub struct PageRouter {
     /// 下一次渲染时把焦点交给输入区（切页后；切页可能发生在没有 `Window` 的上下文）
     focus_composer: bool,
     run: Option<Task<()>>,
+    /// 模型菜单窗口（打开时）
+    model_menu: Option<WindowHandle<ModelMenu>>,
+    /// 配置保存的串行队列（v1 `configUpdateQueue`：快速连选两个模型时，第二次保存不能被第一次覆盖）
+    config_save: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -107,12 +113,11 @@ impl PageRouter {
         let no_key = cx.new(NoKeyPage::new);
         let chat = cx.new(|cx| ChatPage::new(conversation.clone(), composer.clone(), cx));
         let subscriptions = vec![
-            cx.subscribe_in(&composer, window, |this, _, event: &ComposerEvent, _, cx| match event {
+            cx.subscribe_in(&composer, window, |this, _, event: &ComposerEvent, window, cx| match event {
                 ComposerEvent::Send(text) => this.send(text.clone(), cx),
                 ComposerEvent::Stop => this.engine.stop_generation(),
                 ComposerEvent::OpenSettings => this.open_settings(cx),
-                // 模型选择器归 S05-15
-                ComposerEvent::PickModel => {}
+                ComposerEvent::PickModel => this.toggle_model_menu(window, cx),
             }),
             cx.subscribe(&empty, |this, _, event: &EmptyPageEvent, cx| match event {
                 EmptyPageEvent::Expand => this.transition(cx, |p| p.set_page(Page::Conversation)),
@@ -138,6 +143,8 @@ impl PageRouter {
             was_streaming: false,
             focus_composer: true,
             run: None,
+            model_menu: None,
+            config_save: None,
             _subscriptions: subscriptions,
         };
         this.apply_config(cx);
@@ -177,6 +184,63 @@ impl PageRouter {
         if self.valid_config() {
             self.transition(cx, |p| p.config_changed(true));
         }
+    }
+
+    /// 模型菜单窗口（自检用）
+    pub fn model_menu(&self) -> Option<WindowHandle<ModelMenu>> {
+        self.model_menu
+    }
+
+    /// 点模型按钮：菜单开着则关闭，否则在按钮上方打开（流式中按钮不存在，不会走到这里）
+    fn toggle_model_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(open) = self.model_menu.take()
+            && open.update(cx, |menu, window, cx| menu.close(window, cx)).is_ok()
+        {
+            return;
+        }
+        if self.conversation.read(cx).state.is_streaming() {
+            return;
+        }
+        let Some(anchor) = self.composer.read(cx).model_button_bounds() else { return };
+        let rows = menu_rows(&self.config.models, &self.config.providers);
+        let router = cx.entity().downgrade();
+        let on_select = std::rc::Rc::new(move |id: String, cx: &mut App| {
+            let _ = router.update(cx, |router, cx| router.select_model(id, cx));
+        });
+        self.model_menu = open_model_menu(window, window.window_handle(), anchor, rows, self.config.selected_model_id.clone(), on_select, cx);
+    }
+
+    /// 选择默认模型（v1 `setDefaultModel`）：内存立即生效，写盘串行进行；保存失败在错误条提示
+    pub fn select_model(&mut self, id: String, cx: &mut Context<Self>) {
+        if id == self.config.selected_model_id {
+            return;
+        }
+        let mut config = self.config.clone();
+        config.selected_model_id = id;
+        self.set_config(config.clone(), cx);
+        let engine = self.engine.clone();
+        let previous = self.config_save.take();
+        self.config_save = Some(cx.spawn(async move |this, cx| {
+            if let Some(previous) = previous {
+                previous.await;
+            }
+            let saved = this.update(cx, |_, cx| spawn_engine(cx, async move { engine.save_config(config).await }));
+            let Ok(saved) = saved else { return };
+            if let Err(message) = saved.await {
+                let _ = this.update(cx, |this, cx| {
+                    this.conversation.update(cx, |c, cx| {
+                        c.state.error = Some(format!("保存默认模型失败：{message}"));
+                        c.state.revision += 1;
+                        cx.notify();
+                    })
+                });
+            }
+        }));
+    }
+
+    /// 等待进行中的配置保存完成（自检用）
+    pub fn take_config_save(&mut self) -> Option<Task<()>> {
+        self.config_save.take()
     }
 
     /// 打开设置（输入区按钮、无 Key 页、菜单栏「设置…」）

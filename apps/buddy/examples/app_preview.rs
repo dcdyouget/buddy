@@ -1,7 +1,7 @@
 //! S05-18 页面状态机与 engine 接入的预览与自检。
 //!
 //! ```text
-//! cargo run -p buddy-app --example app_preview -- --mock       # 目检：本地 mock 模型（提示词含「401」「429」「500」「慢」触发对应情形）
+//! cargo run -p buddy-app --example app_preview -- --mock       # 目检：本地 mock 模型（提示词含「401」「429」「500」「慢」触发对应情形；有 Mock / Mock 2 两个启用模型可切换）
 //! cargo run -p buddy-app --example app_preview -- --no-key     # 目检：空配置，看无 Key 页与补齐流程
 //! cargo run -p buddy-app --example app_preview                 # 目检：复制 v1 的 config.json 到沙盒，用真实模型
 //! cargo run -p buddy-app --example app_preview -- --selftest   # 自检后退出
@@ -14,12 +14,14 @@
 //! - T25 页面状态机端到端（S05-18）：空态发送 → 流式 → 对话；401 → 无 Key 页 → 补齐配置 → 对话；
 //!   429 / 500 → 界面生成的提示消息落盘；停止 → 对话且无错误；设置叠加层往返；展开；全程窗口尺寸不变；
 //! - T26 无 Key 流程：缺配置时空态发送 → 无 Key 页且草稿保留、不发送 → 点面板进设置 → 返回进对话；配置失效退回空态；
-//! - T27 历史：重启后读回最新一页（起始页总是空态），触顶后经 engine 读取更早一页。
+//! - T27 历史：重启后读回最新一页（起始页总是空态），触顶后经 engine 读取更早一页；
+//! - T28 模型选择器（S05-15）：真实点击打开菜单窗口、只列启用的模型、按钮上方定位、点选后写盘并关闭、Esc、流式中无按钮、空列表。
 
 use buddy_engine::chat::ChatEngine;
 use buddy_engine::models::{AppConfig, Message, MessageRole};
 use buddy_engine::storage;
 use buddy_ui::chat::composer::ComposerEvent;
+use buddy_ui::chat::model_menu::{MENU_WIDTH, ModelMenu, SHADOW_MARGIN, ROW_HEIGHT, menu_size};
 use buddy_ui::chat::page_state::{Page, expands_window};
 use buddy_ui::chat::router::{Loaded, PageRouter, RouterEvent, preload};
 use buddy_ui::chat_bridge::spawn_engine;
@@ -519,6 +521,147 @@ async fn selftest_history(url: &str, cx: &mut AsyncApp) -> bool {
     ok
 }
 
+
+/// 点模型菜单窗口里的位置（窗口坐标）
+async fn click_menu(menu: WindowHandle<ModelMenu>, x: f32, y: f32, cx: &mut AsyncApp) {
+    let p = point(px(x), px(y));
+    for e in [
+        PlatformInput::MouseMove(MouseMoveEvent { position: p, pressed_button: None, modifiers: Modifiers::default() }),
+        PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Left, position: p, modifiers: Modifiers::default(), click_count: 1, first_mouse: false }),
+        PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Left, position: p, modifiers: Modifiers::default(), click_count: 1 }),
+    ] {
+        let _ = cx.update_window(menu.into(), |_, window, cx| window.dispatch_event(e, cx));
+        let _ = cx.update_window(menu.into(), |_, window, cx| {
+            window.refresh();
+            window.draw(cx).clear(cx);
+        });
+    }
+}
+
+fn menu_of(handle: WindowHandle<PageRouter>, cx: &mut AsyncApp) -> Option<WindowHandle<ModelMenu>> {
+    let menu = handle.read_with(cx, |r, _| r.model_menu()).ok().flatten()?;
+    // 已关闭的窗口读取会失败
+    menu.read_with(cx, |_, _| ()).ok().map(|_| menu)
+}
+
+/// 点输入区的模型按钮（真实点击）
+async fn click_model_button(handle: WindowHandle<PageRouter>, cx: &mut AsyncApp) -> bool {
+    let bounds = handle.read_with(cx, |r, cx| r.composer().read(cx).model_button_bounds()).unwrap();
+    let Some(b) = bounds else { return false };
+    click(handle, f32::from(b.center().x), f32::from(b.center().y), cx).await;
+    true
+}
+
+fn models_config(url: &str, enabled: &[&str]) -> AppConfig {
+    serde_json::from_value(serde_json::json!({
+        "theme": "light",
+        "providers": [{"id":"p1","name":"Mock","base_url":url,"api_key":"k","enabled_model_ids":enabled,"provider_type":"openai_compatible"}],
+        "models": [
+            {"id":"p1::mock","provider_id":"p1","api_model_id":"mock","display_name":"Mock","context_window":128000,"latency_ms":null},
+            {"id":"p1::mock2","provider_id":"p1","api_model_id":"mock2","display_name":"Mock 2","context_window":32000,"latency_ms":120},
+            {"id":"p1::hidden","provider_id":"p1","api_model_id":"hidden","display_name":"Hidden","context_window":8000,"latency_ms":null}
+        ],
+        "selected_model_id": "p1::mock"
+    }))
+    .expect("models 配置")
+}
+
+/// T28：模型选择器
+async fn selftest_models(url: &str, cx: &mut AsyncApp) -> bool {
+    let engine = ChatEngine::new(sandbox("models", Some(&models_config(url, &["p1::mock", "p1::mock2"]))));
+    let (handle, _) = open_router(engine.clone(), cx).await;
+    for _ in 0..3 {
+        draw(handle, cx).await;
+    }
+    let mut checks: Vec<(&str, bool)> = Vec::new();
+    let mut check = |name: &'static str, ok: bool| checks.push((name, ok));
+    let selected_on_disk = |engine: &Arc<ChatEngine>, cx: &mut AsyncApp| {
+        let engine = engine.clone();
+        let task = cx.update(|cx| spawn_engine(cx, async move { engine.get_config().await.map(|c| c.selected_model_id).unwrap_or_default() }));
+        task
+    };
+
+    // 打开：只列出启用的两个，当前模型高亮
+    check("点模型按钮 → 打开菜单", click_model_button(handle, cx).await && menu_of(handle, cx).is_some());
+    let Some(menu) = menu_of(handle, cx) else {
+        println!("FAIL S05-15 T28 模型选择器（菜单未打开）");
+        return false;
+    };
+    let rows = menu.read_with(cx, |m, _| m.rows().to_vec()).unwrap();
+    check("只列出启用的模型（未启用的不出现）", rows.len() == 2 && rows[0].id == "p1::mock" && rows[1].id == "p1::mock2");
+    check("副标题按 v1 模板", rows[1].detail == "Mock · 32K 上下文 · 120ms");
+    check("当前模型高亮", menu.read_with(cx, |m, _| m.highlighted().to_string()).unwrap() == "p1::mock");
+    let (w, h) = menu_size(2);
+    let menu_bounds = cx.update_window(menu.into(), |_, window, _| window.bounds()).unwrap();
+    check("菜单窗口尺寸 = 面板 + 阴影边距", menu_bounds.size.width == px(w + 2.0 * SHADOW_MARGIN) && menu_bounds.size.height == px(h + 2.0 * SHADOW_MARGIN));
+    // 位置：面板底边在模型按钮上方 8px（窗口坐标 → 屏幕坐标）
+    let parent = cx.update_window(handle.into(), |_, window, _| window.bounds()).unwrap();
+    let button = handle.read_with(cx, |r, cx| r.composer().read(cx).model_button_bounds()).unwrap().unwrap();
+    let panel_bottom = menu_bounds.origin.y + menu_bounds.size.height - px(SHADOW_MARGIN);
+    check("面板底边在模型按钮上方 8px", (f32::from(panel_bottom) - f32::from(parent.origin.y + button.top() - px(8.0))).abs() < 1.0);
+    let panel_right = menu_bounds.origin.x + menu_bounds.size.width - px(SHADOW_MARGIN);
+    check("面板右缘距父窗口右缘 8px", (f32::from(panel_right) - f32::from(parent.origin.x + parent.size.width - px(8.0))).abs() < 1.0);
+
+    // 选择第二行：内存立即生效，写盘串行完成，菜单在延迟后关闭
+    click_menu(menu, MENU_WIDTH / 2.0 + SHADOW_MARGIN, SHADOW_MARGIN + 1.0 + ROW_HEIGHT + ROW_HEIGHT / 2.0, cx).await;
+    check("选择后内存配置立即更新", handle.read_with(cx, |r, _| r.config().selected_model_id.clone()).unwrap() == "p1::mock2");
+    check("选中反馈：高亮已移到新行", menu_of(handle, cx).map(|m| m.read_with(cx, |m, _| m.highlighted().to_string()).unwrap()) == Some("p1::mock2".into()) || menu_of(handle, cx).is_none());
+    let save = handle.update(cx, |r, _, _| r.take_config_save()).unwrap();
+    if let Some(task) = save {
+        task.await;
+    }
+    check("配置已写盘", selected_on_disk(&engine, cx).await == "p1::mock2");
+    check("约 120ms 后菜单关闭", wait_until(handle, cx, |cx| menu_of(handle, cx).is_none()).await);
+
+    // 再打开：高亮为新的默认模型；Esc 关闭
+    check("再次打开", click_model_button(handle, cx).await && menu_of(handle, cx).is_some());
+    if let Some(menu) = menu_of(handle, cx) {
+        check("高亮为新的默认模型", menu.read_with(cx, |m, _| m.highlighted().to_string()).unwrap() == "p1::mock2");
+        let esc = PlatformInput::KeyDown(KeyDownEvent { keystroke: Keystroke::parse("escape").unwrap(), is_held: false, prefer_character_input: false });
+        let _ = cx.update_window(menu.into(), |_, window, cx| window.dispatch_event(esc, cx));
+    }
+    check("Esc 关闭菜单", wait_until(handle, cx, |cx| menu_of(handle, cx).is_none()).await);
+
+    // 连续快速选择：串行写盘，最后一次生效
+    let _ = handle.update(cx, |r, _, cx| {
+        for i in 0..41 {
+            r.select_model(if i % 2 == 0 { "p1::mock2" } else { "p1::mock" }.into(), cx);
+        }
+    });
+    if let Some(task) = handle.update(cx, |r, _, _| r.take_config_save()).unwrap() {
+        task.await;
+    }
+    check("快速连选 41 次：盘上是最后一次", selected_on_disk(&engine, cx).await == "p1::mock2");
+
+    // 流式中没有模型按钮
+    type_and_send(handle, "请慢慢说", cx).await;
+    check("慢速流已开始", wait_until(handle, cx, |cx| streaming(handle, cx)).await);
+    draw(handle, cx).await;
+    check("流式中模型按钮不存在（不可选）", handle.read_with(cx, |r, cx| r.composer().read(cx).model_button_bounds()).unwrap().is_none());
+    let composer = handle.read_with(cx, |r, _| r.composer().clone()).unwrap();
+    let _ = cx.update_window(handle.into(), |_, _, cx| composer.update(cx, |_, cx| cx.emit(ComposerEvent::Stop)));
+    wait_until(handle, cx, |cx| !streaming(handle, cx)).await;
+    draw(handle, cx).await;
+
+    // 没有启用的模型：提示文案
+    let _ = handle.update(cx, |r, _, cx| r.set_config(models_config(url, &[]), cx));
+    draw(handle, cx).await;
+    let _ = click_model_button(handle, cx).await;
+    let empty = menu_of(handle, cx);
+    check("无启用模型 → 菜单为空提示", empty.map(|m| m.read_with(cx, |m, _| m.rows().is_empty()).unwrap()) == Some(true));
+    if let Some(menu) = menu_of(handle, cx) {
+        let esc = PlatformInput::KeyDown(KeyDownEvent { keystroke: Keystroke::parse("escape").unwrap(), is_held: false, prefer_character_input: false });
+        let _ = cx.update_window(menu.into(), |_, window, cx| window.dispatch_event(esc, cx));
+    }
+
+    let ok = checks.iter().all(|(_, ok)| *ok);
+    for (name, ok) in &checks {
+        println!("  {} {name}", if *ok { "ok  " } else { "FAIL" });
+    }
+    println!("{} S05-15 T28 模型选择器（列表 / 定位 / 选择并写盘 / Esc / 串行保存 / 流式中禁用 / 空列表）", if ok { "PASS" } else { "FAIL" });
+    ok
+}
+
 // ───────────────────────────── 入口 ─────────────────────────────
 
 fn main() {
@@ -533,13 +676,15 @@ fn main() {
         fonts::install_text_rendering(cx);
         markdown::init(cx);
         buddy_ui::chat::init(cx);
-        // 无标题栏，没有关闭按钮：Cmd+Q / Esc 退出
-        cx.observe_keystrokes(|event, _, cx| {
-            if event.keystroke.unparse() == "cmd-q" || event.keystroke.key == "escape" {
-                cx.quit();
-            }
-        })
-        .detach();
+        // 无标题栏，没有关闭按钮：手动模式下 Cmd+Q / Esc 退出（自检不注册，否则未被处理的 Esc 会让自检静默退出）
+        if !self_test {
+            cx.observe_keystrokes(|event, _, cx| {
+                if event.keystroke.unparse() == "cmd-q" || event.keystroke.key == "escape" {
+                    cx.quit();
+                }
+            })
+            .detach();
+        }
 
         if self_test {
             let url = start_mock_server();
@@ -547,13 +692,14 @@ fn main() {
                 let t25 = selftest_flow(&url, cx).await;
                 let t26 = selftest_no_key(&url, cx).await;
                 let t27 = selftest_history(&url, cx).await;
-                std::process::exit(if t25 && t26 && t27 { 0 } else { 1 });
+                let t28 = selftest_models(&url, cx).await;
+                std::process::exit(if t25 && t26 && t27 && t28 { 0 } else { 1 });
             })
             .detach();
             return;
         }
         let dir = if mock {
-            sandbox("manual-mock", Some(&mock_config(&start_mock_server())))
+            sandbox("manual-mock", Some(&models_config(&start_mock_server(), &["p1::mock", "p1::mock2"])))
         } else if no_key {
             sandbox("manual-nokey", None)
         } else {

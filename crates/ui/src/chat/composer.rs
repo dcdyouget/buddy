@@ -13,16 +13,18 @@
 //! 内侧 `--window-inner-highlight` + `--shadow-floating-md`；输入框聚焦也不加底色；不自动撑高（`disableAutoResize`）；
 //! 紧凑窗口中撑满高度 | [`Composer::set_standalone`] |
 //!
-//! 模型选择（S05-15）、图片附件（S05-07）、设置入口（S05-18）只提供回调位置。
+//! 模型选择（S05-15，菜单见 [`super::model_menu`]）、图片附件（S05-07）、设置入口（S05-18）只提供回调位置。
 
 use crate::components::{IconButtonVariant, icon_button};
 use crate::icons::{IconName, icon};
 use crate::text_area::{TextArea, TextAreaEvent, TextAreaStyle};
 use crate::theme_system::{BuddyTheme, Theme, box_shadows, tokens::metrics as m};
 use gpui::{
-    App, BoxShadow, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla, Render, SharedString, Subscription, Window, div,
-    linear_color_stop, linear_gradient, point, prelude::*, px,
+    App, Bounds, BoxShadow, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla, Render, SharedString, Subscription, Window, div,
+    linear_color_stop, linear_gradient, point, prelude::*, px, Pixels,
 };
+use std::cell::Cell;
+use std::rc::Rc;
 
 /// 占位文字（v1 原文）
 pub const PLACEHOLDER: &str = "问点什么…";
@@ -65,6 +67,8 @@ pub struct Composer {
     hovered: bool,
     /// 空态页的独立气泡（S05-16）
     standalone: bool,
+    /// 上一帧绘制的模型按钮边界（窗口坐标；模型菜单据此定位，流式中按钮不存在时为 `None`）
+    model_button: Rc<Cell<Option<Bounds<Pixels>>>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -110,7 +114,12 @@ impl Composer {
                 cx.notify();
             }),
         ];
-        Self { text, streaming: false, streaming_model: None, supports_vision: false, focused: false, hovered: false, standalone: false, _subscriptions: subscriptions }
+        Self { text, streaming: false, streaming_model: None, supports_vision: false, focused: false, hovered: false, standalone: false, model_button: Rc::default(), _subscriptions: subscriptions }
+    }
+
+    /// 模型按钮在窗口中的边界（上一帧；流式中为 `None`）
+    pub fn model_button_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.model_button.get()
     }
 
     /// 输入框实体
@@ -189,6 +198,9 @@ impl Render for Composer {
         }];
         shadows.extend(box_shadows(if standalone { theme.shadows.shadow_floating_md } else { theme.shadows.shadow_composer }));
 
+        if self.streaming {
+            self.model_button.set(None);
+        }
         let body = if self.streaming {
             let label = format!("{} · 生成中...", self.streaming_model.clone().unwrap_or_else(|| "AI".into()));
             div()
@@ -250,11 +262,19 @@ impl Render for Composer {
                     icon_button("composer-settings", IconName::Settings, 24.0, 13.0, IconButtonVariant::Default, false, cx)
                         .on_click(cx.listener(|_, _, _, cx| cx.emit(ComposerEvent::OpenSettings))),
                 )
-                .child(
-                    // v1 `.model-picker-trigger`：24px 圆，Bot 14px；悬停凹陷底
-                    icon_button("composer-model", IconName::Bot, m::SPACE_6, 14.0, IconButtonVariant::Default, false, cx)
-                        .on_click(cx.listener(|_, _, _, cx| cx.emit(ComposerEvent::PickModel))),
-                )
+                .child({
+                    // v1 `.model-picker-trigger`：24px 圆，Bot 14px；悬停凹陷底。
+                    // 绝对定位的 canvas 记录按钮边界（须显式 top/left，见 Transcript::render_row）
+                    let recorded = self.model_button.clone();
+                    div()
+                        .relative()
+                        .flex_none()
+                        .child(
+                            icon_button("composer-model", IconName::Bot, m::SPACE_6, 14.0, IconButtonVariant::Default, false, cx)
+                                .on_click(cx.listener(|_, _, _, cx| cx.emit(ComposerEvent::PickModel))),
+                        )
+                        .child(gpui::canvas(|_, _, _| {}, move |bounds, _, _, _| recorded.set(Some(bounds))).absolute().top_0().left_0().size_full())
+                })
                 .child(
                     icon_button(
                         "composer-send",
