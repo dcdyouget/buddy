@@ -71,6 +71,22 @@ impl Conversation {
         cx.notify();
     }
 
+    /// 审批已决定：关闭审批浮层（v1 `dismiss` → `setToolApproval(null)`）
+    pub fn clear_approval(&mut self, cx: &mut Context<Self>) {
+        if self.state.approval.take().is_some() {
+            self.state.revision += 1;
+            cx.notify();
+        }
+    }
+
+    /// 问题已回答：不再等待（v1 `answerPendingQuestion` 成功后 `pendingQuestion: null`）
+    pub fn clear_question(&mut self, cx: &mut Context<Self>) {
+        if self.state.question.take().is_some() {
+            self.state.revision += 1;
+            cx.notify();
+        }
+    }
+
     /// 关闭错误提示（v1 `setError(null)`）
     pub fn dismiss_error(&mut self, cx: &mut Context<Self>) {
         if self.state.error.take().is_some() {

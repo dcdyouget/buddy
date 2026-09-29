@@ -152,6 +152,18 @@ pub fn bind_keys(cx: &mut App) {
     ]);
 }
 
+/// Enter 键的语义
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EnterMode {
+    /// Enter / Shift+Enter 发出 [`TextAreaEvent::Submit`]，Cmd / Ctrl+Enter 换行（对话输入区，v1 `InputDock`）
+    #[default]
+    Chat,
+    /// Enter 换行，Cmd / Ctrl+Enter 发出 [`TextAreaEvent::Submit`]（多行回答框，v1 `tool-question-textarea`）
+    NewlineOnEnter,
+    /// 单行：Enter 与 Cmd / Ctrl+Enter 都不做事（补充信息框，v1 `<input>`）
+    SingleLine,
+}
+
 /// 输入框发出的事件
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TextAreaEvent {
@@ -232,6 +244,7 @@ pub struct TextArea {
     /// 上一次为「保持光标可见」调整滚动时的 (光标位置, 内容长度)：只在它们变化时才把光标拉回视野，
     /// 否则滚轮向上翻看会在下一帧被拽回光标处
     revealed: Option<(usize, usize)>,
+    enter_mode: EnterMode,
     /// 光标闪烁：最近一次活动时刻
     last_activity: Instant,
     blink: Option<gpui::Task<()>>,
@@ -311,10 +324,16 @@ impl TextArea {
             layout: None,
             scroll_y: px(0.),
             revealed: None,
+            enter_mode: EnterMode::Chat,
             last_activity: Instant::now(),
             blink: None,
             style,
         }
+    }
+
+    /// 设置 Enter 键语义（默认 [`EnterMode::Chat`]）
+    pub fn set_enter_mode(&mut self, mode: EnterMode) {
+        self.enter_mode = mode;
     }
 
     /// 当前内容
@@ -489,13 +508,31 @@ impl TextArea {
     // ── 动作 ──
 
     fn submit(&mut self, _: &Submit, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.is_composing() {
-            cx.emit(TextAreaEvent::Submit);
+        if self.is_composing() {
+            return;
+        }
+        match self.enter_mode {
+            EnterMode::Chat => cx.emit(TextAreaEvent::Submit),
+            EnterMode::NewlineOnEnter => {
+                let range = self.selected_range.clone();
+                self.edit(range, "\n", false, cx);
+            }
+            EnterMode::SingleLine => {}
         }
     }
     fn newline(&mut self, _: &Newline, _: &mut Window, cx: &mut Context<Self>) {
-        let range = self.selected_range.clone();
-        self.edit(range, "\n", false, cx);
+        match self.enter_mode {
+            EnterMode::Chat => {
+                let range = self.selected_range.clone();
+                self.edit(range, "\n", false, cx);
+            }
+            EnterMode::NewlineOnEnter => {
+                if !self.is_composing() {
+                    cx.emit(TextAreaEvent::Submit);
+                }
+            }
+            EnterMode::SingleLine => {}
+        }
     }
     fn backspace(&mut self, _: &Backspace, _: &mut Window, cx: &mut Context<Self>) {
         let t = previous_boundary(&self.content, self.cursor_offset());

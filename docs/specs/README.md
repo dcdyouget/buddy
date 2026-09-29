@@ -135,7 +135,7 @@
 | S05-10 | 工具调用分组（ToolGroup / Deferred） | S05-08 | `done` | `phase-05/S05-10-tool-groups.md` |
 | S05-11 | 网络搜索卡片 | S05-10 | `todo` | `phase-05/S05-11-web-search.md` |
 | S05-12 | 图片生成卡片 | S05-10 | `todo` | `phase-05/S05-12-image-gen.md` |
-| S05-13 | 提问与审批卡片 | S05-08, S02-07 | `todo` | `phase-05/S05-13-ask-approval.md` |
+| S05-13 | 提问与审批卡片 | S05-08, S02-07 | `blocked` | `phase-05/S05-13-ask-approval.md` |
 | S05-14 | 消息操作（复制 / 重试 / 编辑） | S05-08 | `done` | `phase-05/S05-14-message-actions.md` |
 | S05-15 | 模型选择器 | S05-06, S02-01 | `done` | `phase-05/S05-15-model-picker.md` |
 | S05-16 | 空态与无 Key 态 | S05-06 | `done` | `phase-05/S05-16-empty-nokey.md` |
@@ -330,3 +330,4 @@
 | 2026-09-29 | S05-15 | `todo` → `doing` | 模型选择器：GPUI 无原生弹出菜单（macOS 拒绝 `AnchoredPopup`），用独立 PopUp 窗口承载 v1 的下拉 |
 | 2026-09-30 | S05-15 | `doing` → `blocked` | 模型选择菜单（独立 PopUp 窗口；GPUI 无原生弹出菜单）：列表 / 定位 / 选择并写盘 / Esc / 流式中禁用；T28 含 7 项拦截（串行保存无法复现竞态，已如实记录）；待目检 #18 |
 | 2026-09-30 | S05-15 | `blocked` → `done` | 用户目检 §6.5 第 18 项通过（反馈：菜单窗口外多出一圈外边缘，已改为只用系统阴影并复核）。`pages-and-states.md` 的「模型下拉」段退役。commit `0459b13`、`772c76c` |
+| 2026-09-30 | S05-13 | `todo` → `doing` → `blocked` | 提问卡（选项 / 补充输入 / 自定义 / 跳过）与审批浮层（拒绝 / 本次都允许 / 允许 / Esc），走真实 engine 工具循环；T29 含 8 项拦截（1 项无独立证据，已记录）；待目检 #19 |

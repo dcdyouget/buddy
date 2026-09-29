@@ -10,9 +10,13 @@
 //! - [`tool_card`] —— 工具调用卡片（S05-10）
 //! - [`message_actions`] —— 回答操作栏（S05-14）
 //! - [`empty_page`] / [`no_key_page`] —— 空态页与无 Key 页（S05-16）
+//! - [`approval_panel`] —— 工具审批浮层（S05-13）
+//! - [`ask_card`] —— ask_user 提问卡（S05-13）
 //! - [`model_menu`] —— 模型选择菜单（S05-15）
 //! - [`page_state`] / [`chat_page`] / [`router`] —— 页面状态机、对话页、路由器与 engine 接入（S05-18）
 
+pub mod approval_panel;
+pub mod ask_card;
 pub mod chat_page;
 pub mod composer;
 pub mod empty_page;

@@ -15,6 +15,7 @@
 //!
 //! 行外观见 [`message_row`]（S05-08）；思考块 / 工具行的完整外观由 S05-09 / S05-10 完成。
 
+use super::ask_card::{self, AnswerFn, AskUserCard, CardInput};
 use super::message_row;
 use super::message_actions;
 use super::think_block;
@@ -24,6 +25,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use super::rows::{self, Row, RowKind};
 use super::session::Conversation;
+use super::state::ToolStatus;
 use crate::markdown::{
     self, code_block,
     normalize::normalize_markdown,
@@ -107,6 +109,10 @@ pub struct Transcript {
     painted_rows: Rc<RefCell<HashMap<String, gpui::Bounds<Pixels>>>>,
     /// 刚复制过的操作栏（行 id）与恢复计时（v1 1.6 秒）
     copied_actions: Option<(String, Task<()>)>,
+    /// ask_user 提问卡（按工具调用 id）；卡内状态变化时重测所在行
+    ask_cards: HashMap<String, (Entity<AskUserCard>, Subscription)>,
+    /// 回答回调（路由器提供，经 engine 回传）
+    answer: Option<AnswerFn>,
     _observe: Subscription,
 }
 
@@ -145,11 +151,43 @@ impl Transcript {
             nested_scroll: Rc::default(),
             painted_rows: Rc::default(),
             copied_actions: None,
+            ask_cards: HashMap::new(),
+            answer: None,
             _observe: observe,
         };
         this.sync(cx);
         this.list.scroll_to_end();
         this
+    }
+
+    /// 设置回答回调（提问卡的「确认 / 跳过」经它交给 engine）
+    pub fn set_answer_fn(&mut self, answer: AnswerFn) {
+        self.answer = Some(answer);
+    }
+
+    /// 提问卡（自检用）
+    pub fn ask_card_for_test(&self, tool_id: &str) -> Option<Entity<AskUserCard>> {
+        self.ask_cards.get(tool_id).map(|(card, _)| card.clone())
+    }
+
+    /// 取（或建）提问卡；卡内状态变化 → 重测该行
+    fn ask_card(&mut self, tool_id: &str, row_id: &str, cx: &mut Context<Self>) -> Entity<AskUserCard> {
+        if let Some((card, _)) = self.ask_cards.get(tool_id) {
+            return card.clone();
+        }
+        let answer = self.answer.clone().unwrap_or_else(|| Rc::new(|_, _, _| Err("未接入回答通道".to_string())));
+        let id = tool_id.to_string();
+        let card = cx.new(|cx| AskUserCard::new(id, answer, cx));
+        let row_id = row_id.to_string();
+        let subscription = cx.observe(&card, move |this: &mut Self, _, cx| {
+            if let Some(ix) = this.rows.iter().position(|r| r.id == row_id) {
+                this.list.remeasure_items(ix..ix + 1);
+                this.remeasured_rows += 1;
+            }
+            cx.notify();
+        });
+        self.ask_cards.insert(tool_id.to_string(), (card.clone(), subscription));
+        card
     }
 
     /// 当前行（自检与测试用）
@@ -367,7 +405,15 @@ impl Transcript {
                 let live_msg = state.live.is_some() && state.messages.iter().rposition(|m| m.role == MessageRole::Assistant) == Some(*msg);
                 let expanded = self.tool_expanded.get(&row.id).copied().unwrap_or_else(|| tool_card::default_expanded(&tool, live_msg, awaiting));
                 let mut details = Vec::new();
-                if expanded {
+                if expanded && tool.name == "ask_user" {
+                    // v1 `ToolSection`：ask_user 展开时是提问卡（自带「用户回应」），不显示调用参数 / 执行结果
+                    let display = if awaiting { state.question.as_ref().map(ask_card::from_question).unwrap_or_default() } else { ask_card::parse_arguments(&tool.arguments) };
+                    let card = self.ask_card(&tool.id, &row.id, cx);
+                    let finished = matches!(tool.status, ToolStatus::Done | ToolStatus::Error);
+                    let input = CardInput { display, awaiting, has_result: finished, interrupted: tool.status == ToolStatus::Interrupted, result: tool.result.clone().filter(|_| finished) };
+                    card.update(cx, |c, cx| c.sync(input, cx));
+                    details.push(card.into_any_element());
+                } else if expanded {
                     let (_, result) = tool_card::detail_sources(&tool);
                     let mut detail = |key: &str, label: &str, icon: IconName, is_error: bool, this: &mut Self, window: &mut Window, cx: &mut Context<Self>| {
                         let id = format!("{}#{key}", row.id);

@@ -15,6 +15,7 @@
 //!   429 / 500 → 界面生成的提示消息落盘；停止 → 对话且无错误；设置叠加层往返；展开；全程窗口尺寸不变；
 //! - T26 无 Key 流程：缺配置时空态发送 → 无 Key 页且草稿保留、不发送 → 点面板进设置 → 返回进对话；配置失效退回空态；
 //! - T27 历史：重启后读回最新一页（起始页总是空态），触顶后经 engine 读取更早一页；
+//! - T29 提问卡与审批浮层（S05-13）：mock 模型调用 ask_user / create_file，走真实 engine 的工具循环：选择 + 补充 / 跳过 / 自定义回答，Esc 拒绝、点「允许」、点「本次都允许」；
 //! - T28 模型选择器（S05-15）：真实点击打开菜单窗口、只列启用的模型、按钮上方定位、点选后写盘并关闭、Esc、流式中无按钮、空列表。
 
 use buddy_engine::chat::ChatEngine;
@@ -82,11 +83,58 @@ fn start_mock_server() -> String {
                     buf.extend_from_slice(&chunk[..n]);
                 }
                 let request: serde_json::Value = serde_json::from_slice(&buf[body_start..]).unwrap_or_default();
+                let last = request["messages"].as_array().and_then(|m| m.last()).cloned().unwrap_or_default();
                 let prompt = request["messages"]
                     .as_array()
                     .and_then(|m| m.iter().rev().find(|m| m["role"] == "user"))
                     .map(|m| m["content"].to_string())
                     .unwrap_or_default();
+                // 工具调用：最后一条是用户消息且含触发词时，让「模型」调用 ask_user / create_file；工具结果回来后再给一句正文
+                let mut tool_calls: Vec<(String, &str, String)> = Vec::new();
+                if last["role"] == "user" {
+                    static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+                    let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let text = last["content"].as_str().unwrap_or_default();
+                    if text.contains("请提问") {
+                        let args = serde_json::json!({
+                            "header": "方案", "question": "先说明背景\n\n你选哪个方案？", "multi_select": text.contains("多选"),
+                            "options": [
+                                {"label": "方案 A", "description": "更快"},
+                                {"label": "方案 B", "requires_input": true, "input_placeholder": "写下理由"}
+                            ]
+                        });
+                        tool_calls.push((format!("call_ask_{n}"), "ask_user", args.to_string()));
+                    } else if let Some(rest) = text.split("请写文件").nth(1) {
+                        // engine 会在用户文本后附加上下文，只取紧跟触发词的绝对路径
+                        for (i, path) in rest.split_whitespace().take_while(|t| t.starts_with('/')).enumerate() {
+                            tool_calls.push((format!("call_write_{n}_{i}"), "create_file", serde_json::json!({"path": path, "content": "hello"}).to_string()));
+                        }
+                    }
+                }
+                if !tool_calls.is_empty() {
+                    if sock.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n").await.is_err() {
+                        return;
+                    }
+                    let calls: Vec<_> = tool_calls
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (id, name, args))| serde_json::json!({"index": i, "id": id, "type": "function", "function": {"name": name, "arguments": args}}))
+                        .collect();
+                    let chunk = serde_json::json!({"choices":[{"index":0,"delta":{"tool_calls": calls}}]});
+                    let _ = sock.write_all(format!("data: {chunk}\n\n").as_bytes()).await;
+                    let _ = sock.write_all(b"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n").await;
+                    return;
+                }
+                if last["role"] == "tool" {
+                    let head = b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n";
+                    if sock.write_all(head).await.is_err() {
+                        return;
+                    }
+                    let data = serde_json::json!({"choices":[{"index":0,"delta":{"content":"已收到工具结果。"}}]});
+                    let _ = sock.write_all(format!("data: {data}\n\n").as_bytes()).await;
+                    let _ = sock.write_all(b"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n").await;
+                    return;
+                }
                 for (needle, status) in [("401", "401 Unauthorized"), ("429", "429 Too Many Requests"), ("500", "500 Internal Server Error")] {
                     if prompt.contains(needle) {
                         let body = r#"{"error":{"message":"mock error"}}"#;
@@ -662,6 +710,138 @@ async fn selftest_models(url: &str, cx: &mut AsyncApp) -> bool {
     ok
 }
 
+
+/// T29：提问卡与审批浮层（S05-13）—— 真实 engine 的工具循环：mock 模型调用 ask_user / create_file
+async fn selftest_interactions(url: &str, cx: &mut AsyncApp) -> bool {
+    let dir = sandbox("tools", Some(&mock_config(url)));
+    let engine = ChatEngine::new(dir.clone());
+    let (handle, _) = open_router(engine, cx).await;
+    for _ in 0..3 {
+        draw(handle, cx).await;
+    }
+    let conversation = handle.read_with(cx, |r, _| r.conversation().clone()).unwrap();
+    let transcript = handle.read_with(cx, |r, cx| r.transcript(cx)).unwrap();
+    let mut checks: Vec<(String, bool)> = Vec::new();
+    let mut check = |name: &str, ok: bool| checks.push((name.to_string(), ok));
+    let question_id = |cx: &mut AsyncApp| conversation.read_with(cx, |c, _| c.state.question.as_ref().map(|q| q.id.clone()));
+    let approval_id = |cx: &mut AsyncApp| conversation.read_with(cx, |c, _| c.state.approval.as_ref().map(|a| a.id.clone()));
+    let tool_result = |cx: &mut AsyncApp, id: &str| conversation.read_with(cx, |c, _| c.state.tools.get(id).and_then(|t| t.result.clone()));
+    let card_of = |cx: &mut AsyncApp, id: &str| transcript.read_with(cx, |t, _| t.ask_card_for_test(id));
+
+    // ── ask_user：单选 + 要求补充的选项 ──
+    type_and_send(handle, "请提问", cx).await;
+    check("模型调用 ask_user → 出现待答问题", wait_until(handle, cx, |cx| question_id(cx).is_some()).await);
+    let Some(id) = question_id(cx) else {
+        println!("FAIL S05-13 T29 提问卡与审批（问题未出现）");
+        return false;
+    };
+    check("提问卡已建立", wait_until(handle, cx, |cx| card_of(cx, &id).is_some()).await);
+    let Some(card) = card_of(cx, &id) else {
+        println!("FAIL S05-13 T29 提问卡与审批（提问卡未建立）");
+        return false;
+    };
+    let display = conversation.read_with(cx, |c, _| c.state.question.clone()).unwrap();
+    check("问题与选项来自 engine 事件", display.question.contains("你选哪个方案") && display.options.len() == 2 && display.header == "方案" && !display.multi_select);
+    check("初始未选、无补充框", card.read_with(cx, |c, _| c.selected().is_empty() && c.option_input(1).is_none()));
+    let _ = cx.update_window(handle.into(), |_, _, cx| card.update(cx, |c, cx| c.toggle_option(1, cx)));
+    draw(handle, cx).await;
+    check("选「方案 B」→ 已选且出现补充框", card.read_with(cx, |c, _| c.selected() == vec![1] && c.option_input(1).is_some()));
+    let _ = cx.update_window(handle.into(), |_, _, cx| card.update(cx, |c, cx| c.submit(cx)));
+    cx.background_executor().timer(Duration::from_millis(150)).await;
+    check("要求补充却没填 → 确认无效（问题仍在等待）", question_id(cx).is_some() && !card.read_with(cx, |c, _| c.submitted()));
+    let input = card.read_with(cx, |c, _| c.option_input(1).cloned()).unwrap();
+    let _ = cx.update_window(handle.into(), |_, _, cx| input.update(cx, |a, cx| a.set_text("更快", cx)));
+    let _ = cx.update_window(handle.into(), |_, _, cx| card.update(cx, |c, cx| c.submit(cx)));
+    check("补充后确认 → 已提交、问题清除", card.read_with(cx, |c, _| c.submitted()) && wait_until(handle, cx, |cx| question_id(cx).is_none()).await);
+    check("回合结束", wait_until(handle, cx, |cx| !streaming(handle, cx)).await);
+    let result = tool_result(cx, &id).unwrap_or_default();
+    check("engine 收到选项与补充输入（按 id 配对）", result.contains("User selected: 方案 B") && result.contains("User input: 更快"));
+
+    // ── ask_user：跳过 ──
+    type_and_send(handle, "请提问", cx).await;
+    check("第二次提问出现", wait_until(handle, cx, |cx| question_id(cx).is_some_and(|q| q != id)).await);
+    let id2 = question_id(cx).unwrap_or_default();
+    wait_until(handle, cx, |cx| card_of(cx, &id2).is_some()).await;
+    if let Some(card) = card_of(cx, &id2) {
+        let _ = cx.update_window(handle.into(), |_, _, cx| card.update(cx, |c, cx| c.skip(cx)));
+    }
+    check("跳过 → 问题清除、回合结束", wait_until(handle, cx, |cx| question_id(cx).is_none() && !streaming(handle, cx)).await);
+    let skipped = tool_result(cx, &id2).unwrap_or_default();
+    check("跳过的结果不含选项", !skipped.contains("User selected"));
+
+    // ── ask_user：只有自定义回答 ──
+    type_and_send(handle, "请提问", cx).await;
+    check("第三次提问出现", wait_until(handle, cx, |cx| question_id(cx).is_some_and(|q| q != id && q != id2)).await);
+    let id3 = question_id(cx).unwrap_or_default();
+    wait_until(handle, cx, |cx| card_of(cx, &id3).is_some()).await;
+    if let Some(card) = card_of(cx, &id3) {
+        let custom = card.read_with(cx, |c, _| c.custom_area().clone());
+        let _ = cx.update_window(handle.into(), |_, _, cx| custom.update(cx, |a, cx| a.set_text("我想自己定", cx)));
+        let _ = cx.update_window(handle.into(), |_, _, cx| card.update(cx, |c, cx| c.submit(cx)));
+    }
+    check("自定义回答 → 回合结束", wait_until(handle, cx, |cx| question_id(cx).is_none() && !streaming(handle, cx)).await);
+    check("engine 收到自定义回答", tool_result(cx, &id3).unwrap_or_default().contains("我想自己定"));
+
+    // ── 审批：Esc 拒绝 ──
+    let p1 = dir.join("approved-1.txt");
+    let p2 = dir.join("approved-2.txt");
+    let p3 = dir.join("approved-3.txt");
+    let (s1, s2, s3) = (p1.to_string_lossy().to_string(), p2.to_string_lossy().to_string(), p3.to_string_lossy().to_string());
+    type_and_send(handle, &format!("请写文件 {s1}"), cx).await;
+    check("写入类工具 → 出现审批", wait_until(handle, cx, |cx| approval_id(cx).is_some()).await);
+    let approval = conversation.read_with(cx, |c, _| c.state.approval.clone());
+    check("审批内容：工具名与原因", approval.as_ref().is_some_and(|a| a.name == "create_file" && a.reason.contains("approved-1.txt")));
+    draw(handle, cx).await;
+    press(handle, "escape", cx).await;
+    check("Esc → 拒绝：审批清除", wait_until(handle, cx, |cx| approval_id(cx).is_none()).await);
+    check("回合结束", wait_until(handle, cx, |cx| !streaming(handle, cx)).await);
+    let denied_id = approval.map(|a| a.id).unwrap_or_default();
+    check("engine 收到拒绝、文件未创建", tool_result(cx, &denied_id).unwrap_or_default().contains("拒绝") && !p1.exists());
+
+    // ── 审批：点「允许」（真实点击；按钮行纵向位置由布局决定，自下而上扫描）──
+    type_and_send(handle, &format!("请写文件 {s1}"), cx).await;
+    check("再次出现审批", wait_until(handle, cx, |cx| approval_id(cx).is_some()).await);
+    draw(handle, cx).await;
+    let mut y = 400.0;
+    while approval_id(cx).is_some() && y > 250.0 {
+        click(handle, 410.0, y, cx).await; // 「允许」按钮（宽 440 面板居中，三按钮 1 : 1 : 1.2）
+        y -= 3.0;
+    }
+    check("点「允许」→ 审批清除", approval_id(cx).is_none());
+    check("回合结束", wait_until(handle, cx, |cx| !streaming(handle, cx)).await);
+    check("允许后文件已创建", std::fs::read_to_string(&p1).is_ok_and(|t| t == "hello"));
+
+    // ── 审批：「本次都允许」——同一回合的第二个写入不再询问 ──
+    type_and_send(handle, &format!("请写文件 {s2} {s3}"), cx).await;
+    check("两个写入 → 先出现第一个审批", wait_until(handle, cx, |cx| approval_id(cx).is_some()).await);
+    draw(handle, cx).await;
+    let first_approval = approval_id(cx);
+    let mut seen = std::collections::BTreeSet::new();
+    let mut y = 400.0;
+    while approval_id(cx).is_some() && y > 250.0 {
+        click(handle, 268.0, y, cx).await; // 「本次都允许」按钮
+        y -= 3.0;
+    }
+    let start = Instant::now();
+    while streaming(handle, cx) && start.elapsed() < Duration::from_secs(15) {
+        if let Some(id) = approval_id(cx) {
+            seen.insert(id);
+        }
+        cx.background_executor().timer(Duration::from_millis(10)).await;
+        draw(handle, cx).await;
+    }
+    check("点「本次都允许」→ 第一个审批清除", first_approval.is_some());
+    check("后续写入不再询问", seen.is_empty());
+    check("两个文件都已创建", p2.exists() && p3.exists());
+
+    let ok = checks.iter().all(|(_, ok)| *ok);
+    for (name, ok) in &checks {
+        println!("  {} {name}", if *ok { "ok  " } else { "FAIL" });
+    }
+    println!("{} S05-13 T29 提问卡与审批浮层（回答 / 跳过 / 自定义 / Esc 拒绝 / 允许 / 本次都允许）", if ok { "PASS" } else { "FAIL" });
+    ok
+}
+
 // ───────────────────────────── 入口 ─────────────────────────────
 
 fn main() {
@@ -693,7 +873,8 @@ fn main() {
                 let t26 = selftest_no_key(&url, cx).await;
                 let t27 = selftest_history(&url, cx).await;
                 let t28 = selftest_models(&url, cx).await;
-                std::process::exit(if t25 && t26 && t27 && t28 { 0 } else { 1 });
+                let t29 = selftest_interactions(&url, cx).await;
+                std::process::exit(if t25 && t26 && t27 && t28 && t29 { 0 } else { 1 });
             })
             .detach();
             return;

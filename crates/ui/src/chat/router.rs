@@ -15,7 +15,8 @@
 //! **页面切换不改变窗口尺寸**：路由器不接触窗口，只发出 [`RouterEvent::PageChanged`]，
 //! 「离开紧凑页时展开一次」由 Phase 07 依 [`expands_window`] 执行。
 
-use super::chat_page::ChatPage;
+use super::approval_panel::Decision;
+use super::chat_page::{ChatPage, ToolActions};
 use super::composer::{Composer, ComposerEvent};
 use super::empty_page::{EmptyPage, EmptyPageEvent};
 use super::model_menu::{ModelMenu, menu_rows, open_model_menu};
@@ -67,6 +68,28 @@ fn history_loader(engine: Arc<ChatEngine>) -> HistoryLoader {
     })
 }
 
+/// 工具交互回调：审批与 ask_user 回答经 engine 按调用 id 配对回传，成功后关闭对应界面状态
+fn tool_actions(engine: &Arc<ChatEngine>, conversation: &Entity<Conversation>) -> ToolActions {
+    let (approve_engine, approve_conversation) = (engine.clone(), conversation.clone());
+    let (answer_engine, answer_conversation) = (engine.clone(), conversation.clone());
+    ToolActions {
+        decide: Rc::new(move |id: &str, decision: Decision, cx: &mut App| {
+            let (approved, approve_all) = decision.flags();
+            // v1 `resolveApproval` 后无论结果都 `dismiss`；engine 找不到对应槽位（已取消 / 超时）时也只记日志
+            if let Err(error) = approve_engine.approve_tool_call(id, approved, approve_all) {
+                log::warn!("审批回传失败：{error}");
+            }
+            approve_conversation.update(cx, |c, cx| c.clear_approval(cx));
+        }),
+        answer: Rc::new(move |id: &str, answer: super::ask_card::Answer, cx: &mut App| {
+            let inputs = (!answer.inputs.is_empty()).then_some(answer.inputs);
+            answer_engine.answer_tool_question(id, answer.selected, inputs, answer.custom)?;
+            answer_conversation.update(cx, |c, cx| c.clear_question(cx));
+            Ok(())
+        }),
+    }
+}
+
 /// 路由器事件
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RouterEvent {
@@ -111,7 +134,8 @@ impl PageRouter {
         composer.update(cx, |c, cx| c.set_standalone(true, cx));
         let empty = cx.new(|_| EmptyPage::new(composer.clone()));
         let no_key = cx.new(NoKeyPage::new);
-        let chat = cx.new(|cx| ChatPage::new(conversation.clone(), composer.clone(), cx));
+        let actions = tool_actions(&engine, &conversation);
+        let chat = cx.new(|cx| ChatPage::new(conversation.clone(), composer.clone(), actions, cx));
         let subscriptions = vec![
             cx.subscribe_in(&composer, window, |this, _, event: &ComposerEvent, window, cx| match event {
                 ComposerEvent::Send(text) => this.send(text.clone(), cx),
@@ -164,6 +188,11 @@ impl PageRouter {
     /// 当前配置
     pub fn config(&self) -> &AppConfig {
         &self.config
+    }
+
+    /// 消息列表（自检用）
+    pub fn transcript(&self, cx: &App) -> Entity<super::transcript::Transcript> {
+        self.chat.read(cx).transcript().clone()
     }
 
     /// 会话（自检用）
