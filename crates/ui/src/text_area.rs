@@ -323,6 +323,11 @@ impl TextArea {
         self.selected_range.clone()
     }
 
+    /// 上一帧绘制的文字区域（自检用；尚未绘制时为 `None`）
+    pub fn painted_bounds_for_test(&self) -> Option<Bounds<Pixels>> {
+        self.layout.as_ref().map(|l| l.bounds)
+    }
+
     /// 是否正在组字
     pub fn is_composing(&self) -> bool {
         self.marked_range.is_some()

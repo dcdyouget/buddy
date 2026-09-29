@@ -138,7 +138,7 @@
 | S05-13 | 提问与审批卡片 | S05-08, S02-07 | `todo` | `phase-05/S05-13-ask-approval.md` |
 | S05-14 | 消息操作（复制 / 重试 / 编辑） | S05-08 | `blocked` | `phase-05/S05-14-message-actions.md` |
 | S05-15 | 模型选择器 | S05-06, S02-01 | `todo` | `phase-05/S05-15-model-picker.md` |
-| S05-16 | 空态与无 Key 态 | S05-06 | `todo` | `phase-05/S05-16-empty-nokey.md` |
+| S05-16 | 空态与无 Key 态 | S05-06 | `blocked` | `phase-05/S05-16-empty-nokey.md` |
 | S05-17 | 状态实体拆分与细粒度通知 | S05-01 | `done` | `phase-05/S05-17-state-entities.md` |
 | S05-18 | 页面状态机 | S05-16 | `todo` | `phase-05/S05-18-page-state.md` |
 
@@ -320,3 +320,4 @@
 | 2026-09-27 | S04-05 | `doing` → `done` | 移植 v1 normalizer 两项规范化（6 测试含反证）；**不做 Comet 流式 mend**（v1 无此行为）；流式观感目检移交 S05-08。commit `c956292` |
 | 2026-09-28 | S05-14 | `doing` → `blocked` | 回答操作栏按 v1（复制 / 回到问题 / 时间）；T21 真实点击含拦截；待目检 #14 |
 | 2026-09-28 | S05-05 | `doing` → `blocked` | 按 v1 分页（10 条 / 距顶 56px）；视口按行键保持；`head` 锚带消息 id；T22 含三项拦截；待目检 #15 |
+| 2026-09-29 | S05-16 | `todo` → `doing` → `blocked` | 空态页（独立气泡 / 展开按钮 / 错误条）与无 Key 页按 v1；T23 / T24 含 6 项拦截；待目检 #16 |

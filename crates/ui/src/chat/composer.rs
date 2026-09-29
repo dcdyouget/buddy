@@ -9,6 +9,10 @@
 //! | 流式中：「模型名 · 生成中...」+ 红色停止按钮 | 同 |
 //! | 容器：圆角 lg、上亮下透渐变叠 `--composer-surface`、双层描边 + `--shadow-composer` | 同（外描边改用 `--border-default`，见决策记录） |
 //!
+//! | 空态页的独立气泡（`hideBorder` → `.is-standalone`）：无外边距、圆角 xl、`--window-outline` 描边 +
+//! 内侧 `--window-inner-highlight` + `--shadow-floating-md`；输入框聚焦也不加底色；不自动撑高（`disableAutoResize`）；
+//! 紧凑窗口中撑满高度 | [`Composer::set_standalone`] |
+//!
 //! 模型选择（S05-15）、图片附件（S05-07）、设置入口（S05-18）只提供回调位置。
 
 use crate::components::{IconButtonVariant, icon_button};
@@ -24,6 +28,9 @@ use gpui::{
 pub const PLACEHOLDER: &str = "问点什么…";
 /// 输入框最大高度（v1 `Math.min(scrollHeight, 120)`）
 pub const MAX_TEXT_HEIGHT: f32 = 120.0;
+
+/// v1 `@media (max-height: 180px)` 的阈值：不高于它即为紧凑窗口
+const COMPACT_MAX_HEIGHT: f32 = 180.0;
 
 /// v1 `canSend`
 pub fn can_send(text: &str, image_count: usize, supports_vision: bool, saving_images: bool) -> bool {
@@ -56,6 +63,8 @@ pub struct Composer {
     supports_vision: bool,
     focused: bool,
     hovered: bool,
+    /// 空态页的独立气泡（S05-16）
+    standalone: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -67,12 +76,13 @@ impl Focusable for Composer {
     }
 }
 
-fn text_style(theme: &Theme) -> TextAreaStyle {
+fn text_style(theme: &Theme, standalone: bool) -> TextAreaStyle {
     let c = theme.colors;
     TextAreaStyle {
         font_size: px(m::FONT_SIZE_MD),
         line_height: px(m::SPACE_5),
-        max_height: Some(px(MAX_TEXT_HEIGHT - 2.0 * m::SPACE_1)),
+        // 独立气泡不撑高（v1 `disableAutoResize`：保持一行高，多行在框内滚动）
+        max_height: Some(px(if standalone { m::SPACE_8 - 2.0 * m::SPACE_1 } else { MAX_TEXT_HEIGHT - 2.0 * m::SPACE_1 })),
         min_height: px(m::SPACE_8 - 2.0 * m::SPACE_1),
         text_color: c.text_primary.into(),
         placeholder_color: c.text_tertiary.into(),
@@ -85,7 +95,7 @@ impl Composer {
     /// 新建
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let theme = *cx.buddy_theme();
-        let text = cx.new(|cx| TextArea::new(PLACEHOLDER, text_style(&theme), cx));
+        let text = cx.new(|cx| TextArea::new(PLACEHOLDER, text_style(&theme, false), cx));
         let subscriptions = vec![
             cx.subscribe(&text, |this: &mut Self, _, event: &TextAreaEvent, cx| match event {
                 TextAreaEvent::Submit => this.send(cx),
@@ -100,7 +110,7 @@ impl Composer {
                 cx.notify();
             }),
         ];
-        Self { text, streaming: false, streaming_model: None, supports_vision: false, focused: false, hovered: false, _subscriptions: subscriptions }
+        Self { text, streaming: false, streaming_model: None, supports_vision: false, focused: false, hovered: false, standalone: false, _subscriptions: subscriptions }
     }
 
     /// 输入框实体
@@ -130,6 +140,12 @@ impl Composer {
         cx.notify();
     }
 
+    /// 切换为空态页的独立气泡（v1 `hideBorder`）
+    pub fn set_standalone(&mut self, standalone: bool, cx: &mut Context<Self>) {
+        self.standalone = standalone;
+        cx.notify();
+    }
+
     /// 当前模型是否支持图片
     pub fn set_supports_vision(&mut self, supports: bool, cx: &mut Context<Self>) {
         self.supports_vision = supports;
@@ -154,21 +170,24 @@ impl Render for Composer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.buddy_theme();
         let c = theme.colors;
-        self.text.update(cx, |t, cx| t.set_style(text_style(&theme), cx));
+        let standalone = self.standalone;
+        self.text.update(cx, |t, cx| t.set_style(text_style(&theme, standalone), cx));
         let has_text = !self.text.read(cx).text().trim().is_empty();
         let can_send = self.can_send(cx);
         let active = self.focused || self.hovered;
 
         // v1 `.input-dock`：外描边 + 内描边（inset 1px `--border-subtle`）+ `--shadow-composer`；
         // 悬停 / 聚焦时 v1 的品牌色渐变描边加粗到 2px → 以品牌色内描边近似（目检项）
+        // 独立气泡：内描边换成 `--window-inner-highlight`，外投影换成 `--shadow-floating-md`
+        let rest_inset = if standalone { c.window_inner_highlight } else { c.border_subtle };
         let mut shadows = vec![BoxShadow {
-            color: if active { Hsla::from(c.buddy_primary).opacity(0.45) } else { c.border_subtle.into() },
+            color: if active { Hsla::from(c.buddy_primary).opacity(0.45) } else { rest_inset.into() },
             offset: point(px(0.), px(0.)),
             blur_radius: px(0.),
             spread_radius: px(if active { 2.0 } else { 1.0 }),
             inset: true,
         }];
-        shadows.extend(box_shadows(theme.shadows.shadow_composer));
+        shadows.extend(box_shadows(if standalone { theme.shadows.shadow_floating_md } else { theme.shadows.shadow_composer }));
 
         let body = if self.streaming {
             let label = format!("{} · 生成中...", self.streaming_model.clone().unwrap_or_else(|| "AI".into()));
@@ -196,7 +215,7 @@ impl Render for Composer {
                         // 有文字时给清除按钮留位（v1 paddingRight 28px）
                         .pr(px(if has_text { 28.0 } else { m::SPACE_2 }))
                         .rounded(px(m::RADIUS_MD))
-                        .when(self.focused, |d| d.bg(c.field_surface))
+                        .when(self.focused && !standalone, |d| d.bg(c.field_surface))
                         .child(self.text.clone()),
                 )
                 .when(has_text, |d| {
@@ -251,17 +270,17 @@ impl Render for Composer {
                 )
         };
 
-        let _ = window;
+        // v1 `@media (max-height: 180px)`：紧凑窗口中独立气泡撑满高度（视口高度取自窗口，与媒体查询同义）
+        let compact = window.viewport_size().height <= px(COMPACT_MAX_HEIGHT);
         div()
             .id("input-dock")
-            .mx(px(m::SPACE_2))
-            .mb(px(m::SPACE_2))
+            .when(!standalone, |d| d.mx(px(m::SPACE_2)).mb(px(m::SPACE_2)).rounded(px(m::RADIUS_LG)).border_color(c.border_default))
+            .when(standalone, |d| d.w_full().flex().flex_col().justify_center().rounded(px(m::RADIUS_XL)).border_color(c.window_outline))
+            .when(standalone && compact, |d| d.h_full())
             .p(px(m::SPACE_1))
-            .rounded(px(m::RADIUS_LG))
             // 内层渐变由外层圆角裁切（不另设 11px 圆角：硬约束 3 只允许刻度内的值）
             .overflow_hidden()
             .border_1()
-            .border_color(c.border_default)
             .bg(c.composer_surface)
             .shadow(shadows)
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {

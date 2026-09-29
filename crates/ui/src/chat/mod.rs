@@ -9,10 +9,13 @@
 //! - [`think_block`] —— 思考块（S05-09）
 //! - [`tool_card`] —— 工具调用卡片（S05-10）
 //! - [`message_actions`] —— 回答操作栏（S05-14）
+//! - [`empty_page`] / [`no_key_page`] —— 空态页与无 Key 页（S05-16）
 
 pub mod composer;
+pub mod empty_page;
 pub mod message_actions;
 pub mod message_row;
+pub mod no_key_page;
 pub mod rows;
 pub mod session;
 pub mod state;

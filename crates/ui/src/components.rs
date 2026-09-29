@@ -1,8 +1,8 @@
 //! 共用小组件（对应 v1 `src/components/shared/*`）
 
 use crate::icons::{IconName, icon};
-use crate::theme_system::{BuddyTheme, tokens::metrics as m};
-use gpui::{App, ElementId, Stateful, Div, div, prelude::*, px};
+use crate::theme_system::{BuddyTheme, box_shadows, tokens::metrics as m};
+use gpui::{AnyView, App, Context, Div, ElementId, Render, SharedString, Stateful, Window, div, prelude::*, px};
 
 /// 图标按钮的视觉变体（v1 `IconButton` `variant`）
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -47,4 +47,33 @@ pub fn icon_button(
             d.cursor_pointer().when(variant == IconButtonVariant::Default, |d| d.hover(|s| s.text_color(c.text_primary).bg(c.bg_sunken)))
         })
         .child(icon(name, px(icon_size)))
+}
+
+/// 悬停提示（v1 用原生 `title` 属性；GPUI 无原生提示，自绘一个最小的）
+pub struct TextTooltip(SharedString);
+
+impl TextTooltip {
+    /// 构造提示视图，供 `.tooltip(|_, cx| TextTooltip::view("…", cx))` 使用
+    pub fn view(text: impl Into<SharedString>, cx: &mut App) -> AnyView {
+        let text = text.into();
+        cx.new(|_| TextTooltip(text)).into()
+    }
+}
+
+impl Render for TextTooltip {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.buddy_theme();
+        let c = theme.colors;
+        div()
+            .px(px(m::SPACE_2))
+            .py(px(m::SPACE_1))
+            .rounded(px(m::RADIUS_SM))
+            .border_1()
+            .border_color(c.border_default)
+            .bg(c.bg_surface)
+            .text_color(c.text_primary)
+            .text_size(px(m::FONT_SIZE_SM))
+            .shadow(box_shadows(theme.shadows.shadow_static))
+            .child(self.0.clone())
+    }
 }
