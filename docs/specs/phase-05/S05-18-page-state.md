@@ -42,6 +42,7 @@ chat / empty / no-api-key / settings 的切换，与 v1 一致；窗口尺寸在
 | T26 | 同上：空配置下空态发送 → 无 Key 页、无消息、草稿保留；点面板 → 设置 → 返回进对话页；只在内存补齐配置而盘上没有 → engine 拒绝发送，空占位被移除、报错、用户消息保留；写盘并更新后可发送；Provider 清空 → 空态 |
 | T27 | 同上：预置 25 条后重启，起始页仍为空态；载入最新 10 条（`seed-15…24`）；触顶加载经 engine 读取 `seed-05…14`，再读最早 5 条；`has_more` 归零 |
 | 拦截 | 见下「拦截验证」 |
+| 目检反馈后补充（#17 首轮） | 手动预览原先是固定 560×480 的大窗口，空态看起来不是气泡；现手动模式加「窗口壳替身」`DemoShell`（示例内，非产品代码）：按 v1 `geometry.rs` 从 560×60 启动，离开紧凑页时展开为 750×500（设置 760×640），设置页返回紧凑页之前的页面时展开为对话尺寸；只在离开紧凑页时改尺寸（v1 `resizeWindowForPage`），因此 401 后从对话页切到无 Key 页窗口**不会缩回**。自检 T25 增补：空态 / 对话页小齿轮真实点击进设置、设置叠在对话页之上、`PageChanged` 事件序列（empty→streaming 展开，streaming→conversation 与 conversation→noapikey 不展开）；拦截：小齿轮不响应 → FAIL、不发切页事件 → FAIL |
 | 回归 | `chat_preview --selftest` T11–T22、`pages_preview --selftest` T23–T24 全部 PASS |
 
 ### 拦截验证

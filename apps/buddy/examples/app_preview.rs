@@ -20,17 +20,19 @@ use buddy_engine::chat::ChatEngine;
 use buddy_engine::models::{AppConfig, Message, MessageRole};
 use buddy_engine::storage;
 use buddy_ui::chat::composer::ComposerEvent;
-use buddy_ui::chat::page_state::Page;
-use buddy_ui::chat::router::{Loaded, PageRouter, preload};
+use buddy_ui::chat::page_state::{Page, expands_window};
+use buddy_ui::chat::router::{Loaded, PageRouter, RouterEvent, preload};
 use buddy_ui::chat_bridge::spawn_engine;
 use buddy_ui::gpui::{
-    App, AppContext, AsyncApp, Bounds, Focusable, KeyDownEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput,
+    App, AppContext, AsyncApp, Bounds, Context, Entity, Focusable, IntoElement, Render, Subscription, Window, div, prelude::*, KeyDownEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput,
     WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowOptions, point, px, size,
 };
 use buddy_ui::gpui_platform::application;
 use buddy_ui::markdown;
 use buddy_ui::theme_system::{Appearance, Theme, fonts};
+use std::cell::RefCell;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -141,10 +143,96 @@ fn options(cx: &App) -> WindowOptions {
     WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), titlebar: None, window_background: WindowBackgroundAppearance::Transparent, ..Default::default() }
 }
 
+/// 页面切换记录（自检用）
+type Transitions = Rc<RefCell<Vec<(Page, Page)>>>;
+
 /// 经真实路径启动：tokio 上 `preload`，再开窗
-async fn open_router(engine: Arc<ChatEngine>, cx: &mut AsyncApp) -> WindowHandle<PageRouter> {
+async fn open_router(engine: Arc<ChatEngine>, cx: &mut AsyncApp) -> (WindowHandle<PageRouter>, Transitions) {
     let loaded: Loaded = cx.update(|cx| spawn_engine(cx, preload(engine.clone()))).await;
-    cx.update(|cx| cx.open_window(options(cx), |window, cx| cx.new(|cx| PageRouter::new(engine, loaded, window, cx))).expect("open_window 失败"))
+    let log = Transitions::default();
+    let sink = log.clone();
+    let handle = cx.update(|cx| {
+        cx.open_window(options(cx), |window, cx| {
+            let router = cx.new(|cx| PageRouter::new(engine, loaded, window, cx));
+            cx.subscribe(&router, move |_, event: &RouterEvent, _| {
+                let RouterEvent::PageChanged { from, to } = *event;
+                sink.borrow_mut().push((from, to));
+            })
+            .detach();
+            router
+        })
+        .expect("open_window 失败")
+    });
+    (handle, log)
+}
+
+// ───────────────────────────── 手动模式的窗口壳（Phase 07 的替身）─────────────────────────────
+
+/// v1 `geometry.rs` 的页面尺寸：紧凑 560×60、对话 750×500、设置 760×640
+fn page_size(page: Page) -> (f32, f32) {
+    match page {
+        Page::Empty | Page::NoApiKey => (560.0, 60.0),
+        Page::Conversation | Page::Streaming => (750.0, 500.0),
+        Page::Settings => (760.0, 640.0),
+    }
+}
+
+/// 手动预览的根视图：只做一件事 —— 按 v1 规则在「离开紧凑页」时改窗口尺寸
+/// （`expands_window`；设置页返回到紧凑页之前的页面时按 v1 展开为对话尺寸）。
+/// 真正的窗口壳（底边锚定、多显示器、动画）归 S07-*；GPUI 在 macOS 上 `resize` 保持左上角，所以窗口向下 / 向右长
+struct DemoShell {
+    router: Entity<PageRouter>,
+    _subscription: Subscription,
+}
+
+impl DemoShell {
+    fn new(router: Entity<PageRouter>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut settings_from_compact = false;
+        let subscription = cx.subscribe_in(&router, window, move |_, _, event: &RouterEvent, window, _| {
+            let RouterEvent::PageChanged { from, to } = *event;
+            println!("页面切换：{from:?} → {to:?}");
+            let target = if expands_window(from, to) {
+                Some(to)
+            } else if from == Page::Settings && to == Page::Conversation && settings_from_compact {
+                Some(Page::Conversation) // v1 设置页 onBack：上一页是紧凑页时先把窗口调到对话尺寸
+            } else {
+                None
+            };
+            if to == Page::Settings {
+                settings_from_compact = from.is_compact();
+            }
+            if let Some(page) = target {
+                let (w, h) = page_size(page);
+                println!("窗口尺寸：→ {w}×{h}");
+                window.resize(size(px(w), px(h)));
+            }
+        });
+        Self { router, _subscription: subscription }
+    }
+}
+
+impl Render for DemoShell {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child(self.router.clone())
+    }
+}
+
+/// 手动预览：紧凑窗口（560×60）启动，窗口壳按上面的规则改尺寸
+async fn open_manual(engine: Arc<ChatEngine>, cx: &mut AsyncApp) {
+    let loaded: Loaded = cx.update(|cx| spawn_engine(cx, preload(engine.clone()))).await;
+    cx.update(|cx| {
+        let (w, h) = page_size(Page::Empty);
+        // 放在屏幕偏上处：窗口只会向下 / 向右长
+        let bounds = Bounds::centered(None, size(px(w), px(h)), cx);
+        let bounds = Bounds::new(point(bounds.origin.x - px(95.0), bounds.origin.y - px(200.0)), bounds.size);
+        let mut opts = options(cx);
+        opts.window_bounds = Some(WindowBounds::Windowed(bounds));
+        cx.open_window(opts, |window, cx| {
+            let router = cx.new(|cx| PageRouter::new(engine, loaded, window, cx));
+            cx.new(|cx| DemoShell::new(router, window, cx))
+        })
+        .expect("open_window 失败");
+    });
 }
 
 async fn draw(handle: WindowHandle<PageRouter>, cx: &mut AsyncApp) {
@@ -232,7 +320,7 @@ async fn stored(engine: &Arc<ChatEngine>, cx: &mut AsyncApp) -> Vec<Message> {
 /// T25：页面状态机端到端
 async fn selftest_flow(url: &str, cx: &mut AsyncApp) -> bool {
     let engine = ChatEngine::new(sandbox("flow", Some(&mock_config(url))));
-    let handle = open_router(engine.clone(), cx).await;
+    let (handle, transitions) = open_router(engine.clone(), cx).await;
     draw(handle, cx).await;
     let size0 = window_size(handle, cx);
     assert_eq!(size0, (px(WIDTH), px(HEIGHT)), "窗口应为请求的尺寸（否则尺寸比较没有意义）");
@@ -240,6 +328,19 @@ async fn selftest_flow(url: &str, cx: &mut AsyncApp) -> bool {
     let mut check = |name: &'static str, ok: bool| checks.push((name, ok));
 
     check("启动为空态", page(handle, cx) == Page::Empty);
+
+    // 空态输入区的设置小齿轮（独立气泡：无外边距；从右往下量：发送 28、间隔 4、模型 24、间隔 4、齿轮 24）
+    click(handle, WIDTH - 5.0 - 28.0 - 4.0 - 24.0 - 4.0 - 12.0, HEIGHT - 5.0 - 16.0, cx).await;
+    check("空态点小齿轮 → 设置", page(handle, cx) == Page::Settings);
+    click(handle, WIDTH / 2.0, HEIGHT / 2.0 + 44.0, cx).await;
+    check("设置返回 → 对话页（上一页是紧凑页）", page(handle, cx) == Page::Conversation);
+    let _ = handle.update(cx, |r, _, cx| r.set_config(mock_config(url), cx));
+    let mut bad = mock_config(url);
+    bad.selected_model_id.clear();
+    let _ = handle.update(cx, |r, _, cx| r.set_config(bad, cx));
+    draw(handle, cx).await;
+    check("配置失效 → 退回空态", page(handle, cx) == Page::Empty);
+    let _ = handle.update(cx, |r, _, cx| r.set_config(mock_config(url), cx));
 
     // 空态发送 → streaming → 完成 → conversation
     type_and_send(handle, "你好", cx).await;
@@ -285,12 +386,19 @@ async fn selftest_flow(url: &str, cx: &mut AsyncApp) -> bool {
     let no_error = handle.read_with(cx, |r, cx| r.conversation().read(cx).state.error.is_none()).unwrap();
     check("停止不显示错误、停在对话页", no_error && page(handle, cx) == Page::Conversation);
 
-    // 设置叠加层往返：底层页不变
-    let _ = handle.update(cx, |r, _, cx| r.open_settings(cx));
-    draw(handle, cx).await;
-    check("打开设置", page(handle, cx) == Page::Settings);
+    // 设置叠加层往返：底层页不变。对话页输入区的小齿轮（外边距 8：距右 8+1+4，距底 8+1+4）
+    click(handle, WIDTH - 13.0 - 28.0 - 4.0 - 24.0 - 4.0 - 12.0, HEIGHT - 13.0 - 16.0, cx).await;
+    check("对话页点小齿轮 → 设置", page(handle, cx) == Page::Settings);
+    check("设置叠加在对话页之上（底层页不卸载）", handle.read_with(cx, |r, _| r.base_page()).unwrap() == Page::Conversation);
     click(handle, WIDTH / 2.0, HEIGHT / 2.0 + 44.0, cx).await; // 占位设置页的「返回」
     check("返回 → 对话页", page(handle, cx) == Page::Conversation);
+
+    // 页面切换事件（窗口壳据此改尺寸）：离开紧凑页的那次会展开，内容页之间 / 回到紧凑页不展开
+    let seen = transitions.borrow().clone();
+    check("发送时 empty → streaming 且需展开窗口", seen.contains(&(Page::Empty, Page::Streaming)) && expands_window(Page::Empty, Page::Streaming));
+    check("流式结束 streaming → conversation 不展开", seen.contains(&(Page::Streaming, Page::Conversation)) && !expands_window(Page::Streaming, Page::Conversation));
+    check("401 时 conversation → noapikey 不改窗口（v1 只在离开紧凑页时改尺寸）", seen.contains(&(Page::Conversation, Page::NoApiKey)) && !expands_window(Page::Conversation, Page::NoApiKey));
+    check("每次事件都是真实切换", seen.iter().all(|(a, b)| a != b));
 
     // 窗口尺寸
     let size1 = window_size(handle, cx);
@@ -318,7 +426,7 @@ async fn selftest_flow(url: &str, cx: &mut AsyncApp) -> bool {
 /// T26：缺配置的流程
 async fn selftest_no_key(url: &str, cx: &mut AsyncApp) -> bool {
     let engine = ChatEngine::new(sandbox("nokey", None));
-    let handle = open_router(engine.clone(), cx).await;
+    let (handle, _transitions) = open_router(engine.clone(), cx).await;
     draw(handle, cx).await;
     let mut checks: Vec<(&str, bool)> = Vec::new();
     let mut check = |name: &'static str, ok: bool| checks.push((name, ok));
@@ -379,7 +487,7 @@ async fn selftest_history(url: &str, cx: &mut AsyncApp) -> bool {
         let engine = engine.clone();
         cx.update(|cx| spawn_engine(cx, async move { engine.save_message(message).await })).await.expect("预置消息");
     }
-    let handle = open_router(engine.clone(), cx).await;
+    let (handle, _transitions) = open_router(engine.clone(), cx).await;
     draw(handle, cx).await;
     let conversation = handle.read_with(cx, |r, _| r.conversation().clone()).unwrap();
     let mut checks: Vec<(&str, bool)> = Vec::new();
@@ -451,7 +559,7 @@ fn main() {
         };
         let engine = ChatEngine::new(dir);
         cx.spawn(async move |cx: &mut AsyncApp| {
-            let _ = open_router(engine, cx).await;
+            open_manual(engine, cx).await;
             cx.update(|cx| cx.activate(true));
         })
         .detach();

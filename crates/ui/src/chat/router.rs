@@ -149,6 +149,11 @@ impl PageRouter {
         self.pages.current()
     }
 
+    /// 实际渲染的底层页面（设置页叠在它之上）
+    pub fn base_page(&self) -> Page {
+        self.pages.base_page()
+    }
+
     /// 当前配置
     pub fn config(&self) -> &AppConfig {
         &self.config
