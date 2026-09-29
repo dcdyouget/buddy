@@ -147,6 +147,18 @@ async fn selftest_empty(compact: WindowHandle<EmptyPage>, compact_log: &Log, tal
     // 展开按钮：顶部居中，24×20，距顶 2
     click(compact, WIDTH / 2.0, 2.0 + 10.0, cx).await;
     let expand = compact_log.borrow().as_slice() == ["expand"];
+    // 悬停态：移到「展开」按钮上为真，移开为假（按钮的颜色按此设置）
+    let hover = |x: f32, y: f32, cx: &mut AsyncApp| {
+        let e = PlatformInput::MouseMove(MouseMoveEvent { position: point(px(x), px(y)), pressed_button: None, modifiers: Modifiers::default() });
+        let _ = cx.update_window(compact.into(), |_, window, cx| window.dispatch_event(e, cx));
+    };
+    hover(WIDTH / 2.0, 12.0, cx);
+    draw(compact, cx).await;
+    let hovered_on = compact.read_with(cx, |p, _| p.expand_hovered()).unwrap();
+    hover(40.0, 40.0, cx);
+    draw(compact, cx).await;
+    let hovered_off = !compact.read_with(cx, |p, _| p.expand_hovered()).unwrap();
+    let hover_ok = hovered_on && hovered_off;
     // 展开按钮之外不触发
     click(compact, 40.0, 30.0, cx).await;
     let expand_only_on_button = compact_log.borrow().len() == 1;
@@ -221,14 +233,14 @@ async fn selftest_empty(compact: WindowHandle<EmptyPage>, compact_log: &Log, tal
     let cleared = tall.read_with(cx, |p, _| p.error().is_none()).unwrap();
     let banner_above_input = dismissed_at.is_some_and(|yy| yy < f32::from(t2.origin.y));
     println!(
-        "T24: 展开 {expand}（按钮之外不触发 {expand_only_on_button}）；紧凑窗口输入框中心 {center:.1}（窗口中心 {:.1}）、较高窗口 {tall_center:.1}/{TALL_HEIGHT}；\
+        "T24: 展开 {expand}（按钮之外不触发 {expand_only_on_button}）；悬停态 进入 {hovered_on} / 移出 {hovered_off}；紧凑窗口输入框中心 {center:.1}（窗口中心 {:.1}）、较高窗口 {tall_center:.1}/{TALL_HEIGHT}；\
          四行草稿时输入框高 {:.1} / {:.1}（一行 {single_line}）；滚轮上翻 {at_end:.1} → {after_wheel:.1}；错误条显示 {shown}，关闭点 y={dismissed_at:?}（输入框顶 {:.1}），已清除 {cleared}",
         COMPACT_HEIGHT / 2.0,
         f32::from(c2.size.height),
         f32::from(t2.size.height),
         f32::from(t2.origin.y),
     );
-    let ok = expand && expand_only_on_button && filled && bottom_aligned && no_growth && wheel_scrolls && shown && banner_above_input && cleared;
+    let ok = expand && expand_only_on_button && hover_ok && filled && bottom_aligned && no_growth && wheel_scrolls && shown && banner_above_input && cleared;
     println!("{} S05-16 T24 空态页（展开 / 独立气泡撑满与贴底 / 不撑高 / 错误条）", if ok { "PASS" } else { "FAIL" });
     ok
 }

@@ -36,6 +36,8 @@ pub enum EmptyPageEvent {
 pub struct EmptyPage {
     composer: Entity<Composer>,
     error: Option<SharedString>,
+    /// 鼠标是否在「展开」按钮上（图标颜色与底色按此显式设置：`svg` 取自身文字样式，不跟随父元素的 `hover` 样式）
+    expand_hovered: bool,
 }
 
 impl EventEmitter<EmptyPageEvent> for EmptyPage {}
@@ -44,7 +46,7 @@ impl EmptyPage {
     /// 新建。输入区由外部提供并与对话页共用同一个实体（v1 草稿存在 `chatStore`，两页共享）；
     /// 是否为独立气泡由路由器在切页时设置（[`Composer::set_standalone`]）
     pub fn new(composer: Entity<Composer>) -> Self {
-        Self { composer, error: None }
+        Self { composer, error: None, expand_hovered: false }
     }
 
     /// 输入区实体（发送 / 模型选择 / 设置事件由它发出）
@@ -58,6 +60,11 @@ impl EmptyPage {
         cx.notify();
     }
 
+    /// 「展开」按钮是否处于悬停态（自检用）
+    pub fn expand_hovered(&self) -> bool {
+        self.expand_hovered
+    }
+
     /// 当前错误提示
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
@@ -68,6 +75,8 @@ impl Render for EmptyPage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *cx.buddy_theme();
         let c = theme.colors;
+        // v1 `.empty-expand-trigger:hover`：品牌色文字 + `--composer-surface` 底
+        let (fg, bg) = if self.expand_hovered { (c.buddy_primary, c.composer_surface) } else { (c.text_muted, c.control_surface) };
         div()
             .size_full()
             .relative()
@@ -102,14 +111,17 @@ impl Render for EmptyPage {
                     .border_1()
                     .border_color(c.border_subtle)
                     .rounded(px(m::RADIUS_FULL))
-                    .text_color(c.text_muted)
-                    .bg(c.control_surface)
+                    .text_color(fg)
+                    .bg(bg)
                     .shadow(box_shadows(theme.shadows.shadow_static))
                     .cursor_pointer()
-                    .hover(|s| s.text_color(c.buddy_primary).bg(c.composer_surface))
+                    .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                        this.expand_hovered = *hovered;
+                        cx.notify();
+                    }))
                     .tooltip(|_, cx| TextTooltip::view("展开对话", cx))
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(EmptyPageEvent::Expand)))
-                    .child(icon(IconName::ChevronUp, px(14.0))),
+                    .child(icon(IconName::ChevronUp, px(14.0)).text_color(fg)),
             )
     }
 }
