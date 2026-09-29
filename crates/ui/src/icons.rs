@@ -105,8 +105,89 @@ icons! {
 }
 
 /// 方形图标；颜色随父元素或自身的 `text_color`
-pub fn icon(name: IconName, size: Pixels) -> Svg {
-    svg().path(name.path()).size(size).flex_none()
+pub fn icon(name: IconName, size: Pixels) -> Icon {
+    Icon(svg().path(name.path()).size(size).flex_none())
+}
+
+/// 图标元素：包一层 [`Svg`]，在绘制时取祖先的文字颜色。
+///
+/// **GPUI 的 `Svg` 不继承父元素的 `text_color`**（它只读自己的样式，`gpui/src/elements/svg.rs`），
+/// 直接用 `svg()` 时，放在带颜色的按钮里的图标会整个不画出来，悬停变色也不会生效（目检 #16 / #17 发现：
+/// 输入区的设置、模型、发送图标与「复制」图标全部缺失，`Window::render_to_image` 证实）。
+/// 这里在绘制时读取 `window.text_style().color`（此时祖先的悬停 / 聚焦样式已入栈），自身显式设置的颜色优先。
+pub struct Icon(Svg);
+
+impl Icon {
+    /// 变换（缩放 / 旋转），同 [`Svg::with_transformation`]
+    pub fn with_transformation(self, transformation: gpui::Transformation) -> Self {
+        Icon(self.0.with_transformation(transformation))
+    }
+}
+
+impl Styled for Icon {
+    fn style(&mut self) -> &mut gpui::StyleRefinement {
+        self.0.style()
+    }
+}
+
+impl IntoElement for Icon {
+    type Element = Self;
+
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl gpui::Element for Icon {
+    type RequestLayoutState = <Svg as gpui::Element>::RequestLayoutState;
+    type PrepaintState = <Svg as gpui::Element>::PrepaintState;
+
+    fn id(&self) -> Option<gpui::ElementId> {
+        gpui::Element::id(&self.0)
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        gpui::Element::source_location(&self.0)
+    }
+
+    fn request_layout(
+        &mut self,
+        id: Option<&gpui::GlobalElementId>,
+        inspector_id: Option<&gpui::InspectorElementId>,
+        window: &mut gpui::Window,
+        cx: &mut gpui::App,
+    ) -> (gpui::LayoutId, Self::RequestLayoutState) {
+        self.0.request_layout(id, inspector_id, window, cx)
+    }
+
+    fn prepaint(
+        &mut self,
+        id: Option<&gpui::GlobalElementId>,
+        inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: gpui::Bounds<Pixels>,
+        state: &mut Self::RequestLayoutState,
+        window: &mut gpui::Window,
+        cx: &mut gpui::App,
+    ) -> Self::PrepaintState {
+        self.0.prepaint(id, inspector_id, bounds, state, window, cx)
+    }
+
+    fn paint(
+        &mut self,
+        id: Option<&gpui::GlobalElementId>,
+        inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: gpui::Bounds<Pixels>,
+        request_layout: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut gpui::Window,
+        cx: &mut gpui::App,
+    ) {
+        let style = self.0.style();
+        if style.text.color.is_none() {
+            style.text.color = Some(window.text_style().color);
+        }
+        self.0.paint(id, inspector_id, bounds, request_layout, prepaint, window, cx)
+    }
 }
 
 /// Buddy 的资源源（目前只有图标）
@@ -134,5 +215,24 @@ mod tests {
         }
         assert!(Assets.load("icons/missing.svg").unwrap().is_none());
         assert_eq!(Assets.list("icons/").unwrap().len(), IconName::ALL.len());
+    }
+
+    /// 每个图标在小尺寸下都要有可见的笔画（曾发生「设置」等图标缺笔画 / 几乎不可见而无人察觉）
+    #[test]
+    fn every_icon_has_visible_ink_at_small_sizes() {
+        use gpui::{DevicePixels, Size, SvgRenderer, SvgSize};
+        let renderer = SvgRenderer::new(std::sync::Arc::new(Assets));
+        for &i in IconName::ALL {
+            let bytes = Assets.load(i.path()).unwrap().unwrap();
+            let parsed = renderer.parse_svg(&bytes).expect("SVG 应可解析");
+            for px in [13, 14, 16] {
+                // 2x 屏
+                let dev = DevicePixels(px * 2);
+                let image = renderer.render_parsed(&parsed, SvgSize::ExactSize(Size::new(dev, dev))).expect("应可渲染");
+                let ink = image.as_bytes(0).unwrap().chunks_exact(4).filter(|p| p[3] > 0).count();
+                let total = (px * 2 * px * 2) as usize;
+                eprintln!("{:?} @{px}px: 覆盖 {:.1}%", i, ink as f64 * 100.0 / total as f64);
+            }
+        }
     }
 }

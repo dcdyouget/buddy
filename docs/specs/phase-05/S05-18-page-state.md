@@ -42,7 +42,7 @@ chat / empty / no-api-key / settings 的切换，与 v1 一致；窗口尺寸在
 | T26 | 同上：空配置下空态发送 → 无 Key 页、无消息、草稿保留；点面板 → 设置 → 返回进对话页；只在内存补齐配置而盘上没有 → engine 拒绝发送，空占位被移除、报错、用户消息保留；写盘并更新后可发送；Provider 清空 → 空态 |
 | T27 | 同上：预置 25 条后重启，起始页仍为空态；载入最新 10 条（`seed-15…24`）；触顶加载经 engine 读取 `seed-05…14`，再读最早 5 条；`has_more` 归零 |
 | 拦截 | 见下「拦截验证」 |
-| 目检反馈后补充（#17 首轮） | 手动预览原先是固定 560×480 的大窗口，空态看起来不是气泡；现手动模式加「窗口壳替身」`DemoShell`（示例内，非产品代码）：按 v1 `geometry.rs` 从 560×60 启动，离开紧凑页时展开为 750×500（设置 760×640），设置页返回紧凑页之前的页面时展开为对话尺寸；只在离开紧凑页时改尺寸（v1 `resizeWindowForPage`），因此 401 后从对话页切到无 Key 页窗口**不会缩回**。自检 T25 增补：空态 / 对话页小齿轮真实点击进设置、设置叠在对话页之上、`PageChanged` 事件序列（empty→streaming 展开，streaming→conversation 与 conversation→noapikey 不展开）；拦截：小齿轮不响应 → FAIL、不发切页事件 → FAIL |
+| 目检反馈后补充（#17 首轮） | 手动预览原先是固定 560×480 的大窗口，空态看起来不是气泡；现手动模式加「窗口壳替身」`DemoShell`（示例内，非产品代码）：按 v1 `geometry.rs` 从 560×60 启动，离开紧凑页时展开为 750×500（设置 760×640），设置页返回紧凑页之前的页面时展开为对话尺寸；只在离开紧凑页时改尺寸（v1 `resizeWindowForPage`），v1 在 401 后从对话页切到无 Key 页时窗口**不会缩回**（面板悬在大窗口中间）；目检 #17 反馈「框体应一起缩小」，替身在「进入紧凑页」时缩回 560×60（**偏离 v1，待用户确认**；macOS 上 `resize` 保持左上角，气泡落在旧窗口顶部而非底边，底边锚定属 S07-06）。自检 T25 增补：空态 / 对话页小齿轮真实点击进设置、设置叠在对话页之上、`PageChanged` 事件序列（empty→streaming 展开，streaming→conversation 与 conversation→noapikey 不展开）；拦截：小齿轮不响应 → FAIL、不发切页事件 → FAIL |
 | 回归 | `chat_preview --selftest` T11–T22、`pages_preview --selftest` T23–T24 全部 PASS |
 
 ### 拦截验证
@@ -73,6 +73,7 @@ chat / empty / no-api-key / settings 的切换，与 v1 一致；窗口尺寸在
 | 启动加载 | 先 `preload` 再开窗 | `Conversation::with_history_page` 需要首屏数据；读盘为毫秒级。v1 是先开窗再异步填充，窗口壳（Phase 07）可改回 |
 | 流式结束的落点 | 无论当前页都 `set_page(conversation / noapikey)` | 与 v1 `useStreaming` 逐字一致，包括一个 v1 特性：流式结束时若设置页正开着，会被切走。窗口壳接入托盘「设置…」后可能出现，如需改为「设置页开着就不动」是一处小改动（`PageState::stream_finished`） |
 | 401 之外的错误 | 留在（或回到）对话页，提示消息落盘 | 与 v1 一致：配额 / 服务器 / 网络三类追加一条 assistant 提示并 `saveMessage` |
+| 图标不继承颜色（目检 #17 发现） | `icons::icon()` 返回 `Icon` 元素，绘制时读取祖先文字颜色；门禁新增 S01-04-5d 禁止直接 `svg()` | GPUI 的 `Svg` 只读自己的样式，不继承父元素 `text_color`（`gpui/src/elements/svg.rs`）：此前输入区的设置 / 模型 / 发送图标、操作栏的「复制」「回到问题」图标、悬停变色全部没有画出来。用临时打开 gpui `test-support`（`Window::render_to_image`）把窗口渲染成图片确认，修复前后对比；`test-support` 会改 Cargo.lock（+85 行），故未提交，诊断代码已移除。**此前已通过的目检项里的图标（#4 复制勾、#12 思考块、#13 工具卡片状态、#14 操作栏）现在才真正显示，请顺带留意** |
 | 已知未接 | 审批弹窗、`ask_user` 提问、模型选择、附件 | 分别归 S05-13 / S05-15 / S05-07；输入区上对应事件已留位置 |
 | 移除 `add-provider` 页值 | 不迁移 | v1 遗留类型值，路由器无对应分支；添加 Provider 是设置页内部的侧滑层（S06-02） |
 

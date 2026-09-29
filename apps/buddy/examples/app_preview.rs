@@ -177,8 +177,8 @@ fn page_size(page: Page) -> (f32, f32) {
     }
 }
 
-/// 手动预览的根视图：只做一件事 —— 按 v1 规则在「离开紧凑页」时改窗口尺寸
-/// （`expands_window`；设置页返回到紧凑页之前的页面时按 v1 展开为对话尺寸）。
+/// 手动预览的根视图：只做一件事 —— 按 v1 规则在「离开紧凑页」时展开窗口
+/// （`expands_window`；设置页返回到紧凑页之前的页面时按 v1 展开为对话尺寸），并在「进入紧凑页」时缩回（偏离 v1，见下）。
 /// 真正的窗口壳（底边锚定、多显示器、动画）归 S07-*；GPUI 在 macOS 上 `resize` 保持左上角，所以窗口向下 / 向右长
 struct DemoShell {
     router: Entity<PageRouter>,
@@ -195,6 +195,10 @@ impl DemoShell {
                 Some(to)
             } else if from == Page::Settings && to == Page::Conversation && settings_from_compact {
                 Some(Page::Conversation) // v1 设置页 onBack：上一页是紧凑页时先把窗口调到对话尺寸
+            } else if to.is_compact() && !from.is_compact() {
+                // **偏离 v1**：v1 只在离开紧凑页时改尺寸，401 后从对话页切到无 Key 页窗口不会缩回（面板悬在大窗口中间）。
+                // 目检 #17 反馈「框体应一起缩小」，这里进入紧凑页时缩回 560×60（待用户确认，见 S05-18 决策记录）
+                Some(to)
             } else {
                 None
             };
@@ -347,6 +351,7 @@ async fn selftest_flow(url: &str, cx: &mut AsyncApp) -> bool {
     check("空态发送后进入流式页", page(handle, cx) == Page::Streaming);
     check("流式完成", wait_turn_done(handle, cx).await || !streaming(handle, cx));
     check("完成后进入对话页", page(handle, cx) == Page::Conversation);
+
     let m = messages(handle, cx);
     check("用户与助手消息", m.len() == 2 && m[0].content == "你好" && m[1].role == MessageRole::Assistant);
     check("助手正文为 mock 全文", m.get(1).map(|a| a.content.trim_end_matches('\n') == expected_reply()).unwrap_or(false));

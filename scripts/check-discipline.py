@@ -261,6 +261,24 @@ def check_hard_constraints(rep: Reporter) -> None:
     else:
         rep.ok("S01-04-5c 无 emoji 图标", "源码中无 emoji")
 
+    # 图标必须经 `icons::icon()`：GPUI 的 `svg()` 不继承父元素的 text_color，直接使用会让图标整个不画出来
+    # （目检 #16 / #17 发现输入区图标全部缺失）。`icons.rs` 是唯一允许直接构造 `svg()` 的地方
+    icons_rs = ROOT / "crates" / "ui" / "src" / "icons.rs"
+    bare_svg: list[str] = []
+    for f in files:
+        if f.suffix == ".css" or vendored in f.parents or f == icons_rs:
+            continue
+        for i, line in enumerate(f.read_text(encoding="utf-8", errors="ignore").splitlines(), 1):
+            if re.search(r"\bsvg\(\)", line.split("//")[0]):
+                bare_svg.append(f"{rel(f)}:{i}")
+    if bare_svg:
+        rep.fail(
+            "S01-04-5d 图标经 icon()",
+            "直接调用 svg() 的图标不会继承父元素颜色，请改用 buddy_ui::icons::icon()：\n" + "\n".join(bare_svg[:20]),
+        )
+    else:
+        rep.ok("S01-04-5d 图标经 icon()", "除 icons.rs 外无直接 svg() 调用")
+
 
 # ── S03-07：令牌守卫（品牌色逐值 / 生成物新鲜度 / 硬编码颜色）──────────
 
