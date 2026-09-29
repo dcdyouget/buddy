@@ -15,13 +15,13 @@
 | 02 | 引擎层移植 | 9 | **9** | S01-01 |
 | 03 | 主题与设计令牌 | 7 | **7** | S01-01 |
 | 04 | Markdown 栈 | 9 | **9** | S01-01 |
-| 05 | 聊天界面 | 18 | 7 | S03-*, S04-* |
+| 05 | 聊天界面 | 18 | 11 | S03-*, S04-* |
 | 06 | 设置界面 | 6 | 0 | S03-* |
 | 07 | 应用外壳与窗口行为 | 13 | 0 | S01-01 |
 | 08 | 更新与发布 | 11 | 0 | S07-* |
 | 09 | 平台对齐（Windows） | 9 | 0 | macOS 全链路验收 |
 | 10 | 测试与验收 | 7 | 0 | 与 02-09 并行 |
-| | **合计** | **104** | **47** | |
+| | **合计** | **104** | **51** | |
 
 > **准入条件是必要条件而非充分条件**：具体以各 spec 自身的「依赖」列为准（`RULES.md` §9.2）。
 > 规范强制 **Phase 单调性**：Phase `NN` 的 spec 只能依赖 Phase ≤ `NN` 的 spec（`RULES.md` §9.1）。
@@ -127,16 +127,16 @@
 | S05-02 | 块粒度行模型与稳定 id | S05-01 | `done` | `phase-05/S05-02-row-model.md` |
 | S05-03 | 行高记忆与测量 | S05-02 | `done` | `phase-05/S05-03-row-heights.md` |
 | S05-04 | 跟尾弹簧与回到底部 | S05-03 | `done` | `phase-05/S05-04-follow-bottom.md` |
-| S05-05 | 历史加载与滚动（替换手动分页） | S05-04 | `blocked` | `phase-05/S05-05-history-loading.md` |
+| S05-05 | 历史加载与滚动（替换手动分页） | S05-04 | `done` | `phase-05/S05-05-history-loading.md` |
 | S05-06 | Composer 文本输入与 IME | S00-05, S03-04 | `done` | `phase-05/S05-06-composer-input.md` |
 | S05-07 | Composer 附件（粘贴 / 拖拽 / 选择 / 草稿） | S05-06 | `todo` | `phase-05/S05-07-composer-attachments.md` |
 | S05-08 | 消息行渲染（用户 / 助手 / 流式态 / 错误态） | S04-04, S05-02 | `done` | `phase-05/S05-08-message-rows.md` |
-| S05-09 | 思考块 | S05-08 | `blocked` | `phase-05/S05-09-think-block.md` |
-| S05-10 | 工具调用分组（ToolGroup / Deferred） | S05-08 | `blocked` | `phase-05/S05-10-tool-groups.md` |
+| S05-09 | 思考块 | S05-08 | `done` | `phase-05/S05-09-think-block.md` |
+| S05-10 | 工具调用分组（ToolGroup / Deferred） | S05-08 | `done` | `phase-05/S05-10-tool-groups.md` |
 | S05-11 | 网络搜索卡片 | S05-10 | `todo` | `phase-05/S05-11-web-search.md` |
 | S05-12 | 图片生成卡片 | S05-10 | `todo` | `phase-05/S05-12-image-gen.md` |
 | S05-13 | 提问与审批卡片 | S05-08, S02-07 | `todo` | `phase-05/S05-13-ask-approval.md` |
-| S05-14 | 消息操作（复制 / 重试 / 编辑） | S05-08 | `blocked` | `phase-05/S05-14-message-actions.md` |
+| S05-14 | 消息操作（复制 / 重试 / 编辑） | S05-08 | `done` | `phase-05/S05-14-message-actions.md` |
 | S05-15 | 模型选择器 | S05-06, S02-01 | `todo` | `phase-05/S05-15-model-picker.md` |
 | S05-16 | 空态与无 Key 态 | S05-06 | `blocked` | `phase-05/S05-16-empty-nokey.md` |
 | S05-17 | 状态实体拆分与细粒度通知 | S05-01 | `done` | `phase-05/S05-17-state-entities.md` |
@@ -323,3 +323,4 @@
 | 2026-09-29 | S05-16 | `todo` → `doing` → `blocked` | 空态页（独立气泡 / 展开按钮 / 错误条）与无 Key 页按 v1；T23 / T24 含 6 项拦截；待目检 #16 |
 | 2026-09-29 | S05-18 | `todo` → `doing` | 依赖 S05-16 已完成实现、等待目检（#16），按用户指示并行推进；页面状态机 + 对话页 + engine 接入 |
 | 2026-09-29 | S05-18 | `doing` → `blocked` | 页面状态机 + 对话页 + 路由器接 engine（配置 / 历史分页 / 提示消息落盘 / 401 切页 / 停止）；T25–T27 含 10 项拦截；待目检 #17 |
+| 2026-09-29 | S05-09 / S05-10 / S05-14 / S05-05 | `blocked` → `done` | 用户目检 §6.5 第 12–15 项全部通过 |
