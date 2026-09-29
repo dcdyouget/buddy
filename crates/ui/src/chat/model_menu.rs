@@ -5,13 +5,13 @@
 //! | 优先用系统原生菜单（独立于窗口绘制，紧凑气泡无需扩高），失败才用页内下拉 | GPUI 没有原生弹出菜单（macOS 拒绝 `WindowKind::AnchoredPopup`），改用一个独立的无边框 `PopUp` 窗口承载**下拉的外观**，按模型按钮的屏幕位置摆放 —— 同样不受紧凑窗口大小限制 |
 //! | 只列出「Provider 启用了的」模型；空列表显示「暂无已启用模型，请前往设置添加」 | [`menu_rows`] |
 //! | 行：名称 + `Provider · N K 上下文 · N ms`；当前模型高亮底 + 对勾；悬停凹陷底 | [`ModelMenu`] |
-//! | 面板：宽 272、最高 320、圆角 lg、`--composer-surface`、`--shadow-floating-md`；Esc / 点击外部关闭；选中后 120 ms 再关闭 | 同（点击外部 = 窗口失去激活） |
+//! | 面板：宽 272、最高 320、圆角 lg、`--composer-surface`、`--shadow-floating-md`；Esc / 点击外部关闭；选中后 120 ms 再关闭 | 同（点击外部 = 窗口失去激活）。**阴影用系统窗口阴影**：窗口就是面板大小，不自绘阴影也不留透明边距 —— 曾自绘 12px 边距 + 阴影，macOS 的系统阴影沿着那圈半透明渐变再画一层，菜单外多出一圈矩形外边缘（目检 #18 反馈） |
 //! | 边框 `--glass-outline` | 改用 `--border-default`（同 Composer，见 S05-16 决策记录） |
 //!
 //! 选择结果经回调交给路由器，由它保存配置（v1 `setDefaultModel`）。
 
 use crate::icons::{IconName, icon};
-use crate::theme_system::{BuddyTheme, box_shadows, tokens::metrics as m};
+use crate::theme_system::{BuddyTheme, tokens::metrics as m};
 use buddy_engine::models::{ModelInfo, ProviderConfig};
 use gpui::{
     AnyWindowHandle, App, Bounds, Context, FocusHandle, Focusable, FontWeight, KeyDownEvent, Pixels, Render, SharedString, Task, Window, WindowBackgroundAppearance, WindowBounds,
@@ -28,8 +28,6 @@ pub const MENU_MAX_HEIGHT: f32 = 320.0;
 pub const ROW_HEIGHT: f32 = 48.0;
 /// 空列表时的高度（v1 内边距 space-5 × 2 + 一行 13px/20px 文字）
 const EMPTY_HEIGHT: f32 = 60.0;
-/// 窗口四周留给阴影的透明边距（独立窗口的阴影会被窗口边界裁掉）
-pub const SHADOW_MARGIN: f32 = 12.0;
 /// 面板与模型按钮的间距（v1 `margin-bottom: space-2`）
 const GAP: f32 = 8.0;
 /// 选中后到关闭的延迟（v1 `setTimeout(onClose, 120)`）
@@ -167,7 +165,6 @@ impl Render for ModelMenu {
             .border_1()
             .border_color(c.border_default)
             .bg(c.composer_surface)
-            .shadow(box_shadows(theme.shadows.shadow_floating_md))
             .when(self.rows.is_empty(), |d| {
                 d.flex().items_center().justify_center().px(px(m::SPACE_4)).text_size(px(m::FONT_SIZE_BASE)).text_color(c.text_muted).child("暂无已启用模型，请前往设置添加")
             })
@@ -206,7 +203,6 @@ impl Render for ModelMenu {
                 }
             }))
             .size_full()
-            .p(px(SHADOW_MARGIN))
             .child(panel)
     }
 }
@@ -231,7 +227,7 @@ pub fn open_model_menu(
     if f32::from(top) < 24.0 {
         top = origin.y + anchor.bottom() + px(GAP);
     }
-    let bounds = Bounds::new(point(right - px(width) - px(SHADOW_MARGIN), top - px(SHADOW_MARGIN)), size(px(width + 2.0 * SHADOW_MARGIN), px(height + 2.0 * SHADOW_MARGIN)));
+    let bounds = Bounds::new(point(right - px(width), top), size(px(width), px(height)));
     cx.open_window(
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),

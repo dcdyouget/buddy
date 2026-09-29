@@ -21,7 +21,7 @@ use buddy_engine::chat::ChatEngine;
 use buddy_engine::models::{AppConfig, Message, MessageRole};
 use buddy_engine::storage;
 use buddy_ui::chat::composer::ComposerEvent;
-use buddy_ui::chat::model_menu::{MENU_WIDTH, ModelMenu, SHADOW_MARGIN, ROW_HEIGHT, menu_size};
+use buddy_ui::chat::model_menu::{MENU_WIDTH, ModelMenu, ROW_HEIGHT, menu_size};
 use buddy_ui::chat::page_state::{Page, expands_window};
 use buddy_ui::chat::router::{Loaded, PageRouter, RouterEvent, preload};
 use buddy_ui::chat_bridge::spawn_engine;
@@ -593,17 +593,17 @@ async fn selftest_models(url: &str, cx: &mut AsyncApp) -> bool {
     check("当前模型高亮", menu.read_with(cx, |m, _| m.highlighted().to_string()).unwrap() == "p1::mock");
     let (w, h) = menu_size(2);
     let menu_bounds = cx.update_window(menu.into(), |_, window, _| window.bounds()).unwrap();
-    check("菜单窗口尺寸 = 面板 + 阴影边距", menu_bounds.size.width == px(w + 2.0 * SHADOW_MARGIN) && menu_bounds.size.height == px(h + 2.0 * SHADOW_MARGIN));
+    check("菜单窗口尺寸 = 面板尺寸（无透明边距）", menu_bounds.size.width == px(w) && menu_bounds.size.height == px(h));
     // 位置：面板底边在模型按钮上方 8px（窗口坐标 → 屏幕坐标）
     let parent = cx.update_window(handle.into(), |_, window, _| window.bounds()).unwrap();
     let button = handle.read_with(cx, |r, cx| r.composer().read(cx).model_button_bounds()).unwrap().unwrap();
-    let panel_bottom = menu_bounds.origin.y + menu_bounds.size.height - px(SHADOW_MARGIN);
+    let panel_bottom = menu_bounds.origin.y + menu_bounds.size.height;
     check("面板底边在模型按钮上方 8px", (f32::from(panel_bottom) - f32::from(parent.origin.y + button.top() - px(8.0))).abs() < 1.0);
-    let panel_right = menu_bounds.origin.x + menu_bounds.size.width - px(SHADOW_MARGIN);
+    let panel_right = menu_bounds.origin.x + menu_bounds.size.width;
     check("面板右缘距父窗口右缘 8px", (f32::from(panel_right) - f32::from(parent.origin.x + parent.size.width - px(8.0))).abs() < 1.0);
 
     // 选择第二行：内存立即生效，写盘串行完成，菜单在延迟后关闭
-    click_menu(menu, MENU_WIDTH / 2.0 + SHADOW_MARGIN, SHADOW_MARGIN + 1.0 + ROW_HEIGHT + ROW_HEIGHT / 2.0, cx).await;
+    click_menu(menu, MENU_WIDTH / 2.0, 1.0 + ROW_HEIGHT + ROW_HEIGHT / 2.0, cx).await;
     check("选择后内存配置立即更新", handle.read_with(cx, |r, _| r.config().selected_model_id.clone()).unwrap() == "p1::mock2");
     check("选中反馈：高亮已移到新行", menu_of(handle, cx).map(|m| m.read_with(cx, |m, _| m.highlighted().to_string()).unwrap()) == Some("p1::mock2".into()) || menu_of(handle, cx).is_none());
     let save = handle.update(cx, |r, _, _| r.take_config_save()).unwrap();
