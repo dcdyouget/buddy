@@ -15,6 +15,7 @@
 //!   多行草稿不撑高气泡；错误条出现在输入区上方，点关闭发出关闭事件。
 
 use buddy_ui::chat::{
+    composer::Composer,
     empty_page::{EmptyPage, EmptyPageEvent},
     no_key_page::{NoKeyPage, NoKeyPageEvent},
 };
@@ -42,7 +43,9 @@ fn open_empty(cx: &mut App, origin_y: f32, height: f32, log: Log) -> WindowHandl
     let bounds = Bounds::new(point(bounds.origin.x, px(origin_y)), bounds.size);
     let handle = cx
         .open_window(options(bounds), |window, cx| {
-            let page = cx.new(|cx| EmptyPage::new(window, cx));
+            let composer = cx.new(|cx| Composer::new(window, cx));
+            composer.update(cx, |c, cx| c.set_standalone(true, cx));
+            let page = cx.new(|_| EmptyPage::new(composer));
             cx.subscribe(&page, move |page, event: &EmptyPageEvent, cx| {
                 match event {
                     EmptyPageEvent::Expand => log.borrow_mut().push("expand"),

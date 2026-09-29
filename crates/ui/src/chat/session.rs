@@ -65,6 +65,30 @@ impl Conversation {
         cx.notify();
     }
 
+    /// 发送被 engine 拒绝（占用生成通道前失败，无任何事件）
+    pub fn send_rejected(&mut self, message: String, cx: &mut Context<Self>) {
+        self.state.send_rejected(message);
+        cx.notify();
+    }
+
+    /// 关闭错误提示（v1 `setError(null)`）
+    pub fn dismiss_error(&mut self, cx: &mut Context<Self>) {
+        if self.state.error.take().is_some() {
+            self.state.revision += 1;
+            cx.notify();
+        }
+    }
+
+    /// 取走待落盘的界面生成消息（配额 / 服务器 / 网络提示，v1 `saveMessage(warningMsg)`）
+    pub fn take_pending_saves(&mut self) -> Vec<Message> {
+        std::mem::take(&mut self.state.pending_saves)
+    }
+
+    /// 取走「需要重新配置 API Key」标记（401 / unauthorized）
+    pub fn take_needs_api_key(&mut self) -> bool {
+        std::mem::take(&mut self.state.needs_api_key)
+    }
+
     /// 应用一批 engine 事件（`chat_bridge::start_chat` 的回调）
     pub fn apply_events(&mut self, events: Vec<StreamEvent>, cx: &mut Context<Self>) {
         let revision = self.state.revision;

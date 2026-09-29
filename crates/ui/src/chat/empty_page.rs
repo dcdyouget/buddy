@@ -3,7 +3,7 @@
 //! | v1 | 本模块 |
 //! |----|------|
 //! | 透明外壳（不再叠第二层玻璃）、内容贴底 | 根节点无底色，纵向 `justify_end` |
-//! | 输入区 `hideBorder` + `disableAutoResize` → 独立气泡 | [`Composer::set_standalone`] |
+//! | 输入区 `hideBorder` + `disableAutoResize` → 独立气泡 | [`Composer::set_standalone`]（路由器在切页时设置） |
 //! | 顶部居中的「展开」按钮：24×20、圆角 full、`--border-subtle`、`--control-surface`、`--shadow-static`、`ChevronUp` 14；悬停品牌色字 + `--composer-surface` 底；title「展开对话」 | 同，发出 [`EmptyPageEvent::Expand`] |
 //! | 有错误时输入区上方显示 `.chat-error` | [`EmptyPage::set_error`] + [`error_banner`]，关闭发出 [`EmptyPageEvent::DismissError`] |
 //! | 顶部左右两块拖拽区（`.empty-drag-region`） | **不做**：窗口拖拽属 Phase 07 |
@@ -41,10 +41,9 @@ pub struct EmptyPage {
 impl EventEmitter<EmptyPageEvent> for EmptyPage {}
 
 impl EmptyPage {
-    /// 新建；输入区切换为独立气泡
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let composer = cx.new(|cx| Composer::new(window, cx));
-        composer.update(cx, |c, cx| c.set_standalone(true, cx));
+    /// 新建。输入区由外部提供并与对话页共用同一个实体（v1 草稿存在 `chatStore`，两页共享）；
+    /// 是否为独立气泡由路由器在切页时设置（[`Composer::set_standalone`]）
+    pub fn new(composer: Entity<Composer>) -> Self {
         Self { composer, error: None }
     }
 

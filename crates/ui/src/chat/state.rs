@@ -169,6 +169,24 @@ fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+/// 新建一条用户消息（v1 `sendMessage` 的 `userMessage`；附件随 S05-07 接入）
+pub fn user_message(content: &str) -> Message {
+    Message {
+        id: format!("u-{}", unique_suffix()),
+        role: MessageRole::User,
+        content: content.to_string(),
+        images: Vec::new(),
+        blocks: None,
+        model_id: None,
+        created_at: now_secs(),
+        tool_calls: None,
+        tool_call_id: None,
+        tool_name: None,
+        is_error: None,
+        parent_message_id: None,
+    }
+}
+
 /// 新建一条 assistant 消息（v1 `createStreamingAssistantMessage`）
 fn assistant_message(model_id: &str) -> Message {
     Message {
