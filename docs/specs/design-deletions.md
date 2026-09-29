@@ -38,7 +38,7 @@
 | 设计文档 | 退役于 spec | why 迁移要求 |
 |---------|------------|-------------|
 | `docs/design/rust-architecture.md` | S02-*, S07-01 | 模块职责边界的理由需迁移到 crate 级文档注释 |
-| `docs/design/pages-and-states.md`（已部分退役，剩余：ChatPage 审批 / 提问 S05-13、模型下拉 S05-15、SettingsPage S06-*、Global Interactions S07-*） | S05-13, S05-15, S06-*, S07-*, S10-03 | 剩余段落随各 spec 实现后删除 |
+| `docs/design/pages-and-states.md`（已部分退役，剩余：ChatPage 审批 / 提问 S05-13、SettingsPage S06-*、Global Interactions S07-*） | S05-13, S06-*, S07-*, S10-03 | 剩余段落随各 spec 实现后删除 |
 | `docs/design/component-mapping.md` | S05-*, S06-* | 组件拆分的理由需迁移 |
 | `docs/design/overview.md` | 最后 | 架构约束需先迁移到 `AGENTS.md` 后再删 |
 
@@ -62,7 +62,7 @@
 
 | 日期 | 文件 / 段落 | 由哪些 spec 替代 | why 迁移去向 |
 |------|------------|-----------------|-------------|
-| 2026-09-29 | `docs/design/pages-and-states.md`（**部分**：State vs Component、EmptyPage、NoApiKeyPage、State Flow、Known Implementation Notes；保留 ChatPage 审批 / 提问、模型下拉、SettingsPage、Global Interactions） | S05-16（空态 / 无 Key 页）、S05-18（状态机 `crates/ui/src/chat/page_state.rs`、路由器 `router.rs`） | 设置叠加层不卸载底层页、添加 Provider 中间态不得打断设置流程、窗口仅在离开紧凑页时展开一次（硬约束 6 的准确含义）→ `page_state.rs` 模块文档与 `expands_window`；启动总是空态 → 同文件与 spec 决策记录；`add-provider` 遗留类型值不迁移。**文档与代码不符**：EmptyPage 段写的紧凑窗口 460×78 已过时（v1 实为 560×60，`tauri.conf.json` / `geometry.rs`）；「`setPage` 会在 compact → content 时主动 resize，与硬约束冲突」实为硬约束的准确含义，非冲突 |
+| 2026-09-29 | `docs/design/pages-and-states.md`（**部分**：State vs Component、EmptyPage、NoApiKeyPage、State Flow、Known Implementation Notes、模型下拉；保留 ChatPage 审批 / 提问、SettingsPage、Global Interactions） | S05-15（模型下拉 `model_menu.rs`）、S05-16（空态 / 无 Key 页）、S05-18（状态机 `crates/ui/src/chat/page_state.rs`、路由器 `router.rs`） | 设置叠加层不卸载底层页、添加 Provider 中间态不得打断设置流程、窗口仅在离开紧凑页时展开一次（硬约束 6 的准确含义）→ `page_state.rs` 模块文档与 `expands_window`；模型菜单独立于窗口绘制、紧凑窗口不扩高 → `model_menu.rs` 模块文档；启动总是空态 → 同文件与 spec 决策记录；`add-provider` 遗留类型值不迁移。**文档与代码不符**：EmptyPage 段写的紧凑窗口 460×78 已过时（v1 实为 560×60，`tauri.conf.json` / `geometry.rs`）；「`setPage` 会在 compact → content 时主动 resize，与硬约束冲突」实为硬约束的准确含义，非冲突 |
 
 ## 退役记录
 

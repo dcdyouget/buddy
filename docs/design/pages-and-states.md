@@ -2,14 +2,10 @@
 
 > **部分退役（S05-18，2026-09-29）**
 >
-> - 已实现并删除：State vs Component 表、EmptyPage、NoApiKeyPage、State Flow、Known Implementation Notes —— 转换条件与 why 见 `crates/ui/src/chat/page_state.rs` 模块文档，路由与 engine 接入见 `crates/ui/src/chat/router.rs`
-> - 未实现（保留）：ChatPage 的审批 / 提问（S05-13）、模型下拉（S05-15）、SettingsPage（S06-*）、Global Interactions（S07-*）
+> - 已实现并删除：State vs Component 表、EmptyPage、NoApiKeyPage、State Flow、Known Implementation Notes、模型下拉（S05-15，`crates/ui/src/chat/model_menu.rs`） —— 转换条件与 why 见 `crates/ui/src/chat/page_state.rs` 模块文档，路由与 engine 接入见 `crates/ui/src/chat/router.rs`
+> - 未实现（保留）：ChatPage 的审批 / 提问（S05-13）、SettingsPage（S06-*）、Global Interactions（S07-*）
 >
 > 页面状态定义于 `src/types/index.ts`（v1，`v1-final`）；v2 的页面枚举是 `page_state::Page`。
-
-## 模型下拉（S05-15）
-
-模型下拉菜单不是根页面，而是 Empty/Chat 内部的 popover state。紧凑窗口主动打开菜单时会只增加窗口高度，为浮层提供可见空间。
 
 ## Pages
 
