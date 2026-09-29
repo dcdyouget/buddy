@@ -1,10 +1,10 @@
 # S05-18 页面状态机
 
-> 状态: `blocked`
+> 状态: `done`
 > Phase: 05
 > 依赖: S05-16
-> 阻塞: 等待用户目检（`handoff.md` §6.5 第 17 项）
-> 退役设计文档: `docs/design/pages-and-states.md`（与 S10-03 共同）
+> 阻塞: —
+> 退役设计文档: `docs/design/pages-and-states.md`（部分；与 S05-13 / S05-15 / S06-* / S07-* / S10-03 共同）
 
 ## 目标
 
@@ -31,7 +31,7 @@ chat / empty / no-api-key / settings 的切换，与 v1 一致；窗口尺寸在
 - [x] 端到端：真实 engine + 磁盘 + mock 模型，覆盖发送 / 401 / 429 / 500 / 停止 / 设置 / 展开 / 补齐配置 / 配置失效（T25、T26）
 - [x] 历史：重启读回最新一页，触顶经 engine 读取更早一页（T27）
 - [x] 切换时窗口尺寸不变 —— 测试（T25：全程窗口尺寸与开窗时一致；拦截：切页时改窗口尺寸 → FAIL）
-- [ ] 观感与流程 —— **需用户目检**（handoff §6.5 第 17 项）
+- [x] 观感与流程 —— 用户目检通过（2026-09-29，handoff §6.5 第 17 项；首轮反馈的窗口壳、图标缺失、401 后窗口缩小均已处理）
 
 ## 证据
 
@@ -74,11 +74,12 @@ chat / empty / no-api-key / settings 的切换，与 v1 一致；窗口尺寸在
 | 流式结束的落点 | 无论当前页都 `set_page(conversation / noapikey)` | 与 v1 `useStreaming` 逐字一致，包括一个 v1 特性：流式结束时若设置页正开着，会被切走。窗口壳接入托盘「设置…」后可能出现，如需改为「设置页开着就不动」是一处小改动（`PageState::stream_finished`） |
 | 401 之外的错误 | 留在（或回到）对话页，提示消息落盘 | 与 v1 一致：配额 / 服务器 / 网络三类追加一条 assistant 提示并 `saveMessage` |
 | 图标不继承颜色（目检 #17 发现） | `icons::icon()` 返回 `Icon` 元素，绘制时读取祖先文字颜色；门禁新增 S01-04-5d 禁止直接 `svg()` | GPUI 的 `Svg` 只读自己的样式，不继承父元素 `text_color`（`gpui/src/elements/svg.rs`）：此前输入区的设置 / 模型 / 发送图标、操作栏的「复制」「回到问题」图标、悬停变色全部没有画出来。用临时打开 gpui `test-support`（`Window::render_to_image`）把窗口渲染成图片确认，修复前后对比；`test-support` 会改 Cargo.lock（+85 行），故未提交，诊断代码已移除。**此前已通过的目检项里的图标（#4 复制勾、#12 思考块、#13 工具卡片状态、#14 操作栏）现在才真正显示，请顺带留意** |
+| 设置页窗口大小不一致 | 保持 v1 行为，交 Phase 07 | 目检 #17 指出：从无 Key 页（紧凑页）进设置为 760×640，从对话页点齿轮进设置保持 750×500，大小不同。这是 v1 `geometry.rs` + `resizeWindowForPage` 的行为（仅离开紧凑页时改尺寸）；路由器不改窗口，替身按 v1 复现。是否统一由 S07-06 窗口定位时决定（建议：进设置一律用同一尺寸） |
 | 已知未接 | 审批弹窗、`ask_user` 提问、模型选择、附件 | 分别归 S05-13 / S05-15 / S05-07；输入区上对应事件已留位置 |
 | 移除 `add-provider` 页值 | 不迁移 | v1 遗留类型值，路由器无对应分支；添加 Provider 是设置页内部的侧滑层（S06-02） |
 
 ## 完成记录
 
-- 日期：
-- commit：
-- 设计文档处置：待 `done` 时执行（`docs/design/pages-and-states.md` 由 S05-18 与 S10-03 共同退役）。已实现且 why 已迁入 `page_state.rs` 模块文档的段落：State vs Component、EmptyPage、NoApiKeyPage、State Flow、Known Implementation Notes；**仍需保留并标注**：ChatPage 的审批 / 提问（S05-13）、SettingsPage（S06）、Global Interactions（Esc / 失焦 / 全局热键 / 选中文本，S07）
+- 日期：2026-09-29
+- commit：`c2a7d25`、`3160f42`、`dcce0c1`
+- 设计文档处置：`docs/design/pages-and-states.md` 部分退役 —— 已删除 State vs Component、EmptyPage、NoApiKeyPage、State Flow、Known Implementation Notes（why 已迁入 `page_state.rs` 模块文档），保留 ChatPage 审批 / 提问（S05-13）、模型下拉（S05-15）、SettingsPage（S06）、Global Interactions（S07）并在文件头标注；已登记 `design-deletions.md`
