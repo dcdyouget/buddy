@@ -25,7 +25,6 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use super::rows::{self, Row, RowKind};
 use super::session::Conversation;
-use super::state::ToolStatus;
 use crate::markdown::{
     self, code_block,
     normalize::normalize_markdown,
@@ -85,6 +84,8 @@ pub struct Transcript {
     pub rendered_rows: usize,
     /// 行重测计数（自检用：验证流式只重测一行）
     pub remeasured_rows: usize,
+    /// 提问卡被渲染的次数（自检用：回答之后不应再渲染，应与其他工具一致）
+    pub ask_card_renders: usize,
     /// 上一次同步时是否在流式（检测「开始流式」以恢复跟随）
     was_streaming: bool,
     /// 在底部时看到的最后一条可见消息（v1 `lastSeenMessageCountRef` 记条数；
@@ -140,6 +141,7 @@ impl Transcript {
             registry: Arc::new(LanguageRegistry::default()),
             rendered_rows: 0,
             remeasured_rows: 0,
+            ask_card_renders: 0,
             was_streaming: false,
             last_seen: None,
             unseen_pulse: None,
@@ -405,13 +407,12 @@ impl Transcript {
                 let live_msg = state.live.is_some() && state.messages.iter().rposition(|m| m.role == MessageRole::Assistant) == Some(*msg);
                 let expanded = self.tool_expanded.get(&row.id).copied().unwrap_or_else(|| tool_card::default_expanded(&tool, live_msg, awaiting));
                 let mut details = Vec::new();
-                if expanded && tool.name == "ask_user" {
-                    // v1 `ToolSection`：ask_user 展开时是提问卡（自带「用户回应」），不显示调用参数 / 执行结果
-                    let display = if awaiting { state.question.as_ref().map(ask_card::from_question).unwrap_or_default() } else { ask_card::parse_arguments(&tool.arguments) };
+                if ask_card::shows_card(&tool.name, awaiting, expanded) {
+                    // 等待回答时展开的是提问卡；回答之后与其他工具统一（折叠 + 调用参数 / 执行结果，目检 #19 反馈，偏离 v1 的「用户回应」）
+                    let display = state.question.as_ref().map(ask_card::from_question).unwrap_or_default();
+                    self.ask_card_renders += 1;
                     let card = self.ask_card(&tool.id, &row.id, cx);
-                    let finished = matches!(tool.status, ToolStatus::Done | ToolStatus::Error);
-                    let input = CardInput { display, awaiting, has_result: finished, interrupted: tool.status == ToolStatus::Interrupted, result: tool.result.clone().filter(|_| finished) };
-                    card.update(cx, |c, cx| c.sync(input, cx));
+                    card.update(cx, |c, cx| c.sync(CardInput { display, awaiting }, cx));
                     details.push(card.into_any_element());
                 } else if expanded {
                     let (_, result) = tool_card::detail_sources(&tool);

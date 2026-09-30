@@ -756,6 +756,18 @@ async fn selftest_interactions(url: &str, cx: &mut AsyncApp) -> bool {
     check("回合结束", wait_until(handle, cx, |cx| !streaming(handle, cx)).await);
     let result = tool_result(cx, &id).unwrap_or_default();
     check("engine 收到选项与补充输入（按 id 配对）", result.contains("User selected: 方案 B") && result.contains("User input: 更快"));
+    // 回答之后这一行与其他工具（创建文件等）统一：默认折叠；手动展开也是「调用参数 / 执行结果」，不再渲染提问卡
+    check("回答后的工具行默认折叠（与已完成的其他工具一致）", !buddy_ui::chat::tool_card::default_expanded(&conversation.read_with(cx, |c, _| c.state.tools.get(&id).cloned()).unwrap(), false, false));
+    let row_id = transcript.read_with(cx, |t, _| t.rows().iter().find(|r| r.id.ends_with(&format!(".t.{id}"))).map(|r| r.id.clone())).unwrap_or_default();
+    check("找到该工具行", !row_id.is_empty());
+    let renders = transcript.read_with(cx, |t, _| t.ask_card_renders);
+    let _ = cx.update_window(handle.into(), |_, _, cx| transcript.update(cx, |t, cx| t.toggle_tool_for_test(&row_id, cx)));
+    for _ in 0..5 {
+        cx.background_executor().timer(Duration::from_millis(30)).await;
+        draw(handle, cx).await;
+    }
+    check("手动展开已回答的提问行：不再渲染提问卡（与创建文件的展示统一）", transcript.read_with(cx, |t, _| t.ask_card_renders) == renders && renders > 0);
+    let _ = cx.update_window(handle.into(), |_, _, cx| transcript.update(cx, |t, cx| t.toggle_tool_for_test(&row_id, cx)));
 
     // ── ask_user：跳过 ──
     type_and_send(handle, "请提问", cx).await;

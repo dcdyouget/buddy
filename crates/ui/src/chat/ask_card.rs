@@ -7,7 +7,7 @@
 //! | 选中且要求补充的选项，下面出现「{标签} · 补充信息」输入框 | 每个选项一个单行 [`TextArea`] |
 //! | 「或输入自定义回答」多行框，Cmd / Ctrl+Enter 提交（Enter 换行） | [`EnterMode::NewlineOnEnter`] |
 //! | 确认 / 跳过；提交中禁用；失败提示「提交失败，请重试」；可提交条件 | [`can_submit`]、[`build_answer`] |
-//! | 已有结果时显示「用户回应」 | 同 |
+//! | 已有结果时显示「用户回应」 | **不做**：回答之后这一行与其他工具（如创建文件）统一，折叠成普通工具卡，展开看「调用参数 / 执行结果」（见 [`shows_card`]；目检 #19 反馈，偏离 v1） |
 //! | 参数解析：只取问题最后一句、兼容 `multi_select` / `multiSelect` 等两种写法 | [`parse_arguments`]、[`extract_question`] |
 //!
 //! 回答经 [`AnswerFn`] 交给路由器 → `ChatEngine::answer_tool_question`（按调用 id 配对）。
@@ -153,19 +153,12 @@ pub fn from_question(q: &Question) -> AskDisplay {
 
 // ───────────────────────── 交互逻辑（v1 AskUserCard）─────────────────────────
 
-/// 提示标题
-pub fn prompt_title(interrupted: bool, has_result: bool, awaiting: bool, submitted: bool) -> &'static str {
-    if interrupted {
-        "询问已中断"
-    } else if has_result {
-        "询问已完成"
-    } else if awaiting {
-        "模型正在等待你的回答"
-    } else if submitted {
-        "回答已提交"
-    } else {
-        "模型正在准备问题"
-    }
+/// 提示标题（卡片只在等待回答时显示，见 [`shows_card`]）
+pub const AWAITING_TITLE: &str = "模型正在等待你的回答";
+
+/// 工具行展开时是否显示提问卡：只有 ask_user 在等待回答时。回答之后按普通工具卡显示（与创建文件等一致）
+pub fn shows_card(tool_name: &str, awaiting: bool, expanded: bool) -> bool {
+    tool_name == "ask_user" && awaiting && expanded
 }
 
 /// v1 `toggleOption`：多选切换，单选替换
@@ -222,12 +215,6 @@ pub struct CardInput {
     pub display: AskDisplay,
     /// 是否正在等待这条回答
     pub awaiting: bool,
-    /// 工具已有结果
-    pub has_result: bool,
-    /// 已中断
-    pub interrupted: bool,
-    /// 用户回应
-    pub result: Option<String>,
 }
 
 // ───────────────────────── 卡片实体 ─────────────────────────
@@ -401,7 +388,7 @@ impl Render for AskUserCard {
         let c = theme.colors;
         let display = &self.input.display;
         let awaiting = self.input.awaiting;
-        let title = prompt_title(self.input.interrupted, self.input.has_result, awaiting, self.submitted);
+        let title = AWAITING_TITLE;
         let can_submit = self.can_submit(cx);
 
         let chip = |text: &str, accent: bool| {
@@ -648,22 +635,6 @@ impl Render for AskUserCard {
                 )
         });
 
-        let answer = self.input.has_result.then(|| self.input.result.clone()).flatten().map(|result| {
-            div()
-                .px(px(m::SPACE_3))
-                .py(px(m::SPACE_2))
-                .border_l_2()
-                .border_color(c.tool_ui_accent)
-                .rounded_r(px(m::RADIUS_MD))
-                .flex()
-                .gap(px(m::SPACE_2))
-                .text_size(px(m::FONT_SIZE_SM))
-                .text_color(c.text_muted)
-                .bg(c.bg_elevated)
-                .child("用户回应")
-                .child(div().font_weight(FontWeight(500.0)).text_color(c.text_primary).child(SharedString::from(result)))
-        });
-
         div()
             .flex()
             .flex_col()
@@ -672,7 +643,6 @@ impl Render for AskUserCard {
             .children(options)
             .children(followups)
             .children(footer)
-            .children(answer)
     }
 }
 
@@ -717,12 +687,11 @@ mod tests {
     }
 
     #[test]
-    fn titles_follow_v1_priority() {
-        assert_eq!(prompt_title(true, true, true, true), "询问已中断");
-        assert_eq!(prompt_title(false, true, true, true), "询问已完成");
-        assert_eq!(prompt_title(false, false, true, true), "模型正在等待你的回答");
-        assert_eq!(prompt_title(false, false, false, true), "回答已提交");
-        assert_eq!(prompt_title(false, false, false, false), "模型正在准备问题");
+    fn question_card_is_only_shown_while_awaiting_an_answer() {
+        assert!(shows_card("ask_user", true, true));
+        assert!(!shows_card("ask_user", false, true), "回答之后与其他工具一致：普通工具卡");
+        assert!(!shows_card("ask_user", true, false), "折叠时不显示");
+        assert!(!shows_card("create_file", true, true), "只有 ask_user");
     }
 
     #[test]
