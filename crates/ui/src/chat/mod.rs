@@ -8,6 +8,7 @@
 //! - [`composer`] —— 输入区（S05-06）
 //! - [`think_block`] —— 思考块（S05-09）
 //! - [`tool_card`] —— 工具调用卡片（S05-10）
+//! - [`web_search`] —— 网络搜索卡片（S05-11）
 //! - [`message_actions`] —— 回答操作栏（S05-14）
 //! - [`empty_page`] / [`no_key_page`] —— 空态页与无 Key 页（S05-16）
 //! - [`approval_panel`] —— 工具审批浮层（S05-13）
@@ -32,6 +33,7 @@ pub mod state;
 pub mod think_block;
 pub mod tool_card;
 pub mod transcript;
+pub mod web_search;
 
 /// 注册聊天界面所需的键位（输入框）。须在创建窗口前调用一次。
 pub fn init(cx: &mut gpui::App) {

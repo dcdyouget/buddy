@@ -45,6 +45,30 @@ fn sheen(ms: f64) -> f32 {
     -1.2 + 2.4 * k
 }
 
+/// 三点加载（思考块与网络搜索块共用）
+pub(crate) fn loader(accent: gpui::Rgba, now_ms: f64, reduce: bool) -> gpui::Div {
+    div().min_w(px(m::SPACE_4)).h(px(m::SPACE_3)).flex().items_center().justify_center().gap(px(m::SPACE_1 / 2.0)).children((0..3).map(|i| {
+        let (opacity, dy) = if reduce { (0.32, 0.0) } else { dot(now_ms, i) };
+        div().size(px(m::SPACE_1 / 1.5)).mt(px(dy)).rounded(px(m::RADIUS_FULL)).bg(Hsla::from(accent).opacity(opacity))
+    }))
+}
+
+/// 流式光泽层：两段渐变拼成「透明 → 高光 → 透明」（GPUI 渐变只有两个色标）
+pub(crate) fn sheen_layer(highlight: gpui::Rgba, now_ms: f64) -> gpui::Div {
+    let hi = Hsla::from(highlight).opacity(0.34);
+    let clear = Hsla::from(highlight).opacity(0.0);
+    div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .w_full()
+        .left(relative(sheen(now_ms)))
+        .flex()
+        .child(div().w(relative(0.22)))
+        .child(div().w(relative(0.26)).h_full().bg(linear_gradient(105., linear_color_stop(clear, 0.), linear_color_stop(hi, 1.))))
+        .child(div().w(relative(0.30)).h_full().bg(linear_gradient(105., linear_color_stop(hi, 0.), linear_color_stop(clear, 1.))))
+}
+
 /// 渲染思考块。`content_view` 为展开时的内容（markdown 元素）；`since_ms` 为动画时钟。
 #[allow(clippy::too_many_arguments)]
 pub fn think_block(
@@ -65,16 +89,7 @@ pub fn think_block(
     }
     let preview_text = preview(content, streaming);
     let has_preview = !preview_text.is_empty();
-    let loader = streaming.then(|| {
-        div().min_w(px(m::SPACE_4)).h(px(m::SPACE_3)).flex().items_center().justify_center().gap(px(m::SPACE_1 / 2.0)).children((0..3).map(|i| {
-            let (opacity, dy) = if reduce { (0.32, 0.0) } else { dot(now_ms, i) };
-            div()
-                .size(px(m::SPACE_1 / 1.5))
-                .mt(px(dy))
-                .rounded(px(m::RADIUS_FULL))
-                .bg(Hsla::from(c.tool_ui_accent).opacity(opacity))
-        }))
-    });
+    let loader = streaming.then(|| loader(c.tool_ui_accent, now_ms, reduce));
     let header = div()
         .id(id.clone())
         .flex()
@@ -113,21 +128,7 @@ pub fn think_block(
             })
     });
 
-    // 光泽：两段渐变拼成「透明 → 高光 → 透明」（GPUI 渐变只有两个色标）
-    let sheen_layer = (streaming && !reduce).then(|| {
-        let hi = Hsla::from(c.tool_ui_flow_highlight).opacity(0.34);
-        let clear = Hsla::from(c.tool_ui_flow_highlight).opacity(0.0);
-        div()
-            .absolute()
-            .top_0()
-            .bottom_0()
-            .w_full()
-            .left(relative(sheen(now_ms)))
-            .flex()
-            .child(div().w(relative(0.22)))
-            .child(div().w(relative(0.26)).h_full().bg(linear_gradient(105., linear_color_stop(clear, 0.), linear_color_stop(hi, 1.))))
-            .child(div().w(relative(0.30)).h_full().bg(linear_gradient(105., linear_color_stop(hi, 0.), linear_color_stop(clear, 1.))))
-    });
+    let sheen_layer = (streaming && !reduce).then(|| sheen_layer(c.tool_ui_flow_highlight, now_ms));
 
     div()
         .relative()

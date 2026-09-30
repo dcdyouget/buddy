@@ -159,6 +159,55 @@ impl ChatPreview {
         });
     }
 
+    /// 模拟联网搜索（S05-11）：搜索中停留 `hold` → 三条结果（读到正文 / 正文读取失败 / 仅摘要）→ 最终回答
+    fn simulate_search(&mut self, hold: Duration, cx: &mut Context<Self>) {
+        let conversation = self.conversation.clone();
+        let user = message(format!("u-search-{}", buddy_ui::chat::state::unique_suffix()), MessageRole::User, "帮我搜索一下 Buddy 桌面 AI 聊天");
+        conversation.update(cx, |c, cx| c.begin_send(user, "mock-model", cx));
+        cx.spawn(async move |_, cx: &mut AsyncApp| {
+            let send = |events: Vec<StreamEvent>, cx: &mut AsyncApp| {
+                let _ = conversation.update(cx, |c, cx| c.apply_events(events, cx));
+            };
+            let args = r#"{"query":"Buddy 桌面 AI 聊天"}"#;
+            send(
+                vec![
+                    StreamEvent::Start,
+                    StreamEvent::ToolCallStart { id: "call-search".into(), name: "websearch".into(), content_index: 0 },
+                    StreamEvent::ToolCallEnd { id: "call-search".into(), name: "websearch".into(), arguments: args.into() },
+                    StreamEvent::TurnEnd { tool_calls_pending: 1 },
+                    StreamEvent::ToolExecuting { id: "call-search".into(), name: "websearch".into() },
+                ],
+                cx,
+            );
+            cx.background_executor().timer(hold).await;
+            let payload = serde_json::json!({
+                "status": "partial",
+                "query": "Buddy 桌面 AI 聊天",
+                "provider": "so_360+duckduckgo",
+                "providers": [{"name": "so_360", "status": "ok", "result_count": 2}, {"name": "duckduckgo", "status": "ok", "result_count": 1}],
+                "note": "DuckDuckGo 只返回了 1 条结果，已与 360 搜索合并。",
+                "results": [
+                    {"rank": 1, "source": "so_360", "title": "Buddy —— 一按即用的桌面 AI 聊天", "url": "https://example.com/buddy", "snippet": "按下全局快捷键，弹出轻量无边框窗口，与 AI 对话，点击外部即收起。支持流式输出、思考过程、工具调用与联网搜索。这是一段比较长的摘要，用来观察最多三行的截断效果。", "content": "……网页正文……"},
+                    {"rank": 2, "source": "duckduckgo", "title": "", "url": "https://example.org/a/very/long/path/that/should/be/truncated/in/the/title/row", "snippet": "没有标题时用链接作为标题。", "fetch_error": "请求超时"},
+                    {"rank": 3, "source": "so_360", "title": "另一个来源", "url": "https://example.net/", "snippet": "只有搜索摘要。"}
+                ]
+            })
+            .to_string();
+            send(
+                vec![
+                    StreamEvent::ToolResult { id: "call-search".into(), name: "websearch".into(), content: payload, images: Vec::new(), is_error: false },
+                    StreamEvent::TextStart { content_index: 0 },
+                    StreamEvent::TextDelta { content_index: 0, delta: "Buddy 是一个桌面 AI 聊天工具，详见[官网](https://example.com/buddy)。".into() },
+                    StreamEvent::TextEnd { content_index: 0, content: "Buddy 是一个桌面 AI 聊天工具，详见[官网](https://example.com/buddy)。".into() },
+                    StreamEvent::TurnEnd { tool_calls_pending: 0 },
+                    StreamEvent::Done { reason: StopReason::Stop, full_text: String::new() },
+                ],
+                cx,
+            );
+        })
+        .detach();
+    }
+
     /// 模拟思考 + 工具调用（S05-09 / S05-10）：思考流式 → 读取文件（成功，长结果）→ 浏览目录（失败）→ 最终回答。
     /// `hold` 期间工具停在「执行中」，便于观察与自检
     fn simulate_tools(&mut self, hold: Duration, cx: &mut Context<Self>) {
@@ -285,6 +334,7 @@ impl Render for ChatPreview {
                         d.child(button("reply", "模拟流式回复").on_click(cx.listener(|this, _, _, cx| this.simulate_reply("请模拟一段流式回复", cx))))
                             .child(button("error", "模拟出错").on_click(cx.listener(|this, _, _, cx| this.simulate_error(cx))))
                             .child(button("tools", "模拟思考与工具").on_click(cx.listener(|this, _, _, cx| this.simulate_tools(Duration::from_secs(3), cx))))
+                            .child(button("search", "模拟联网搜索").on_click(cx.listener(|this, _, _, cx| this.simulate_search(Duration::from_secs(3), cx))))
                     })
                     .child(div().text_color(theme.colors.text_muted).child(format!("{} 行", self.transcript.read(cx).rows().len()))),
             )
@@ -637,6 +687,102 @@ async fn selftest_keyboard(handle: WindowHandle<ChatPreview>, cx: &mut AsyncApp)
     (t16, t17)
 }
 
+
+/// T31 网络搜索卡片（S05-11）：默认折叠、点开看来源、点链接打开、搜索中/完成的状态
+async fn selftest_search(handle: WindowHandle<ChatPreview>, cx: &mut AsyncApp) -> bool {
+    use buddy_ui::chat::state::ToolStatus;
+    use buddy_ui::gpui::{Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, point};
+    let transcript = handle.read_with(cx, |p, _| p.transcript.clone()).unwrap();
+    wait_idle(handle, cx).await;
+    let opened: Rc<std::cell::RefCell<Vec<String>>> = Rc::default();
+    let sink = opened.clone();
+    transcript.update(cx, |t, _| t.set_open_handler(Rc::new(move |url, _| sink.borrow_mut().push(url.to_string()))));
+    handle.update(cx, |p, _, cx| p.simulate_search(Duration::from_millis(1200), cx)).unwrap();
+    let status = |cx: &mut AsyncApp| handle.read_with(cx, |p, cx| p.conversation.read(cx).state.tools.get("call-search").map(|t| t.status)).unwrap();
+    let mut executing = false;
+    for _ in 0..80 {
+        cx.background_executor().timer(Duration::from_millis(25)).await;
+        draw(handle, cx).await;
+        if status(cx) == Some(ToolStatus::Executing) {
+            executing = true;
+            break;
+        }
+    }
+    let row_id = transcript.read_with(cx, |t, _| t.rows().iter().rev().find(|r| r.id.ends_with(".t.call-search")).map(|r| r.id.clone())).unwrap_or_default();
+    let height = |cx: &mut AsyncApp| transcript.read_with(cx, |t, _| t.painted_row_bounds(&row_id).map(|b| f32::from(b.size.height)));
+    for _ in 0..3 {
+        draw(handle, cx).await;
+    }
+    let collapsed_running = height(cx);
+    // 完成后仍是折叠的（v1 `useState(false)`）
+    wait_idle(handle, cx).await;
+    for _ in 0..3 {
+        draw(handle, cx).await;
+    }
+    let collapsed_done = height(cx);
+    let done = status(cx) == Some(ToolStatus::Done);
+    // 点开：行重测、变高（三条来源）
+    let before = transcript.read_with(cx, |t, _| t.remeasured_rows);
+    transcript.update(cx, |t, cx| t.toggle_tool_for_test(&row_id, cx));
+    for _ in 0..3 {
+        draw(handle, cx).await;
+    }
+    let expanded_h = height(cx);
+    let remeasured = transcript.read_with(cx, |t, _| t.remeasured_rows) - before;
+    let expands = collapsed_done.zip(expanded_h).is_some_and(|(c, e)| e > c + 150.0) && remeasured >= 1;
+    // 点第一条来源的标题链接：在行内扫描（避开标题栏，点标题栏会折叠）
+    let bounds = transcript.read_with(cx, |t, _| t.painted_row_bounds(&row_id));
+    let mut hit = None;
+    if let Some(b) = bounds {
+        let (left, top) = (f32::from(b.left()), f32::from(b.top()));
+        'scan: for dy in (90..260).step_by(6) {
+            for dx in (110..520).step_by(18) {
+                let p = point(px(left + dx as f32), px(top + dy as f32));
+                for e in [
+                    PlatformInput::MouseMove(MouseMoveEvent { position: p, pressed_button: None, modifiers: Modifiers::default() }),
+                    PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Left, position: p, modifiers: Modifiers::default(), click_count: 1, first_mouse: false }),
+                    PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Left, position: p, modifiers: Modifiers::default(), click_count: 1 }),
+                ] {
+                    let _ = cx.update_window(handle.into(), |_, window, cx| window.dispatch_event(e, cx));
+                }
+                draw(handle, cx).await;
+                if !opened.borrow().is_empty() {
+                    hit = Some((dx, dy));
+                    break 'scan;
+                }
+            }
+        }
+    }
+    let url_ok = opened.borrow().first().map(String::as_str) == Some("https://example.com/buddy");
+    // 再点标题栏：收起（行的上边距 + 卡片外边距之下才是标题栏，自上而下扫描直到高度变化）
+    if let Some(b) = bounds {
+        for dy in (10..70).step_by(4) {
+            let p = point(b.left() + px(200.0), b.top() + px(dy as f32));
+            for e in [
+                PlatformInput::MouseMove(MouseMoveEvent { position: p, pressed_button: None, modifiers: Modifiers::default() }),
+                PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Left, position: p, modifiers: Modifiers::default(), click_count: 1, first_mouse: false }),
+                PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Left, position: p, modifiers: Modifiers::default(), click_count: 1 }),
+            ] {
+                let _ = cx.update_window(handle.into(), |_, window, cx| window.dispatch_event(e, cx));
+                draw(handle, cx).await;
+            }
+            draw(handle, cx).await;
+            if height(cx).is_some_and(|h| h < 200.0) {
+                break;
+            }
+        }
+    }
+    for _ in 0..3 {
+        draw(handle, cx).await;
+    }
+    let refolded_h = height(cx);
+    let refolded = refolded_h.zip(collapsed_done).is_some_and(|(h, c)| (h - c).abs() < 1.0);
+    println!("T31: 搜索中出现 {executing}；折叠高（搜索中 {collapsed_running:?} / 完成后 {collapsed_done:?}）；完成 {done}；点开后 {expanded_h:?}、重测 {remeasured} 行；点链接命中 {hit:?} → {:?}；再点标题栏收起 {refolded}（{refolded_h:?}）", opened.borrow());
+    let ok = executing && collapsed_running.is_some_and(|h| h < 100.0) && collapsed_done.is_some_and(|h| h < 100.0) && done && expands && url_ok && refolded;
+    println!("{} S05-11 T31 网络搜索卡片（默认折叠 / 点开 / 点链接打开 / 收起）", if ok { "PASS" } else { "FAIL" });
+    ok
+}
+
 /// T22：历史分页 —— 触顶加载更早一页，可见内容不移动
 async fn selftest_paging(cx: &mut AsyncApp) -> bool {
     let gate = Rc::new(Cell::new(false));
@@ -816,7 +962,8 @@ fn selftest(handle: WindowHandle<ChatPreview>, cx: &mut App) {
         handle.update(cx, |p, _, cx| p.simulate_reply("请模拟一段流式回复", cx)).unwrap();
         draw(handle, cx).await;
         let start_rows = transcript.read_with(cx, |t, _| t.rows().len());
-        let (mut max_per_sync, mut syncs, mut prev_remeasured) = (0usize, 0usize, transcript.read_with(cx, |t, _| t.remeasured_rows));
+        transcript.update(cx, |t, _| t.max_remeasured_per_sync = 0);
+        let (mut syncs, mut prev_remeasured) = (0usize, transcript.read_with(cx, |t, _| t.remeasured_rows));
         let mut row_count_stable = true;
         let deadline = Instant::now() + Duration::from_secs(30);
         let mut first_text_seen = false;
@@ -833,13 +980,14 @@ fn selftest(handle: WindowHandle<ChatPreview>, cx: &mut App) {
             }
             if remeasured > prev_remeasured {
                 syncs += 1;
-                max_per_sync = max_per_sync.max(remeasured - prev_remeasured);
                 prev_remeasured = remeasured;
             }
             if !streaming || Instant::now() > deadline {
                 break;
             }
         }
+        // 单次同步的最大重测行数由列表自己记录（按帧采样可能把相邻两次同步并成一次）
+        let max_per_sync = transcript.read_with(cx, |t, _| t.max_remeasured_per_sync);
         let t12 = syncs > 5 && max_per_sync == 1 && row_count_stable;
         println!("T12: 流式期间行同步 {syncs} 次（按帧采样），单次最多重测 {max_per_sync} 行；行数稳定 {row_count_stable}");
         println!("{} S05-01 T12 流式只重测最后一行", if t12 { "PASS" } else { "FAIL" });
@@ -849,7 +997,8 @@ fn selftest(handle: WindowHandle<ChatPreview>, cx: &mut App) {
         let t20 = selftest_tools(handle, cx).await;
         let t21 = selftest_actions(handle, cx).await;
         let t22 = selftest_paging(cx).await;
-        std::process::exit(if t11 && t12 && t13 && t14 && t15 && t16 && t17 && t18 && t19 && t20 && t21 && t22 { 0 } else { 1 });
+        let t31 = selftest_search(handle, cx).await;
+        std::process::exit(if t11 && t12 && t13 && t14 && t15 && t16 && t17 && t18 && t19 && t20 && t21 && t22 && t31 { 0 } else { 1 });
     })
     .detach();
 }

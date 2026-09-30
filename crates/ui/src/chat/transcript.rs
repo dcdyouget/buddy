@@ -20,6 +20,7 @@ use super::message_row;
 use super::message_actions;
 use super::think_block;
 use super::tool_card;
+use super::web_search::{self, OpenFn};
 use gpui::ScrollHandle;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -84,6 +85,8 @@ pub struct Transcript {
     pub rendered_rows: usize,
     /// 行重测计数（自检用：验证流式只重测一行）
     pub remeasured_rows: usize,
+    /// 单次行同步重测的最大行数（自检用：不依赖采样时机，验证流式只重测一行）
+    pub max_remeasured_per_sync: usize,
     /// 提问卡被渲染的次数（自检用：回答之后不应再渲染，应与其他工具一致）
     pub ask_card_renders: usize,
     /// 上一次同步时是否在流式（检测「开始流式」以恢复跟随）
@@ -114,6 +117,8 @@ pub struct Transcript {
     ask_cards: HashMap<String, (Entity<AskUserCard>, Subscription)>,
     /// 回答回调（路由器提供，经 engine 回传）
     answer: Option<AnswerFn>,
+    /// 打开搜索结果链接（默认系统浏览器；自检可替换）
+    open_url: OpenFn,
     _observe: Subscription,
 }
 
@@ -142,6 +147,7 @@ impl Transcript {
             rendered_rows: 0,
             remeasured_rows: 0,
             ask_card_renders: 0,
+            max_remeasured_per_sync: 0,
             was_streaming: false,
             last_seen: None,
             unseen_pulse: None,
@@ -155,11 +161,17 @@ impl Transcript {
             copied_actions: None,
             ask_cards: HashMap::new(),
             answer: None,
+            open_url: Rc::new(|url, cx| markdown::gfm::open_link(url, cx)),
             _observe: observe,
         };
         this.sync(cx);
         this.list.scroll_to_end();
         this
+    }
+
+    /// 替换打开链接的动作（自检用）
+    pub fn set_open_handler(&mut self, open: OpenFn) {
+        self.open_url = open;
     }
 
     /// 设置回答回调（提问卡的「确认 / 跳过」经它交给 engine）
@@ -231,6 +243,7 @@ impl Transcript {
             self.list.remeasure_items(ix..ix + 1);
         }
         self.remeasured_rows += change.remeasure.len();
+        self.max_remeasured_per_sync = self.max_remeasured_per_sync.max(change.remeasure.len());
         self.row_keys = new_rows.iter().map(|r| rows::stable_key(state, r)).collect();
         self.rows = new_rows;
         if let Some((key, offset_in_item)) = keep_top
@@ -405,7 +418,29 @@ impl Transcript {
                 let Some(tool) = state.tools.get(call).cloned() else { return div().into_any_element() };
                 let awaiting = state.question.as_ref().is_some_and(|q| &q.id == call);
                 let live_msg = state.live.is_some() && state.messages.iter().rposition(|m| m.role == MessageRole::Assistant) == Some(*msg);
-                let expanded = self.tool_expanded.get(&row.id).copied().unwrap_or_else(|| tool_card::default_expanded(&tool, live_msg, awaiting));
+                let expanded = self.tool_expanded.get(&row.id).copied().unwrap_or_else(|| default_open(&tool, live_msg, awaiting));
+                if web_search::is_web_search(&tool.name) {
+                    // v1 `ToolSection`：websearch 走专用卡片（外壳同思考块），默认折叠，可点开看来源
+                    let id = row.id.clone();
+                    let weak = cx.entity().downgrade();
+                    let now = self.conversation.read(cx).now_ms();
+                    let scroll = self.detail_scroll.entry(format!("{}#search", row.id)).or_default().clone();
+                    self.nested_scroll.borrow_mut().push(scroll.clone());
+                    let card = web_search::block(
+                        SharedString::from(format!("search-{}", row.id)),
+                        &tool,
+                        expanded,
+                        now,
+                        &scroll,
+                        move |_, _, cx| {
+                            let _ = weak.update(cx, |t, cx| t.set_tool_expanded(&id, !expanded, cx));
+                        },
+                        self.open_url.clone(),
+                        window,
+                        cx,
+                    );
+                    return message_row::assistant_row(row.pos, card).into_any_element();
+                }
                 let mut details = Vec::new();
                 if ask_card::shows_card(&tool.name, awaiting, expanded) {
                     // 等待回答时展开的是提问卡；回答之后与其他工具统一（折叠 + 调用参数 / 执行结果，目检 #19 反馈，偏离 v1 的「用户回应」）
@@ -651,7 +686,7 @@ impl Transcript {
         let state = &self.conversation.read(cx).state;
         let current = self.tool_expanded.get(row_id).copied().unwrap_or_else(|| {
             self.rows.iter().find(|r| r.id == row_id).and_then(|r| match &r.kind {
-                RowKind::Tool { call, .. } => state.tools.get(call).map(|t| tool_card::default_expanded(t, false, false)),
+                RowKind::Tool { call, .. } => state.tools.get(call).map(|t| default_open(t, false, false)),
                 _ => None,
             }).unwrap_or(false)
         });
@@ -834,4 +869,9 @@ impl Render for Transcript {
             .when(loading_older, |d| d.child(loading_older_banner(cx)))
             .when(show_button, |d| d.child(self.scroll_button(window, cx)))
     }
+}
+
+/// 工具卡的默认展开：网络搜索卡片默认折叠（v1 `useState(false)`），其余按通用规则
+fn default_open(tool: &super::state::ToolView, streaming: bool, awaiting: bool) -> bool {
+    !web_search::is_web_search(&tool.name) && tool_card::default_expanded(tool, streaming, awaiting)
 }

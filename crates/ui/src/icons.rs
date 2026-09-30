@@ -100,6 +100,8 @@ icons! {
     KeyRound => "key-round",
     /// 展开到对话（lucide `chevron-up`）
     ChevronUp => "chevron-up",
+    /// 外部链接（lucide `external-link`）
+    ExternalLink => "external-link",
     /// 自定义回答前缀（lucide `corner-down-right`）
     CornerDownRight => "corner-down-right",
     /// 工具审批（lucide `shield`）
