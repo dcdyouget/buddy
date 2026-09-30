@@ -61,17 +61,20 @@ pub fn tool_meta(name: &str) -> (&'static str, IconName) {
     }
 }
 
-/// v1 `actionSummary`
+/// v1 `actionSummary`。摘要是单行：文本里的换行 / 连续空白折成一个空格（网页会折叠空白；GPUI 不会，
+/// 多行问题会把折叠态的卡片撑成三行高 —— 目检 #19 反馈「提问行与创建文件折叠后不一样」）
 pub fn action_summary(name: &str, arguments: &str) -> String {
     let Ok(args) = serde_json::from_str::<serde_json::Value>(arguments) else { return String::new() };
-    if name == "ask_user" {
-        return args.get("question").and_then(|q| q.as_str()).filter(|q| !q.is_empty()).unwrap_or("等待用户回答").to_string();
-    }
-    ["path", "command", "query", "url", "name"]
-        .iter()
-        .find_map(|k| args.get(*k).and_then(|v| v.as_str()).filter(|v| !v.trim().is_empty()))
-        .unwrap_or_default()
-        .to_string()
+    let raw = if name == "ask_user" {
+        args.get("question").and_then(|q| q.as_str()).filter(|q| !q.is_empty()).unwrap_or("等待用户回答").to_string()
+    } else {
+        ["path", "command", "query", "url", "name"]
+            .iter()
+            .find_map(|k| args.get(*k).and_then(|v| v.as_str()).filter(|v| !v.trim().is_empty()))
+            .unwrap_or_default()
+            .to_string()
+    };
+    raw.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// v1 `prettyArgs`：两空格缩进的 JSON；解析失败原样；空参数显示「(空参数)」
@@ -304,6 +307,8 @@ mod tests {
         assert_eq!(action_summary("read_file", r#"{"path":"/tmp/a.txt"}"#), "/tmp/a.txt");
         assert_eq!(action_summary("x", r#"{"path":"  ","query":"buddy"}"#), "buddy");
         assert_eq!(action_summary("ask_user", r#"{"question":"选哪个？"}"#), "选哪个？");
+        assert_eq!(action_summary("ask_user", r#"{"question":"先说明背景\n\n你选哪个方案？"}"#), "先说明背景 你选哪个方案？", "换行折成空格，折叠态卡片保持单行");
+        assert_eq!(action_summary("run", r#"{"command":"ls\n  -la"}"#), "ls -la");
         assert_eq!(action_summary("ask_user", r#"{}"#), "等待用户回答");
         assert_eq!(action_summary("x", "{半截"), "");
         assert_eq!(pretty_args(""), "(空参数)");

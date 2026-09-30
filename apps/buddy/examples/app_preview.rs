@@ -15,6 +15,7 @@
 //!   429 / 500 → 界面生成的提示消息落盘；停止 → 对话且无错误；设置叠加层往返；展开；全程窗口尺寸不变；
 //! - T26 无 Key 流程：缺配置时空态发送 → 无 Key 页且草稿保留、不发送 → 点面板进设置 → 返回进对话；配置失效退回空态；
 //! - T27 历史：重启后读回最新一页（起始页总是空态），触顶后经 engine 读取更早一页；
+//! - T30 对话页窗口拖动条：顶 / 左 / 右 / 底的不可见条按下即开始拖动窗口，消息区中部与输入区按钮不拖；
 //! - T29 提问卡与审批浮层（S05-13）：mock 模型调用 ask_user / create_file，走真实 engine 的工具循环：选择 + 补充 / 跳过 / 自定义回答，Esc 拒绝、点「允许」、点「本次都允许」；
 //! - T28 模型选择器（S05-15）：真实点击打开菜单窗口、只列启用的模型、按钮上方定位、点选后写盘并关闭、Esc、流式中无按钮、空列表。
 
@@ -846,11 +847,72 @@ async fn selftest_interactions(url: &str, cx: &mut AsyncApp) -> bool {
     check("后续写入不再询问", seen.is_empty());
     check("两个文件都已创建", p2.exists() && p3.exists());
 
+    // ── 折叠后的样子：提问行与创建文件行一样高（目检 #19 反馈：多行问题曾把折叠态撑成三行）──
+    let row_ids = transcript.read_with(cx, |t, _| t.rows().iter().map(|r| r.id.clone()).collect::<Vec<_>>());
+    let ask_row = row_ids.iter().find(|r| r.contains(".t.call_ask_")).cloned().unwrap_or_default();
+    let write_row = row_ids.iter().find(|r| r.contains(".t.call_write_")).cloned().unwrap_or_default();
+    let mut heights = Vec::new();
+    for row in [&ask_row, &write_row] {
+        let _ = cx.update_window(handle.into(), |_, _, cx| transcript.update(cx, |t, cx| t.scroll_to_row(row, cx)));
+        for _ in 0..4 {
+            cx.background_executor().timer(Duration::from_millis(30)).await;
+            draw(handle, cx).await;
+        }
+        heights.push(transcript.read_with(cx, |t, _| t.painted_row_bounds(row)).map(|b| f32::from(b.size.height)));
+    }
+    check(
+        &format!("折叠后提问行与创建文件行等高（{:?}）", heights),
+        matches!(heights.as_slice(), [Some(a), Some(b)] if (a - b).abs() < 0.5),
+    );
+
     let ok = checks.iter().all(|(_, ok)| *ok);
     for (name, ok) in &checks {
         println!("  {} {name}", if *ok { "ok  " } else { "FAIL" });
     }
     println!("{} S05-13 T29 提问卡与审批浮层（回答 / 跳过 / 自定义 / Esc 拒绝 / 允许 / 本次都允许）", if ok { "PASS" } else { "FAIL" });
+    ok
+}
+
+
+/// T30：对话页的窗口拖动条（目检 #19 反馈：气泡态能拖，对话态不能）
+async fn selftest_drag(url: &str, cx: &mut AsyncApp) -> bool {
+    let engine = ChatEngine::new(sandbox("drag", Some(&mock_config(url))));
+    let (handle, _) = open_router(engine, cx).await;
+    for _ in 0..3 {
+        draw(handle, cx).await;
+    }
+    type_and_send(handle, "你好", cx).await;
+    let done = wait_turn_done(handle, cx).await;
+    let counter = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let c = counter.clone();
+    let chat = handle.read_with(cx, |r, _| r.chat_page().clone()).unwrap();
+    let _ = cx.update_window(handle.into(), |_, _, cx| chat.update(cx, |p, _| p.set_drag_handler(std::rc::Rc::new(move |_| c.set(c.get() + 1)))));
+    draw(handle, cx).await;
+    let mut checks: Vec<(&str, bool)> = Vec::new();
+    let mut check = |name: &'static str, ok: bool| checks.push((name, ok));
+    check("进入对话页", done && page(handle, cx) == Page::Conversation);
+    for (name, x, y) in [("顶部", WIDTH / 2.0, 6.0), ("左边缘", 3.0, HEIGHT / 2.0), ("右边缘", WIDTH - 3.0, HEIGHT / 2.0), ("底边缘", WIDTH / 2.0, HEIGHT - 3.0)] {
+        let before = counter.get();
+        click(handle, x, y, cx).await;
+        check(match name { "顶部" => "点顶部拖动条 → 开始拖动窗口", "左边缘" => "点左边缘 → 开始拖动窗口", "右边缘" => "点右边缘 → 开始拖动窗口", _ => "点底边缘 → 开始拖动窗口" }, counter.get() == before + 1);
+    }
+    let before = counter.get();
+    click(handle, WIDTH / 2.0, HEIGHT / 2.0, cx).await;
+    check("点消息区中部 → 不拖动窗口（保留文本选择）", counter.get() == before);
+    let composer = handle.read_with(cx, |r, _| r.composer().clone()).unwrap();
+    let bounds = composer.read_with(cx, |c, _| c.model_button_bounds()).unwrap();
+    click(handle, f32::from(bounds.center().x), f32::from(bounds.center().y), cx).await;
+    check("点输入区按钮 → 不拖动窗口", counter.get() == before);
+    if let Some(menu) = handle.read_with(cx, |r, _| r.model_menu()).unwrap() {
+        let esc = PlatformInput::KeyDown(KeyDownEvent { keystroke: Keystroke::parse("escape").unwrap(), is_held: false, prefer_character_input: false });
+        let _ = cx.update_window(menu.into(), |_, window, cx| window.dispatch_event(esc, cx));
+    }
+
+    let ok = checks.iter().all(|(_, ok)| *ok);
+    for (name, ok) in &checks {
+        println!("  {} {name}", if *ok { "ok  " } else { "FAIL" });
+    }
+    println!("{} S05-13 T30 对话页窗口拖动条（顶 / 左 / 右 / 底可拖，消息区与按钮不拖）", if ok { "PASS" } else { "FAIL" });
     ok
 }
 
@@ -886,7 +948,8 @@ fn main() {
                 let t27 = selftest_history(&url, cx).await;
                 let t28 = selftest_models(&url, cx).await;
                 let t29 = selftest_interactions(&url, cx).await;
-                std::process::exit(if t25 && t26 && t27 && t28 && t29 { 0 } else { 1 });
+                let t30 = selftest_drag(&url, cx).await;
+                std::process::exit(if t25 && t26 && t27 && t28 && t29 && t30 { 0 } else { 1 });
             })
             .detach();
             return;

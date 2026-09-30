@@ -190,6 +190,11 @@ impl PageRouter {
         &self.config
     }
 
+    /// 对话页（自检用）
+    pub fn chat_page(&self) -> &Entity<ChatPage> {
+        &self.chat
+    }
+
     /// 消息列表（自检用）
     pub fn transcript(&self, cx: &App) -> Entity<super::transcript::Transcript> {
         self.chat.read(cx).transcript().clone()
