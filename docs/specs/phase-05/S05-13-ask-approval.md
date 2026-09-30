@@ -1,10 +1,10 @@
 # S05-13 提问与审批卡片
 
-> 状态: `blocked`
+> 状态: `done`
 > Phase: 05
 > 依赖: S05-08, S02-07
-> 阻塞: 等待用户目检（`handoff.md` §6.5 第 19 项）
-> 退役设计文档: `docs/design/pages-and-states.md` 的 ChatPage 审批 / 提问部分
+> 阻塞: —
+> 退役设计文档: `docs/design/pages-and-states.md` 的 ChatPage 审批 / 提问部分（已删除）
 
 ## 目标
 
@@ -29,7 +29,7 @@ ask_user 提问卡（选项 / 补充输入 / 自定义回答）与工具审批�
 
 - [x] 回答 / 审批往返测试（mock 模型 + **真实 engine 工具循环**，T29）
 - [x] 参数解析、提交条件、回答载荷（单测，含 v1 `askUserDisplay.test.ts` 的两个用例）
-- [ ] 交互 —— **需用户目检**（handoff §6.5 第 19 项；反馈的提问行折叠态、对话态拖动已修复，待复核）
+- [x] 交互 —— 用户目检通过（2026-09-30，handoff §6.5 第 19 项；三轮反馈：回答后展示统一、折叠态等高、对话态可拖动，均已修复并复核）
 
 ## 证据
 
@@ -81,6 +81,6 @@ ask_user 提问卡（选项 / 补充输入 / 自定义回答）与工具审批�
 
 ## 完成记录
 
-- 日期：
-- commit：
-- 设计文档处置：待 `done` 时执行 —— 删除 `docs/design/pages-and-states.md` 的 ChatPage 审批 / 提问部分（why 已写入 `ask_card.rs` / `approval_panel.rs` 模块文档），并登记
+- 日期：2026-09-30
+- commit：`0f17001`、`a52b579`、`b0cb2e8`
+- 设计文档处置：已删除 `docs/design/pages-and-states.md` 的 ChatPage 审批 / 提问部分（why 已写入 `ask_card.rs` / `approval_panel.rs` 模块文档），并已登记 `design-deletions.md`

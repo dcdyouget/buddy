@@ -2,17 +2,12 @@
 
 > **部分退役（S05-18，2026-09-29）**
 >
-> - 已实现并删除：State vs Component 表、EmptyPage、NoApiKeyPage、State Flow、Known Implementation Notes、模型下拉（S05-15，`crates/ui/src/chat/model_menu.rs`） —— 转换条件与 why 见 `crates/ui/src/chat/page_state.rs` 模块文档，路由与 engine 接入见 `crates/ui/src/chat/router.rs`
-> - 未实现（保留）：ChatPage 的审批 / 提问（S05-13）、SettingsPage（S06-*）、Global Interactions（S07-*）
+> - 已实现并删除：State vs Component 表、EmptyPage、NoApiKeyPage、State Flow、Known Implementation Notes、模型下拉（S05-15，`crates/ui/src/chat/model_menu.rs`）、ChatPage 的审批 / 提问（S05-13，`ask_card.rs` / `approval_panel.rs`） —— 转换条件与 why 见 `crates/ui/src/chat/page_state.rs` 模块文档，路由与 engine 接入见 `crates/ui/src/chat/router.rs`
+> - 未实现（保留）：SettingsPage（S06-*）、Global Interactions（S07-*）
 >
 > 页面状态定义于 `src/types/index.ts`（v1，`v1-final`）；v2 的页面枚举是 `page_state::Page`。
 
 ## Pages
-
-### ChatPage（剩余部分）
-
-- 支持 write tool 审批、`ask_user` 提问（S05-13）。
-- 带 `parent_message_id` 的 user message 嵌套在对应 assistant 下（已由行模型实现，S05-02）。
 
 ### SettingsPage（S06-*）
 
