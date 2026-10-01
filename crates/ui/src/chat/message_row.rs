@@ -11,12 +11,16 @@
 //! | 用户气泡 | 最大宽 76%、padding space-2 × space-3、圆角 md/md/md/sm、`--user-bubble` 底与边、`--shadow-static`、14px / 1.5 | 同 |
 //! | `.chat-error` | 见 [`error_banner`] | 同 |
 
+use super::attachments;
 use super::rows::RowPos;
+use buddy_engine::models::ImageAttachment;
 use crate::components::{IconButtonVariant, icon_button};
 use crate::icons::{IconName, icon};
 use crate::markdown::zed_markdown::MarkdownStyle;
 use crate::theme_system::{BuddyTheme, box_shadows, fonts, tokens::metrics as m};
-use gpui::{AnyElement, App, Div, FontWeight, Hsla, Refineable, SharedString, TextStyleRefinement, div, prelude::*, px, relative};
+use gpui::{AnyElement, App, Div, FontWeight, Hsla, Image, ImageFormat, ImageSource, ObjectFit, Refineable, SharedString, TextStyleRefinement, div, img, prelude::*, px, relative};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 /// 用户消息的行高（v1 内联 `lineHeight: 1.5`）
 const USER_LINE_HEIGHT: f32 = 1.5;
@@ -100,6 +104,84 @@ pub fn user_row(text: impl IntoElement, cx: &App) -> AnyElement {
                 .child(text),
         )
         .into_any_element()
+}
+
+/// 用户消息行，附带 v1 同样的图片缩略图带。
+pub fn user_row_with_images(
+    text: impl IntoElement,
+    images: &[ImageAttachment],
+    has_text: bool,
+    window: &gpui::Window,
+    cx: &App,
+) -> AnyElement {
+    if images.is_empty() {
+        return user_row(text, cx);
+    }
+    let columns = if images.len() > 1 { 2 } else { 1 };
+    // Match v1's two responsive grid columns inside the 76% user bubble.
+    let available = (f32::from(window.viewport_size().width) - m::SPACE_4 * 2.0) * USER_MAX_WIDTH
+        - m::SPACE_3 * 2.0 - 2.0;
+    let max_width = ((available - m::SPACE_1 * (columns - 1) as f32) / columns as f32)
+        .clamp(m::SPACE_12, 260.0);
+    let image_strip = div()
+        .grid()
+        .grid_cols(columns)
+        .max_w(px(max_width * columns as f32 + m::SPACE_1 * (columns - 1) as f32))
+        .gap(px(m::SPACE_1))
+        .when(has_text, |d| d.mb(px(m::SPACE_2)))
+        .children(images.iter().map(|image| attachment_image_sized(image, cx, max_width)));
+    user_row(
+        div().flex().flex_col().items_end().child(image_strip).child(text),
+        cx,
+    )
+}
+
+/// 渲染消息附件；本地路径、HTTP/data URL 均走现有图片来源链路。
+pub fn attachment_image(image: &ImageAttachment, cx: &App) -> AnyElement {
+    attachment_image_sized(image, cx, 260.0)
+}
+
+fn attachment_image_sized(image: &ImageAttachment, cx: &App, max_width: f32) -> AnyElement {
+    let c = *cx.buddy_theme().colors;
+    let source = if !image.path.is_empty() {
+        Some(ImageSource::Resource(PathBuf::from(&image.path).into()))
+    } else {
+        attachments::decode_data_url(&image.data_url, &image.media_type)
+            .and_then(|bytes| ImageFormat::from_mime_type(&image.media_type)
+                .map(|format| ImageSource::Image(Arc::new(Image::from_bytes(format, bytes)))))
+            .or_else(|| crate::markdown::gfm::image_source(&image.data_url))
+    };
+    let label = SharedString::from(if image.path.is_empty() { image.name.clone() } else { image.path.clone() });
+    let Some(source) = source else {
+        return div().w(px(max_width)).h(px(64.0))
+            .rounded(px(m::RADIUS_SM))
+            .border_1().border_color(c.border_subtle).bg(c.bg_sunken)
+            .flex().flex_col().items_center().justify_center()
+            .text_color(c.text_muted).text_size(px(m::FONT_SIZE_XS))
+            .child(icon(IconName::ImageOff, px(18.0)))
+            .child("图片已删除").child(label).into_any_element();
+    };
+    let retry_source = source.clone();
+    let retry_id = SharedString::from(format!("attachment-retry-{}", image.id));
+    div().w(px(max_width)).max_h(px(240.0))
+        .rounded(px(m::RADIUS_SM))
+        .overflow_hidden().border_1().border_color(c.border_subtle).bg(c.bg_sunken)
+        .child(img(source).w(px(max_width)).max_h(px(240.0)).object_fit(ObjectFit::Contain)
+            .with_fallback(move || {
+                let source = retry_source.clone();
+                div().w(px(max_width)).min_h(px(64.0))
+                    .flex().flex_col().items_center().justify_center()
+                    .text_color(c.text_muted).text_size(px(m::FONT_SIZE_XS))
+                    .child(icon(IconName::ImageOff, px(18.0)))
+                    .child("图片加载失败")
+                    .child(div().id(retry_id.clone()).cursor_pointer().text_color(c.buddy_primary)
+                        .on_click(move |_, window, cx| {
+                            source.remove_asset(cx);
+                            window.refresh();
+                            cx.refresh_windows();
+                        }).child("重试"))
+                    .child(label.clone()).into_any_element()
+            })).into_any_element()
 }
 
 /// 错误提示条（v1 `ChatPage.tsx` 的 `.chat-error`：图标 15px、关闭按钮 24 / 13）

@@ -15,16 +15,18 @@
 //!
 //! 模型选择（S05-15，菜单见 [`super::model_menu`]）、图片附件（S05-07）、设置入口（S05-18）只提供回调位置。
 
-use crate::components::{IconButtonVariant, icon_button};
+use crate::components::{IconButtonVariant, TextTooltip, icon_button};
 use crate::icons::{IconName, icon};
-use crate::text_area::{TextArea, TextAreaEvent, TextAreaStyle};
+use crate::text_area::{Paste, TextArea, TextAreaEvent, TextAreaStyle};
 use crate::theme_system::{BuddyTheme, Theme, box_shadows, tokens::metrics as m};
+use buddy_engine::chat::ChatEngine;
 use gpui::{
-    App, Bounds, BoxShadow, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla, Render, SharedString, Subscription, Window, div,
+    App, Bounds, BoxShadow, Context, Entity, EventEmitter, ExternalPaths, FocusHandle, Focusable, Hsla, ImageSource, KeyDownEvent, Render, SharedString, Subscription, Task, Window, div, img,
     linear_color_stop, linear_gradient, point, prelude::*, px, Pixels,
 };
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// 占位文字（v1 原文）
 pub const PLACEHOLDER: &str = "问点什么…";
@@ -63,6 +65,11 @@ pub struct Composer {
     streaming_model: Option<SharedString>,
     /// 当前模型是否支持图片
     supports_vision: bool,
+    pub(super) images: Vec<super::attachments::DraftImage>,
+    pub(super) saving_images: bool,
+    pub(super) attachment_error: Option<SharedString>,
+    pub(super) engine: Option<Arc<ChatEngine>>,
+    pub(super) save_tasks: Vec<Task<()>>,
     focused: bool,
     hovered: bool,
     /// 空态页的独立气泡（S05-16）
@@ -98,6 +105,11 @@ fn text_style(theme: &Theme, standalone: bool) -> TextAreaStyle {
 impl Composer {
     /// 新建
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::new_with_engine(None, window, cx)
+    }
+
+    /// 创建带 engine 的输入区；正式路由器使用此构造器以持久化草稿图片。
+    pub fn new_with_engine(engine: Option<Arc<ChatEngine>>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let theme = *cx.buddy_theme();
         let text = cx.new(|cx| TextArea::new(PLACEHOLDER, text_style(&theme, false), cx));
         let subscriptions = vec![
@@ -114,7 +126,7 @@ impl Composer {
                 cx.notify();
             }),
         ];
-        Self { text, streaming: false, streaming_model: None, supports_vision: false, focused: false, hovered: false, standalone: false, model_button: Rc::default(), _subscriptions: subscriptions }
+        Self { text, streaming: false, streaming_model: None, supports_vision: false, images: Vec::new(), saving_images: false, attachment_error: None, engine, save_tasks: Vec::new(), focused: false, hovered: false, standalone: false, model_button: Rc::default(), _subscriptions: subscriptions }
     }
 
     /// 模型按钮在窗口中的边界（上一帧；流式中为 `None`）
@@ -162,7 +174,7 @@ impl Composer {
     }
 
     fn can_send(&self, cx: &App) -> bool {
-        can_send(self.text.read(cx).text(), 0, self.supports_vision, false)
+        can_send(self.text.read(cx).text(), self.images.len(), self.supports_vision, self.saving_images)
     }
 
     /// v1 `handleSend`：流式中或不可发送时忽略；发送后由上层清空草稿
@@ -184,6 +196,8 @@ impl Render for Composer {
         let has_text = !self.text.read(cx).text().trim().is_empty();
         let can_send = self.can_send(cx);
         let active = self.focused || self.hovered;
+        let compact = window.viewport_size().height <= px(COMPACT_MAX_HEIGHT);
+        let unsupported_images = !self.images.is_empty() && !self.supports_vision;
 
         // v1 `.input-dock`：外描边 + 内描边（inset 1px `--border-subtle`）+ `--shadow-composer`；
         // 悬停 / 聚焦时 v1 的品牌色渐变描边加粗到 2px → 以品牌色内描边近似（目检项）
@@ -258,6 +272,12 @@ impl Render for Composer {
                 .gap(px(m::SPACE_1))
                 .w_full()
                 .child(text_box)
+                .when(self.supports_vision, |d| {
+                    d.child(
+                        icon_button("composer-image", IconName::ImagePlus, 24.0, 14.0, IconButtonVariant::Default, self.saving_images || self.images.len() >= super::attachments::MAX_IMAGE_COUNT, cx)
+                            .on_click(cx.listener(|this, _, _, cx| this.pick_images(cx))),
+                    )
+                })
                 .child(
                     icon_button("composer-settings", IconName::Settings, 24.0, 13.0, IconButtonVariant::Default, false, cx)
                         .on_click(cx.listener(|_, _, _, cx| cx.emit(ComposerEvent::OpenSettings))),
@@ -290,8 +310,65 @@ impl Render for Composer {
                 )
         };
 
-        // v1 `@media (max-height: 180px)`：紧凑窗口中独立气泡撑满高度（视口高度取自窗口，与媒体查询同义）
-        let compact = window.viewport_size().height <= px(COMPACT_MAX_HEIGHT);
+        let attachment_offset = if compact && !self.images.is_empty() { (self.images.len() as f32 * 52.0).min(220.0) } else { 0.0 };
+        let image_strip = div()
+            .w_full()
+            .when(compact, |d| d.w_auto().max_w(px(220.0)).h(px(48.0)).absolute().left_0().top_0())
+            .flex()
+            .items_center()
+            .gap(px(m::SPACE_2))
+            .pb(px(m::SPACE_1))
+            .when(self.images.is_empty(), |d| d.h(px(0.)))
+            .children(self.images.iter().map(|image| {
+                let id = image.attachment.id.clone();
+                div()
+                    .relative()
+                    .size(px(44.))
+                    .flex_none()
+                    .rounded(px(m::RADIUS_SM))
+                    .border_1()
+                    .border_color(c.border_default)
+                    .overflow_hidden()
+                    .bg(c.bg_sunken)
+                    .child(img(ImageSource::Image(image.preview.clone())).size_full().object_fit(gpui::ObjectFit::Cover))
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("composer-remove-{id}")))
+                            .absolute()
+                            .top(px(2.))
+                            .right(px(2.))
+                            .size(px(18.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(m::RADIUS_FULL))
+                            .border_1()
+                            .border_color(c.border_default)
+                            .bg(c.bg_elevated)
+                            .text_color(c.text_primary)
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, _, cx| this.remove_image(&id, cx)))
+                            .child(icon(IconName::Close, px(11.))),
+                    )
+            }))
+            .when(unsupported_images && !compact, |d| d.child(div().text_color(c.state_warning).text_size(px(m::FONT_SIZE_XS)).child("当前模型不支持图片，请移除图片或切换模型")))
+            .when(self.saving_images && !compact, |d| {
+                d.child(
+                    div()
+                        .w_full()
+                        .text_color(c.text_muted)
+                        .text_size(px(m::FONT_SIZE_XS))
+                        .child("正在保存图片…"),
+                )
+            })
+            .when_some(self.attachment_error.clone(), |d, error| d.child(div().text_color(c.state_warning).text_size(px(m::FONT_SIZE_XS)).child(error)));
+        let body = if self.images.is_empty() {
+            body
+        } else if compact {
+            div().relative().child(image_strip).child(div().pl(px(attachment_offset)).child(body))
+        } else {
+            div().flex().flex_col().child(image_strip).child(body)
+        };
         div()
             .id("input-dock")
             .when(!standalone, |d| d.mx(px(m::SPACE_2)).mb(px(m::SPACE_2)).rounded(px(m::RADIUS_LG)).border_color(c.border_default))
@@ -303,6 +380,18 @@ impl Render for Composer {
             .border_1()
             .bg(c.composer_surface)
             .shadow(shadows)
+            .capture_action::<Paste>(cx.listener(|this, _, _, cx| {
+                if this.paste_from_clipboard(cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key == "v" && (event.keystroke.modifiers.platform || event.keystroke.modifiers.control) && this.paste_from_clipboard(cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .on_drop::<ExternalPaths>(cx.listener(|this, paths: &ExternalPaths, _, cx| this.add_paths(paths.paths(), cx)))
+            .when(unsupported_images && compact, |d| d.tooltip(|_, cx| TextTooltip::view("当前模型不支持图片，请移除图片或切换模型", cx)))
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 this.hovered = *hovered;
                 cx.notify();

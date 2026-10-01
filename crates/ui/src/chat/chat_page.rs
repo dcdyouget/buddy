@@ -20,6 +20,7 @@
 use super::approval_panel::{DecideFn, Decision, approval_panel};
 use super::ask_card::AnswerFn;
 use super::composer::Composer;
+use super::image_gen_state::DownloadFn;
 use super::message_row::error_banner;
 use super::session::Conversation;
 use super::transcript::Transcript;
@@ -34,6 +35,8 @@ pub struct ToolActions {
     pub decide: DecideFn,
     /// ask_user 回答
     pub answer: AnswerFn,
+    /// 生图保存动作（engine 异步下载）。
+    pub download: DownloadFn,
 }
 
 /// 顶部拖动条高度（v1 空态页 `.empty-drag-region` 为 `--space-3`；对话页整块面板都可拖，这里取 `--space-4`）
@@ -66,7 +69,11 @@ impl ChatPage {
     pub fn new(conversation: Entity<Conversation>, composer: Entity<Composer>, actions: ToolActions, cx: &mut Context<Self>) -> Self {
         let transcript = cx.new(|cx| Transcript::new(conversation.clone(), cx));
         let answer = actions.answer.clone();
-        transcript.update(cx, |t, _| t.set_answer_fn(answer));
+        let download = actions.download.clone();
+        transcript.update(cx, |t, _| {
+            t.set_answer_fn(answer);
+            t.set_download_handler(download);
+        });
         // 错误条随会话状态出现 / 消失
         cx.observe(&conversation, |_, _, cx| cx.notify()).detach();
         Self { conversation, transcript, composer, actions, drag: Rc::new(|window| window.start_window_move()), focus: cx.focus_handle() }

@@ -171,11 +171,17 @@ fn now_secs() -> u64 {
 
 /// 新建一条用户消息（v1 `sendMessage` 的 `userMessage`；附件随 S05-07 接入）
 pub fn user_message(content: &str) -> Message {
+    user_message_with_images(content, Vec::new())
+}
+
+/// 新建带图片附件的用户消息（S05-07）。附件已由 Composer 写入 engine，
+/// 因此消息持久化时只包含路径，不携带 Base64。
+pub fn user_message_with_images(content: &str, images: Vec<ImageAttachment>) -> Message {
     Message {
         id: format!("u-{}", unique_suffix()),
         role: MessageRole::User,
         content: content.to_string(),
-        images: Vec::new(),
+        images,
         blocks: None,
         model_id: None,
         created_at: now_secs(),

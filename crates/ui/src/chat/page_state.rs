@@ -66,9 +66,9 @@ pub enum EmptySend {
     Send,
 }
 
-/// v1 `EmptyPage.handleSend` 的判定顺序：空白 → 缺配置 → 图片不被支持 → 发送
+/// v1 `EmptyPage.handleSend`：文字与图片都为空才忽略；纯图片消息也可发送。
 pub fn classify_empty_send(has_content: bool, has_valid_config: bool, has_images: bool, supports_vision: bool) -> EmptySend {
-    if !has_content {
+    if !has_content && !has_images {
         EmptySend::Ignore
     } else if !has_valid_config {
         EmptySend::NeedsKey
@@ -264,7 +264,10 @@ mod tests {
     #[test]
     fn empty_send_checks_in_v1_order() {
         use EmptySend::*;
-        assert_eq!(classify_empty_send(false, false, true, false), Ignore, "空白优先于缺配置");
+        assert_eq!(classify_empty_send(false, false, false, false), Ignore);
+        assert_eq!(classify_empty_send(false, false, true, false), NeedsKey, "纯图片也需先配置模型");
+        assert_eq!(classify_empty_send(false, true, true, false), ImagesUnsupported);
+        assert_eq!(classify_empty_send(false, true, true, true), Send);
         assert_eq!(classify_empty_send(true, false, true, false), NeedsKey, "缺配置优先于图片校验");
         assert_eq!(classify_empty_send(true, true, true, false), ImagesUnsupported);
         assert_eq!(classify_empty_send(true, true, true, true), Send);

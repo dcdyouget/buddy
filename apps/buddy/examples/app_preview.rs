@@ -22,20 +22,20 @@
 use buddy_engine::chat::ChatEngine;
 use buddy_engine::models::{AppConfig, Message, MessageRole};
 use buddy_engine::storage;
-use buddy_ui::chat::composer::ComposerEvent;
+use buddy_ui::chat::{attachments, composer::ComposerEvent};
 use buddy_ui::chat::model_menu::{MENU_WIDTH, ModelMenu, ROW_HEIGHT, menu_size};
 use buddy_ui::chat::page_state::{Page, expands_window};
 use buddy_ui::chat::router::{Loaded, PageRouter, RouterEvent, preload};
 use buddy_ui::chat_bridge::spawn_engine;
 use buddy_ui::gpui::{
-    App, AppContext, AsyncApp, Bounds, Context, Entity, Focusable, IntoElement, Render, Subscription, Window, div, prelude::*, KeyDownEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput,
+    App, AppContext, AsyncApp, Bounds, ClipboardItem, Context, Entity, ExternalPaths, FileDropEvent, Focusable, Image, ImageFormat, ImgResourceLoader, IntoElement, Render, Resource, Subscription, Window, div, prelude::*, KeyDownEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput,
     WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowOptions, point, px, size,
 };
 use buddy_ui::gpui_platform::application;
 use buddy_ui::markdown;
 use buddy_ui::theme_system::{Appearance, Theme, fonts};
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -170,7 +170,7 @@ fn mock_config(url: &str) -> AppConfig {
     serde_json::from_value(serde_json::json!({
         "theme": "light",
         "providers": [{"id":"p1","name":"Mock","base_url":url,"api_key":"k","enabled_model_ids":["p1::mock"],"provider_type":"openai_compatible"}],
-        "models": [{"id":"p1::mock","provider_id":"p1","api_model_id":"mock","display_name":"Mock","context_window":128000,"latency_ms":null}],
+        "models": [{"id":"p1::mock","provider_id":"p1","api_model_id":"mock","display_name":"Mock","context_window":128000,"latency_ms":null,"supports_vision":true}],
         "selected_model_id": "p1::mock"
     }))
     .expect("mock 配置")
@@ -606,8 +606,8 @@ fn models_config(url: &str, enabled: &[&str]) -> AppConfig {
         "theme": "light",
         "providers": [{"id":"p1","name":"Mock","base_url":url,"api_key":"k","enabled_model_ids":enabled,"provider_type":"openai_compatible"}],
         "models": [
-            {"id":"p1::mock","provider_id":"p1","api_model_id":"mock","display_name":"Mock","context_window":128000,"latency_ms":null},
-            {"id":"p1::mock2","provider_id":"p1","api_model_id":"mock2","display_name":"Mock 2","context_window":32000,"latency_ms":120},
+            {"id":"p1::mock","provider_id":"p1","api_model_id":"mock","display_name":"Mock","context_window":128000,"latency_ms":null,"supports_vision":true},
+            {"id":"p1::mock2","provider_id":"p1","api_model_id":"mock2","display_name":"Mock 2","context_window":32000,"latency_ms":120,"supports_vision":false},
             {"id":"p1::hidden","provider_id":"p1","api_model_id":"hidden","display_name":"Hidden","context_window":8000,"latency_ms":null}
         ],
         "selected_model_id": "p1::mock"
@@ -916,13 +916,204 @@ async fn selftest_drag(url: &str, cx: &mut AsyncApp) -> bool {
     ok
 }
 
+/// T34：真实 engine 附件链路——Cmd-V、路径保存、切页保留、点击删除、纯图片发送。
+async fn selftest_attachments(url: &str, cx: &mut AsyncApp) -> bool {
+    let data_dir = sandbox("attachments", Some(&mock_config(url)));
+    let engine = ChatEngine::new(data_dir.clone());
+    let (handle, _) = open_router(engine.clone(), cx).await;
+    let composer = handle.read_with(cx, |router, _| router.composer().clone()).unwrap();
+    let mut config = mock_config(url);
+    config.models[0].supports_vision = true;
+    let config_for_engine = config.clone();
+    let engine_for_config = engine.clone();
+    let config_saved = cx
+        .update(|cx| {
+            spawn_engine(cx, async move { engine_for_config.save_config(config_for_engine).await })
+        })
+        .await
+        .is_ok();
+    let _ = handle.update(cx, |router, _, cx| router.set_config(config, cx));
+    let bytes = attachments::decode_data_url(
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        "image/png",
+    ).expect("valid one-pixel PNG");
+    let image = Image::from_bytes(ImageFormat::Png, bytes.clone());
+    cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_image(&image)));
+    let focus = composer.read_with(cx, |composer, cx| composer.focus_handle(cx));
+    let _ = cx.update_window(handle.into(), |_, window, cx| window.focus(&focus, cx));
+    draw(handle, cx).await;
+    let paste = PlatformInput::KeyDown(KeyDownEvent { keystroke: Keystroke::parse("cmd-v").expect("cmd-v"), is_held: false, prefer_character_input: false });
+    let _ = cx.update_window(handle.into(), |_, window, cx| window.dispatch_event(paste, cx));
+    draw(handle, cx).await;
+    let pasted = composer.read_with(cx, |composer, _| composer.image_count() == 1);
+    let saved = wait_until(handle, cx, |cx| composer.read_with(cx, |composer, _| composer.images().first().is_some_and(|image| !image.path.is_empty()))).await;
+    let saved_path = composer.read_with(cx, |composer, _| composer.images().first().map(|image| image.path.clone())).unwrap_or_default();
+    let saved_on_disk = pasted && saved && Path::new(&saved_path).exists();
+    let _ = handle.update(cx, |router, _, cx| router.open_settings(cx));
+    let _ = handle.update(cx, |router, _, cx| router.close_settings(cx));
+    let preserved = composer.read_with(cx, |composer, _| composer.image_count() == 1);
+    let mut clicked_removed = false;
+    for y in [HEIGHT - 86.0, HEIGHT - 120.0, HEIGHT - 52.0] {
+        if clicked_removed { break; }
+        click(handle, 46.0, y, cx).await;
+        clicked_removed = composer.read_with(cx, |composer, _| composer.image_count() == 0);
+    }
+    let deleted = wait_until(handle, cx, |_| !Path::new(&saved_path).exists()).await;
+
+    // GPUI 原生文件拖放事件：用 Entered → Pending → Submit 复现平台路径。
+    let drop_source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/buddy-app-preview/attachments/drop.png");
+    std::fs::write(&drop_source, &bytes).expect("写入拖放图片");
+    let position = point(px(20.0), px(HEIGHT - 20.0));
+    let paths = ExternalPaths(std::iter::once(drop_source.clone()).collect());
+    for event in [
+        FileDropEvent::Entered { position, paths },
+        FileDropEvent::Pending { position },
+        FileDropEvent::Submit { position },
+    ] {
+        let _ = cx.update_window(handle.into(), |_, window, cx| window.dispatch_event(PlatformInput::FileDrop(event), cx));
+        draw(handle, cx).await;
+    }
+    let dropped = composer.read_with(cx, |composer, _| composer.image_count() == 1);
+    let drop_saved = wait_until(handle, cx, |cx| composer.read_with(cx, |composer, _| composer.images().first().is_some_and(|image| !image.path.is_empty()))).await;
+    let drop_saved_path = composer.read_with(cx, |composer, _| composer.images().first().map(|image| image.path.clone())).unwrap_or_default();
+    let drop_on_disk = dropped && drop_saved && Path::new(&drop_saved_path).exists();
+    let mut drop_removed = false;
+    for y in [HEIGHT - 86.0, HEIGHT - 120.0, HEIGHT - 52.0] {
+        if drop_removed { break; }
+        click(handle, 46.0, y, cx).await;
+        drop_removed = composer.read_with(cx, |composer, _| composer.image_count() == 0);
+    }
+    let drop_deleted = wait_until(handle, cx, |_| !Path::new(&drop_saved_path).exists()).await;
+    let _ = std::fs::remove_file(drop_source);
+
+    // 用同一 engine 打开新的空态路由器，覆盖 classify_empty_send 的真实生产路径。
+    let (pure_handle, _) = open_router(engine.clone(), cx).await;
+    let pure_composer = pure_handle.read_with(cx, |router, _| router.composer().clone()).unwrap();
+    let pure_empty = page(pure_handle, cx) == Page::Empty;
+
+    // 生产 Router 路径：再次经剪贴板 Cmd-V 注入，只带图片、无文字也创建带图用户消息；
+    // 发送断言先检查会话，再等待真实 engine 落盘，不依赖回复正文。
+    let pure_image = Image::from_bytes(ImageFormat::Png, bytes.clone());
+    cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_image(&pure_image)));
+    let focus = pure_composer.read_with(cx, |composer, cx| composer.focus_handle(cx));
+    let _ = cx.update_window(pure_handle.into(), |_, window, cx| window.focus(&focus, cx));
+    draw(pure_handle, cx).await;
+    let paste = PlatformInput::KeyDown(KeyDownEvent { keystroke: Keystroke::parse("cmd-v").expect("cmd-v"), is_held: false, prefer_character_input: false });
+    let _ = cx.update_window(pure_handle.into(), |_, window, cx| window.dispatch_event(paste, cx));
+    draw(pure_handle, cx).await;
+    let pure_pasted = pure_composer.read_with(cx, |composer, _| composer.image_count() == 1);
+    let pure_saved = wait_until(pure_handle, cx, |cx| pure_composer.read_with(cx, |composer, _| composer.images().first().is_some_and(|image| !image.path.is_empty()))).await;
+    let focus = pure_composer.read_with(cx, |composer, cx| composer.focus_handle(cx));
+    let _ = cx.update_window(pure_handle.into(), |_, window, cx| window.focus(&focus, cx));
+    draw(pure_handle, cx).await;
+    pure_composer.update(cx, |composer, cx| composer.set_draft("", cx));
+    press(pure_handle, "enter", cx).await;
+    let pure_message = wait_until(pure_handle, cx, |cx| messages(pure_handle, cx).iter().any(|message| message.role == MessageRole::User && message.images.len() == 1 && message.content.is_empty())).await;
+    let mut stored_pure_message = false;
+    if pure_message {
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(15) {
+            let stored_messages = stored(&engine, cx).await;
+            if stored_messages.iter().any(|message| message.role == MessageRole::User && message.images.len() == 1 && message.content.is_empty()) {
+                stored_pure_message = true;
+                break;
+            }
+            cx.background_executor().timer(Duration::from_millis(20)).await;
+        }
+    }
+    let pure_draft_cleared = pure_composer.read_with(cx, |composer, app| composer.draft(app).is_empty() && composer.image_count() == 0);
+    engine.stop_generation();
+    let stopped = wait_until(pure_handle, cx, |cx| !pure_handle.read_with(cx, |router, cx| router.conversation().read(cx).state.is_streaming()).unwrap()).await;
+
+    // 调用生产下载边界，校验系统下载目录中的实际字节，并清理本次文件。
+    let downloaded_image = messages(pure_handle, cx).iter().find(|message| message.role == MessageRole::User)
+        .and_then(|message| message.images.first()).cloned();
+    let downloaded = if let Some(image) = downloaded_image {
+        let download_engine = engine.clone();
+        match cx.update(|cx| spawn_engine(cx, async move { download_engine.download_generated_image(image).await })).await {
+            Ok(path) => {
+                let matches = std::fs::read(&path).is_ok_and(|actual| actual == bytes);
+                let cleaned = std::fs::remove_file(path).is_ok();
+                matches && cleaned
+            }
+            Err(error) => { eprintln!("T34 下载失败：{error}"); false }
+        }
+    } else { false };
+
+    // 历史附件真实加载失败 → 修复文件 → 鼠标点击重试 → GPUI 缓存返回解码图片。
+    let retry_path = std::env::temp_dir().join(format!("buddy-history-selftest-{}.png", std::process::id()));
+    let _ = std::fs::remove_file(&retry_path);
+    let user_id = pure_handle.update(cx, |router, _, cx| router.conversation().update(cx, |conversation, cx| {
+        let message = conversation.state.messages.iter_mut().find(|message| message.role == MessageRole::User).expect("pure-image user");
+        message.images[0].id = "history-retry-selftest".into();
+        message.images[0].path = retry_path.to_string_lossy().into_owned();
+        let id = message.id.clone();
+        conversation.state.revision += 1;
+        cx.notify();
+        id
+    })).unwrap();
+    let transcript = pure_handle.read_with(cx, |router, cx| router.transcript(cx)).unwrap();
+    transcript.update(cx, |transcript, cx| transcript.scroll_to_row(&user_id, cx));
+    for _ in 0..12 { draw(pure_handle, cx).await; }
+    let resource: Resource = retry_path.clone().into();
+    let history_failed = wait_until(pure_handle, cx, |cx| cx.update_window(pure_handle.into(), |_, window, cx| matches!(window.get_asset::<ImgResourceLoader>(&resource, cx), Some(Err(_)))).unwrap_or(false)).await;
+    let fixture = attachments::decode_data_url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "image/png").unwrap();
+    std::fs::write(&retry_path, fixture).expect("repair fixture");
+    let bounds = transcript.read_with(cx, |transcript, _| transcript.painted_row_bounds(&user_id));
+    let mut history_retried = false;
+    if let Some(bounds) = bounds {
+        'retry: for dy in [38.0, 44.0, 50.0, 56.0, 62.0, 68.0] {
+            for dx in [146.0, 154.0, 138.0] {
+                click(pure_handle, f32::from(bounds.right()) - dx, f32::from(bounds.top()) + dy, cx).await;
+                cx.background_executor().timer(Duration::from_millis(30)).await;
+                for _ in 0..3 { draw(pure_handle, cx).await; }
+                history_retried = cx.update_window(pure_handle.into(), |_, window, cx| {
+                    window.get_asset::<ImgResourceLoader>(&resource, cx).is_some_and(|result| result.is_ok_and(|image| image.size(0).width.0 == 1 && image.size(0).height.0 == 1))
+                }).unwrap_or(false);
+                if history_retried { break 'retry; }
+            }
+        }
+    }
+    let _ = std::fs::remove_file(retry_path);
+    // Drop a Composer before its engine write completes. Pause this foreground
+    // task briefly so the Tokio write is observable before the detached cleanup runs.
+    let attachment_dir = data_dir.join("attachments");
+    let paths = |dir: &Path| -> std::collections::HashSet<PathBuf> {
+        std::fs::read_dir(dir).into_iter().flatten().filter_map(Result::ok).map(|entry| entry.path()).collect()
+    };
+    let before = paths(&attachment_dir);
+    let orphan_engine = engine.clone();
+    let orphan_draft = attachments::draft_from_bytes("销毁清理.png", "image/png", bytes.clone()).unwrap();
+    let _ = cx.update_window(pure_handle.into(), |_, window, cx| {
+        let orphan_composer = cx.new(|cx| buddy_ui::chat::composer::Composer::new_with_engine(Some(orphan_engine), window, cx));
+        orphan_composer.update(cx, |composer, cx| composer.add_images(vec![orphan_draft], cx));
+        drop(orphan_composer);
+    });
+    let started = Instant::now();
+    let mut orphan_path = None;
+    while started.elapsed() < Duration::from_secs(2) {
+        orphan_path = paths(&attachment_dir).difference(&before).next().cloned();
+        if orphan_path.is_some() { break; }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let orphan_saved = orphan_path.as_ref().is_some_and(|path| std::fs::read(path).is_ok_and(|actual| actual == bytes));
+    let orphan_cleaned = if let Some(path) = orphan_path {
+        wait_until(pure_handle, cx, |_| !path.exists()).await
+    } else { false };
+
+    let ok = config_saved && pasted && saved_on_disk && preserved && clicked_removed && deleted && dropped && drop_on_disk && drop_removed && drop_deleted && pure_empty && pure_pasted && pure_saved && pure_message && stored_pure_message && pure_draft_cleared && stopped && downloaded && history_failed && history_retried && orphan_saved && orphan_cleaned;
+    println!("T34: 配置落盘 {config_saved}；Cmd-V {pasted}；保存路径 {saved_on_disk}；切页保留 {preserved}；点击删除 {clicked_removed}；文件清理 {deleted}；拖放入口 {dropped}；拖放保存 {drop_on_disk}；拖放删除 {drop_removed}；拖放清理 {drop_deleted}；空态纯图页 {pure_empty}；纯图 Cmd-V {pure_pasted}；纯图片保存 {pure_saved}；内存用户消息带图 {pure_message}；磁盘用户消息带图 {stored_pure_message}；草稿清空 {pure_draft_cleared}；真实下载字节与清理 {downloaded}；历史图片失败 {history_failed} → 真实点击重试解码 {history_retried}；实体销毁仍完成保存 {orphan_saved} → 清理 {orphan_cleaned}");
+    println!("{} S05-07 T34 真实 engine 附件保存 / 删除 / 纯图片发送", if ok { "PASS" } else { "FAIL" });
+    ok
+}
+
 // ───────────────────────────── 入口 ─────────────────────────────
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let args: Vec<String> = std::env::args().collect();
     let flag = |name: &str| args.iter().any(|a| a == name);
-    let (self_test, mock, no_key) = (flag("--selftest"), flag("--mock"), flag("--no-key"));
+    let (self_test, self_test_attachments, mock, no_key) = (flag("--selftest"), flag("--selftest-attachments"), flag("--mock"), flag("--no-key"));
     application().with_assets(buddy_ui::icons::Assets).run(move |cx: &mut App| {
         buddy_ui::init_theme(cx);
         buddy_ui::chat_bridge::init(cx);
@@ -931,7 +1122,7 @@ fn main() {
         markdown::init(cx);
         buddy_ui::chat::init(cx);
         // 无标题栏，没有关闭按钮：手动模式下 Cmd+Q / Esc 退出（自检不注册，否则未被处理的 Esc 会让自检静默退出）
-        if !self_test {
+        if !self_test && !self_test_attachments {
             cx.observe_keystrokes(|event, _, cx| {
                 if event.keystroke.unparse() == "cmd-q" || event.keystroke.key == "escape" {
                     cx.quit();
@@ -940,16 +1131,20 @@ fn main() {
             .detach();
         }
 
-        if self_test {
+        if self_test || self_test_attachments {
             let url = start_mock_server();
             cx.spawn(async move |cx: &mut AsyncApp| {
+                if self_test_attachments {
+                    std::process::exit(if selftest_attachments(&url, cx).await { 0 } else { 1 });
+                }
                 let t25 = selftest_flow(&url, cx).await;
                 let t26 = selftest_no_key(&url, cx).await;
                 let t27 = selftest_history(&url, cx).await;
                 let t28 = selftest_models(&url, cx).await;
                 let t29 = selftest_interactions(&url, cx).await;
                 let t30 = selftest_drag(&url, cx).await;
-                std::process::exit(if t25 && t26 && t27 && t28 && t29 && t30 { 0 } else { 1 });
+                let t34 = selftest_attachments(&url, cx).await;
+                std::process::exit(if t25 && t26 && t27 && t28 && t29 && t30 && t34 { 0 } else { 1 });
             })
             .detach();
             return;

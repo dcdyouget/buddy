@@ -23,12 +23,15 @@ use super::model_menu::{ModelMenu, menu_rows, open_model_menu};
 use super::no_key_page::{NoKeyPage, NoKeyPageEvent};
 use super::page_state::{EmptySend, Page, PageState, classify_empty_send, has_valid_config};
 use super::session::{Conversation, HistoryLoader};
-use super::state::{HISTORY_PAGE_SIZE, user_message};
+use super::state::{HISTORY_PAGE_SIZE, user_message_with_images};
 use crate::chat_bridge::{self, spawn_engine};
 use crate::theme_system::{BuddyTheme, tokens::metrics as m};
 use buddy_engine::chat::ChatEngine;
-use buddy_engine::models::{AppConfig, Message};
-use gpui::{AnyElement, App, Context, Entity, EventEmitter, Focusable, FontWeight, SharedString, Subscription, Task, Window, WindowHandle, div, prelude::*, px};
+use buddy_engine::models::{AppConfig, ImageAttachment, Message};
+use gpui::{
+    AnyElement, App, Context, Entity, EventEmitter, Focusable, FontWeight, SharedString,
+    Subscription, Task, Window, WindowHandle, div, prelude::*, px,
+};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -54,11 +57,18 @@ pub async fn preload(engine: Arc<ChatEngine>) -> Loaded {
         0
     });
     let offset = count.saturating_sub(HISTORY_PAGE_SIZE);
-    let history = engine.load_messages(offset, HISTORY_PAGE_SIZE).await.unwrap_or_else(|e| {
-        log::warn!("读取历史消息失败：{e}");
-        Vec::new()
-    });
-    Loaded { config, history, offset }
+    let history = engine
+        .load_messages(offset, HISTORY_PAGE_SIZE)
+        .await
+        .unwrap_or_else(|e| {
+            log::warn!("读取历史消息失败：{e}");
+            Vec::new()
+        });
+    Loaded {
+        config,
+        history,
+        offset,
+    }
 }
 
 fn history_loader(engine: Arc<ChatEngine>) -> HistoryLoader {
@@ -72,6 +82,7 @@ fn history_loader(engine: Arc<ChatEngine>) -> HistoryLoader {
 fn tool_actions(engine: &Arc<ChatEngine>, conversation: &Entity<Conversation>) -> ToolActions {
     let (approve_engine, approve_conversation) = (engine.clone(), conversation.clone());
     let (answer_engine, answer_conversation) = (engine.clone(), conversation.clone());
+    let download_engine = engine.clone();
     ToolActions {
         decide: Rc::new(move |id: &str, decision: Decision, cx: &mut App| {
             let (approved, approve_all) = decision.flags();
@@ -81,11 +92,20 @@ fn tool_actions(engine: &Arc<ChatEngine>, conversation: &Entity<Conversation>) -
             }
             approve_conversation.update(cx, |c, cx| c.clear_approval(cx));
         }),
-        answer: Rc::new(move |id: &str, answer: super::ask_card::Answer, cx: &mut App| {
-            let inputs = (!answer.inputs.is_empty()).then_some(answer.inputs);
-            answer_engine.answer_tool_question(id, answer.selected, inputs, answer.custom)?;
-            answer_conversation.update(cx, |c, cx| c.clear_question(cx));
-            Ok(())
+        answer: Rc::new(
+            move |id: &str, answer: super::ask_card::Answer, cx: &mut App| {
+                let inputs = (!answer.inputs.is_empty()).then_some(answer.inputs);
+                answer_engine.answer_tool_question(id, answer.selected, inputs, answer.custom)?;
+                answer_conversation.update(cx, |c, cx| c.clear_question(cx));
+                Ok(())
+            },
+        ),
+        download: Rc::new(move |image: ImageAttachment, cx: &mut App| {
+            let engine = download_engine.clone();
+            spawn_engine(
+                cx,
+                async move { engine.download_generated_image(image).await },
+            )
         }),
     }
 }
@@ -127,32 +147,59 @@ impl EventEmitter<RouterEvent> for PageRouter {}
 
 impl PageRouter {
     /// 新建（数据由 [`preload`] 取得）
-    pub fn new(engine: Arc<ChatEngine>, loaded: Loaded, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let Loaded { config, history, offset } = loaded;
-        let conversation = cx.new(|_| Conversation::with_history_page(history, offset, history_loader(engine.clone())));
-        let composer = cx.new(|cx| Composer::new(window, cx));
+    pub fn new(
+        engine: Arc<ChatEngine>,
+        loaded: Loaded,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let Loaded {
+            config,
+            history,
+            offset,
+        } = loaded;
+        let conversation = cx.new(|_| {
+            Conversation::with_history_page(history, offset, history_loader(engine.clone()))
+        });
+        let composer = cx.new(|cx| Composer::new_with_engine(Some(engine.clone()), window, cx));
         composer.update(cx, |c, cx| c.set_standalone(true, cx));
         let empty = cx.new(|_| EmptyPage::new(composer.clone()));
         let no_key = cx.new(NoKeyPage::new);
         let actions = tool_actions(&engine, &conversation);
         let chat = cx.new(|cx| ChatPage::new(conversation.clone(), composer.clone(), actions, cx));
         let subscriptions = vec![
-            cx.subscribe_in(&composer, window, |this, _, event: &ComposerEvent, window, cx| match event {
-                ComposerEvent::Send(text) => this.send(text.clone(), cx),
-                ComposerEvent::Stop => this.engine.stop_generation(),
-                ComposerEvent::OpenSettings => this.open_settings(cx),
-                ComposerEvent::PickModel => this.toggle_model_menu(window, cx),
-            }),
+            cx.subscribe_in(
+                &composer,
+                window,
+                |this, _, event: &ComposerEvent, window, cx| match event {
+                    ComposerEvent::Send(text) => this.send(text.clone(), cx),
+                    ComposerEvent::Stop => this.engine.stop_generation(),
+                    ComposerEvent::OpenSettings => this.open_settings(cx),
+                    ComposerEvent::PickModel => this.toggle_model_menu(window, cx),
+                },
+            ),
             cx.subscribe(&empty, |this, _, event: &EmptyPageEvent, cx| match event {
                 EmptyPageEvent::Expand => this.transition(cx, |p| p.set_page(Page::Conversation)),
-                EmptyPageEvent::DismissError => this.conversation.update(cx, |c, cx| c.dismiss_error(cx)),
+                EmptyPageEvent::DismissError => {
+                    this.conversation.update(cx, |c, cx| c.dismiss_error(cx))
+                }
             }),
-            cx.subscribe(&no_key, |this, _, NoKeyPageEvent::OpenSettings, cx| this.open_settings(cx)),
-            cx.observe_in(&conversation, window, |this, _, window, cx| this.conversation_changed(window, cx)),
+            cx.subscribe(&no_key, |this, _, NoKeyPageEvent::OpenSettings, cx| {
+                this.open_settings(cx)
+            }),
+            cx.observe_in(&conversation, window, |this, _, window, cx| {
+                this.conversation_changed(window, cx)
+            }),
             // v1：窗口失焦 / 隐藏时立即放出缓冲，重新聚焦后追赶再恢复逐字
             cx.observe_window_activation(window, |this, window, cx| {
                 let active = window.is_window_active();
-                this.conversation.update(cx, |c, cx| if active { c.window_shown(cx) } else { c.window_hidden(cx) });
+                this.conversation.update(cx, |c, cx| {
+                    if active {
+                        c.window_shown(cx)
+                    } else {
+                        c.window_hidden(cx)
+                    }
+                });
             }),
         ];
         let mut this = Self {
@@ -228,20 +275,32 @@ impl PageRouter {
     /// 点模型按钮：菜单开着则关闭，否则在按钮上方打开（流式中按钮不存在，不会走到这里）
     fn toggle_model_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(open) = self.model_menu.take()
-            && open.update(cx, |menu, window, cx| menu.close(window, cx)).is_ok()
+            && open
+                .update(cx, |menu, window, cx| menu.close(window, cx))
+                .is_ok()
         {
             return;
         }
         if self.conversation.read(cx).state.is_streaming() {
             return;
         }
-        let Some(anchor) = self.composer.read(cx).model_button_bounds() else { return };
+        let Some(anchor) = self.composer.read(cx).model_button_bounds() else {
+            return;
+        };
         let rows = menu_rows(&self.config.models, &self.config.providers);
         let router = cx.entity().downgrade();
         let on_select = std::rc::Rc::new(move |id: String, cx: &mut App| {
             let _ = router.update(cx, |router, cx| router.select_model(id, cx));
         });
-        self.model_menu = open_model_menu(window, window.window_handle(), anchor, rows, self.config.selected_model_id.clone(), on_select, cx);
+        self.model_menu = open_model_menu(
+            window,
+            window.window_handle(),
+            anchor,
+            rows,
+            self.config.selected_model_id.clone(),
+            on_select,
+            cx,
+        );
     }
 
     /// 选择默认模型（v1 `setDefaultModel`）：内存立即生效，写盘串行进行；保存失败在错误条提示
@@ -258,7 +317,9 @@ impl PageRouter {
             if let Some(previous) = previous {
                 previous.await;
             }
-            let saved = this.update(cx, |_, cx| spawn_engine(cx, async move { engine.save_config(config).await }));
+            let saved = this.update(cx, |_, cx| {
+                spawn_engine(cx, async move { engine.save_config(config).await })
+            });
             let Ok(saved) = saved else { return };
             if let Err(message) = saved.await {
                 let _ = this.update(cx, |this, cx| {
@@ -292,13 +353,17 @@ impl PageRouter {
     }
 
     fn selected_model(&self) -> Option<&buddy_engine::models::ModelInfo> {
-        self.config.models.iter().find(|m| m.id == self.config.selected_model_id)
+        self.config
+            .models
+            .iter()
+            .find(|m| m.id == self.config.selected_model_id)
     }
 
     /// 配置 → 输入区（是否支持图片）；无效配置时按 v1 退回空态
     fn apply_config(&mut self, cx: &mut Context<Self>) {
         let vision = self.selected_model().is_some_and(|m| m.supports_vision);
-        self.composer.update(cx, |c, cx| c.set_supports_vision(vision, cx));
+        self.composer
+            .update(cx, |c, cx| c.set_supports_vision(vision, cx));
         if !self.valid_config() {
             self.transition(cx, |p| p.config_changed(false));
         }
@@ -312,8 +377,10 @@ impl PageRouter {
         }
         let to = self.pages.current();
         let base = self.pages.base_page();
-        self.composer.update(cx, |c, cx| c.set_standalone(base == Page::Empty, cx));
-        self.focus_composer = matches!(base, Page::Empty | Page::Conversation | Page::Streaming) && to != Page::Settings;
+        self.composer
+            .update(cx, |c, cx| c.set_standalone(base == Page::Empty, cx));
+        self.focus_composer = matches!(base, Page::Empty | Page::Conversation | Page::Streaming)
+            && to != Page::Settings;
         cx.emit(RouterEvent::PageChanged { from, to });
         cx.notify();
     }
@@ -324,9 +391,11 @@ impl PageRouter {
             return;
         }
         let has_content = !text.trim().is_empty();
+        let images = self.composer.read(cx).images();
+        let image_count = images.len();
         if self.pages.base_page() == Page::Empty {
             let vision = self.selected_model().is_some_and(|m| m.supports_vision);
-            match classify_empty_send(has_content, self.valid_config(), false, vision) {
+            match classify_empty_send(has_content, self.valid_config(), image_count > 0, vision) {
                 EmptySend::Ignore => {}
                 // 草稿保留（不清空输入区），补好配置后回来还在
                 EmptySend::NeedsKey => self.transition(cx, |p| p.set_page(Page::NoApiKey)),
@@ -338,28 +407,42 @@ impl PageRouter {
                     });
                 }
                 EmptySend::Send => {
-                    self.start(text, cx);
+                    self.start(text, images, cx);
                     self.transition(cx, |p| p.set_page(Page::Streaming));
                 }
             }
-        } else if has_content && !self.config.selected_model_id.is_empty() {
-            self.start(text, cx);
+        } else if (has_content || image_count > 0) && !self.config.selected_model_id.is_empty() {
+            self.start(text, images, cx);
         }
     }
 
     /// 发起对话（v1 `sendMessage`）：发给 engine 的是「已载入的历史 + 本条用户消息」
-    fn start(&mut self, text: String, cx: &mut Context<Self>) {
+    fn start(
+        &mut self,
+        text: String,
+        images: Vec<buddy_engine::models::ImageAttachment>,
+        cx: &mut Context<Self>,
+    ) {
         let model_id = self.config.selected_model_id.clone();
-        self.composer.update(cx, |c, cx| c.set_draft("", cx));
+        self.composer.update(cx, |c, cx| {
+            c.set_draft("", cx);
+            let _ = c.take_images(cx);
+        });
         let messages = self.conversation.update(cx, |c, cx| {
-            c.begin_send(user_message(&text), &model_id, cx);
+            c.begin_send(user_message_with_images(&text, images), &model_id, cx);
             let all = &c.state.messages;
             all[..all.len() - 1].to_vec()
         });
         let conversation = self.conversation.clone();
-        let task = chat_bridge::start_chat(self.engine.clone(), messages, model_id, cx, move |_, events, cx| {
-            conversation.update(cx, |c, cx| c.apply_events(events, cx));
-        });
+        let task = chat_bridge::start_chat(
+            self.engine.clone(),
+            messages,
+            model_id,
+            cx,
+            move |_, events, cx| {
+                conversation.update(cx, |c, cx| c.apply_events(events, cx));
+            },
+        );
         let conversation = self.conversation.clone();
         self.run = Some(cx.spawn(async move |_, cx| {
             let finished = task.await;
@@ -378,11 +461,22 @@ impl PageRouter {
         }
         let (streaming, error, model_id) = {
             let state = &self.conversation.read(cx).state;
-            (state.is_streaming(), state.error.clone(), state.live.as_ref().map(|l| l.model_id.clone()))
+            (
+                state.is_streaming(),
+                state.error.clone(),
+                state.live.as_ref().map(|l| l.model_id.clone()),
+            )
         };
         if streaming != self.was_streaming {
-            let label = model_id.and_then(|id| self.config.models.iter().find(|m| m.id == id).map(|m| SharedString::from(m.display_name.clone())));
-            self.composer.update(cx, |c, cx| c.set_streaming(streaming, label, window, cx));
+            let label = model_id.and_then(|id| {
+                self.config
+                    .models
+                    .iter()
+                    .find(|m| m.id == id)
+                    .map(|m| SharedString::from(m.display_name.clone()))
+            });
+            self.composer
+                .update(cx, |c, cx| c.set_streaming(streaming, label, window, cx));
         }
         self.empty.update(cx, |p, cx| p.set_error(error, cx));
         if self.was_streaming && !streaming {
@@ -409,8 +503,19 @@ impl PageRouter {
             .border_1()
             .border_color(c.border_default)
             .bg(c.bg_surface)
-            .child(div().text_color(c.text_primary).text_size(px(m::FONT_SIZE_LG)).font_weight(FontWeight(600.0)).child("设置"))
-            .child(div().text_color(c.text_muted).text_size(px(m::FONT_SIZE_SM)).child("设置页尚未实现（S06-01）"))
+            .child(
+                div()
+                    .text_color(c.text_primary)
+                    .text_size(px(m::FONT_SIZE_LG))
+                    .font_weight(FontWeight(600.0))
+                    .child("设置"),
+            )
+            .child(
+                div()
+                    .text_color(c.text_muted)
+                    .text_size(px(m::FONT_SIZE_SM))
+                    .child("设置页尚未实现（S06-01）"),
+            )
             .child(
                 div()
                     .id("settings-back")
@@ -439,7 +544,8 @@ impl Render for PageRouter {
             Page::NoApiKey => self.no_key.clone().into_any_element(),
             Page::Conversation | Page::Streaming => self.chat.clone().into_any_element(),
         };
-        let settings = (self.pages.current() == Page::Settings).then(|| self.settings_placeholder(cx));
+        let settings =
+            (self.pages.current() == Page::Settings).then(|| self.settings_placeholder(cx));
         div().size_full().relative().child(base).children(settings)
     }
 }

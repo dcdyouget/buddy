@@ -60,6 +60,12 @@ icons! {
     Square => "square",
     /// 添加图片（lucide `image-plus`）
     ImagePlus => "image-plus",
+    /// 生成图片（lucide `image`）
+    Image => "image",
+    /// 下载图片（lucide `download`）
+    Download => "download",
+    /// 图片缺失（lucide `image-off`）
+    ImageOff => "image-off",
     /// 思考（lucide `brain`）
     Brain => "brain",
     /// 向右（lucide `chevron-right`）

@@ -18,14 +18,18 @@
 
 pub mod approval_panel;
 pub mod ask_card;
+pub mod attachments;
 pub mod chat_page;
 pub mod composer;
+pub mod composer_attachments;
 pub mod empty_page;
+pub mod image_gen;
+pub mod image_gen_state;
 pub mod message_actions;
 pub mod message_row;
 pub mod model_menu;
-pub mod page_state;
 pub mod no_key_page;
+pub mod page_state;
 pub mod router;
 pub mod rows;
 pub mod session;
