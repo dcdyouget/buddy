@@ -60,6 +60,12 @@ icons! {
     Square => "square",
     /// 添加图片（lucide `image-plus`）
     ImagePlus => "image-plus",
+    /// 添加模型（lucide `plus`）
+    Plus => "plus",
+    /// 显示 Key（lucide `eye`）
+    Eye => "eye",
+    /// 隐藏 Key（lucide `eye-off`）
+    EyeOff => "eye-off",
     /// 生成图片（lucide `image`）
     Image => "image",
     /// 下载图片（lucide `download`）
@@ -204,7 +210,15 @@ impl gpui::Element for Icon {
         if style.text.color.is_none() {
             style.text.color = Some(window.text_style().color);
         }
-        self.0.paint(id, inspector_id, bounds, request_layout, prepaint, window, cx)
+        self.0.paint(
+            id,
+            inspector_id,
+            bounds,
+            request_layout,
+            prepaint,
+            window,
+            cx,
+        )
     }
 }
 
@@ -213,11 +227,19 @@ pub struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
-        Ok(IconName::ALL.iter().find(|i| i.path() == path).map(|i| Cow::Borrowed(i.bytes())))
+        Ok(IconName::ALL
+            .iter()
+            .find(|i| i.path() == path)
+            .map(|i| Cow::Borrowed(i.bytes())))
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
-        Ok(IconName::ALL.iter().map(|i| i.path()).filter(|p| p.starts_with(path)).map(Into::into).collect())
+        Ok(IconName::ALL
+            .iter()
+            .map(|i| i.path())
+            .filter(|p| p.starts_with(path))
+            .map(Into::into)
+            .collect())
     }
 }
 
@@ -229,7 +251,11 @@ mod tests {
     fn every_icon_loads_as_svg() {
         for &i in IconName::ALL {
             let bytes = Assets.load(i.path()).unwrap().expect("资源应存在");
-            assert!(std::str::from_utf8(&bytes).unwrap().starts_with("<svg"), "{:?}", i);
+            assert!(
+                std::str::from_utf8(&bytes).unwrap().starts_with("<svg"),
+                "{:?}",
+                i
+            );
         }
         assert!(Assets.load("icons/missing.svg").unwrap().is_none());
         assert_eq!(Assets.list("icons/").unwrap().len(), IconName::ALL.len());
@@ -246,10 +272,21 @@ mod tests {
             for px in [13, 14, 16] {
                 // 2x 屏
                 let dev = DevicePixels(px * 2);
-                let image = renderer.render_parsed(&parsed, SvgSize::ExactSize(Size::new(dev, dev))).expect("应可渲染");
-                let ink = image.as_bytes(0).unwrap().chunks_exact(4).filter(|p| p[3] > 0).count();
+                let image = renderer
+                    .render_parsed(&parsed, SvgSize::ExactSize(Size::new(dev, dev)))
+                    .expect("应可渲染");
+                let ink = image
+                    .as_bytes(0)
+                    .unwrap()
+                    .chunks_exact(4)
+                    .filter(|p| p[3] > 0)
+                    .count();
                 let total = (px * 2 * px * 2) as usize;
-                eprintln!("{:?} @{px}px: 覆盖 {:.1}%", i, ink as f64 * 100.0 / total as f64);
+                eprintln!(
+                    "{:?} @{px}px: 覆盖 {:.1}%",
+                    i,
+                    ink as f64 * 100.0 / total as f64
+                );
             }
         }
     }

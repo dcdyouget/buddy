@@ -168,12 +168,16 @@ impl PageRouter {
         let no_key = cx.new(NoKeyPage::new);
         let actions = tool_actions(&engine, &conversation);
         let chat = cx.new(|cx| ChatPage::new(conversation.clone(), composer.clone(), actions, cx));
-        let settings = cx.new(|cx| crate::settings::SettingsView::new(config.clone(), cx));
+        let settings =
+            cx.new(|cx| crate::settings::SettingsView::new(config.clone(), engine.clone(), cx));
         let subscriptions = vec![
             cx.subscribe(
                 &settings,
                 |this, _, event: &crate::settings::SettingsEvent, cx| match event {
                     crate::settings::SettingsEvent::Back => this.close_settings(cx),
+                    crate::settings::SettingsEvent::AddProvider(submission) => {
+                        this.save_provider(submission.clone(), cx)
+                    }
                 },
             ),
             cx.subscribe_in(
@@ -270,7 +274,8 @@ impl PageRouter {
     /// 配置变化（设置页保存后 / 外部补齐 Key）：更新配置并执行 v1 `App.tsx` 的配置副作用
     pub fn set_config(&mut self, config: AppConfig, cx: &mut Context<Self>) {
         self.config = config;
-        self.settings.update(cx, |view, cx| view.set_config(self.config.clone(), cx));
+        self.settings
+            .update(cx, |view, cx| view.set_config(self.config.clone(), cx));
         // 无效配置由 `apply_config` 处理（内容页退回空态）；有效时才可能从「无 Key」页补齐进入对话
         self.apply_config(cx);
         if self.valid_config() {
@@ -405,7 +410,8 @@ impl PageRouter {
         if (from == Page::Settings) != (to == Page::Settings) {
             let shown = to == Page::Settings;
             self.settings_motion.set_shown(shown);
-            self.settings.update(cx, |view, cx| view.set_active(shown, cx));
+            self.settings
+                .update(cx, |view, cx| view.set_active(shown, cx));
         }
         let base = self.pages.base_page();
         self.composer
@@ -516,8 +522,10 @@ impl PageRouter {
         }
         self.was_streaming = streaming;
     }
-
 }
+
+#[path = "router_settings.rs"]
+mod settings_save;
 
 impl Render for PageRouter {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

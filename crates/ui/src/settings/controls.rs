@@ -160,14 +160,14 @@ fn field_style(theme: &Theme) -> TextAreaStyle {
 
 /// 设置页单行文本输入框。
 ///
-/// 内部复用 Buddy 的 [`TextArea`]，但固定为 [`EnterMode::SingleLine`]。密码遮挡
-/// 暂不提供，避免改变全局 `TextArea` 的文本绘制语义；API Key 等字段由后续设置
-/// spec 单独设计遮挡策略。
+/// 内部复用 Buddy 的 [`TextArea`]，固定为 [`EnterMode::SingleLine`]；
+/// 密码遮罩仅由调用者显式启用，原始内容和编辑偏移仍由 TextArea 持有。
 pub struct SettingsField {
     id: ElementId,
     input: Entity<TextArea>,
     _subscriptions: Vec<Subscription>,
     appearance: Appearance,
+    full_width: bool,
 }
 
 impl SettingsField {
@@ -211,6 +211,7 @@ impl SettingsField {
             input,
             _subscriptions: subscriptions,
             appearance: theme.appearance,
+            full_width: false,
         }
     }
 
@@ -227,6 +228,30 @@ impl SettingsField {
     /// 设置文本并发出一次 [`SettingsFieldEvent::Changed`]。
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
         self.input.update(cx, |input, cx| input.set_text(text, cx));
+    }
+
+    /// 表单字段占满父容器；共用控件示例默认固定宽度。
+    pub fn full_width(&mut self, full_width: bool, cx: &mut Context<Self>) {
+        if self.full_width == full_width { return; }
+        self.full_width = full_width;
+        cx.notify();
+    }
+
+    /// 退出动画期间仅绘制，禁止真实字段接收输入。
+    pub fn set_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        self.input
+            .update(cx, |input, cx| input.set_enabled(active, cx));
+    }
+
+    /// 切换 Key 显示/隐藏；不改动原始输入文本。
+    pub fn set_masked(&mut self, masked: bool, cx: &mut Context<Self>) {
+        self.input
+            .update(cx, |input, cx| input.set_masked(masked, cx));
+    }
+
+    /// 当前密码遮罩状态（自检用）。
+    pub fn masked(&self, cx: &App) -> bool {
+        self.input.read(cx).masked()
     }
 
     /// 将键盘焦点放入单行输入框。
@@ -260,8 +285,8 @@ impl Render for SettingsField {
         div()
             .id(self.id.clone())
             .debug_selector(move || debug_id.clone())
-            .w(px(m::SPACE_8 * 6.0))
-            .flex_none()
+            .when(self.full_width, |d| d.w_full().min_w_0().flex_1())
+            .when(!self.full_width, |d| d.w(px(m::SPACE_8 * 6.0)).flex_none())
             .h(px(m::SPACE_8))
             .px(px(m::SPACE_2))
             .py(px(m::SPACE_1))

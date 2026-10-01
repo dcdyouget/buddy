@@ -2,6 +2,10 @@
 
 pub mod controls;
 pub mod panel;
+pub mod provider;
+pub mod provider_form;
+pub mod provider_merge;
+pub mod provider_presets;
 pub mod select;
 pub mod view;
 

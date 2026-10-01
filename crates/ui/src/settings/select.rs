@@ -1,11 +1,10 @@
 //! 设置页固定选项选择器。
 
-use crate::icons::{IconName, icon};
-use crate::theme_system::{BuddyTheme, tokens::metrics as m};
+use crate::icons::{icon, IconName};
+use crate::theme_system::{tokens::metrics as m, BuddyTheme};
 use gpui::{
-    App, Bounds, Context, ElementId, EventEmitter, FocusHandle, Focusable, FontWeight,
-    KeyDownEvent, MouseDownEvent, Pixels, Render, SharedString, Window, canvas, div, prelude::*,
-    px,
+    canvas, div, prelude::*, px, App, Bounds, Context, ElementId, EventEmitter, FocusHandle,
+    Focusable, FontWeight, KeyDownEvent, MouseDownEvent, Pixels, Render, SharedString, Window,
 };
 use std::cell::Cell;
 use std::rc::Rc;
@@ -20,6 +19,9 @@ pub struct SettingsSelect {
     options: Vec<SharedString>,
     selected: usize,
     open: bool,
+    active: bool,
+    full_width: bool,
+    width: Pixels,
     focus: FocusHandle,
     last_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     menu_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -42,10 +44,43 @@ impl SettingsSelect {
             options,
             selected,
             open: false,
+            active: true,
+            full_width: false,
+            width: px(m::SPACE_8 * 6.0),
             focus: cx.focus_handle(),
             last_bounds: Rc::new(Cell::new(None)),
             menu_bounds: Rc::new(Cell::new(None)),
         }
+    }
+
+    /// 退出面板后立即释放交互，同时关闭弹出菜单。
+    pub fn set_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        if self.active == active {
+            return;
+        }
+        self.active = active;
+        if !active {
+            self.open = false;
+        }
+        cx.notify();
+    }
+
+    /// 自定义行内选择器宽度。
+    pub fn set_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
+        if self.width == width {
+            return;
+        }
+        self.width = width;
+        cx.notify();
+    }
+
+    /// 表单协议选择器填满容器。
+    pub fn full_width(&mut self, full_width: bool, cx: &mut Context<Self>) {
+        if self.full_width == full_width {
+            return;
+        }
+        self.full_width = full_width;
+        cx.notify();
     }
 
     /// 当前选项下标。
@@ -75,6 +110,11 @@ impl SettingsSelect {
             cx.emit(SettingsSelectChanged);
         }
         cx.notify();
+    }
+
+    /// 当前已绘制的菜单边界，供真实鼠标自检定位选项。
+    pub fn painted_menu_bounds_for_test(&self) -> Option<Bounds<Pixels>> {
+        self.menu_bounds.get()
     }
 
     /// 当前帧记录的选择器边界，供预览自测定位真实点击点。
@@ -147,7 +187,7 @@ impl Focusable for SettingsSelect {
 }
 
 impl Render for SettingsSelect {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.buddy_theme().colors;
         let selected = self.selected_value().unwrap_or_default();
         let options = self.options.clone();
@@ -155,9 +195,15 @@ impl Render for SettingsSelect {
         let open = self.open;
         let trigger_bounds = self.last_bounds.clone();
         let menu_bounds = self.menu_bounds.clone();
+        let menu_height = px(m::SPACE_8 * self.options.len() as f32 + 2.0);
+        let open_above = self.last_bounds.get().is_some_and(|bounds| {
+            bounds.bottom() + px(m::SPACE_1) + menu_height > window.viewport_size().height
+                && bounds.top() >= menu_height + px(m::SPACE_1)
+        });
         let trigger = div()
             .id("settings-select-trigger")
-            .min_w(px(m::SPACE_8 * 6.0))
+            .when(self.full_width, |d| d.w_full())
+            .when(!self.full_width, |d| d.w(self.width))
             .min_h(px(m::SPACE_8))
             .px(px(m::SPACE_2))
             .rounded(px(m::RADIUS_MD))
@@ -174,11 +220,13 @@ impl Render for SettingsSelect {
             .bg(c.field_surface)
             .text_color(c.text_primary)
             .text_size(px(m::FONT_SIZE_SM))
-            .cursor_pointer()
-            .on_click(cx.listener(|this, _, window, cx| {
-                window.focus(&this.focus, cx);
-                this.toggle(cx);
-            }))
+            .when(self.active, |d| {
+                d.cursor_pointer()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        window.focus(&this.focus, cx);
+                        this.toggle(cx);
+                    }))
+            })
             .child(selected)
             .child(
                 div()
@@ -199,9 +247,10 @@ impl Render for SettingsSelect {
             );
         let menu = div()
             .absolute()
-            .top(px(m::SPACE_8 + m::SPACE_1))
+            .when(open_above, |d| d.bottom(px(m::SPACE_8 + m::SPACE_1)))
+            .when(!open_above, |d| d.top(px(m::SPACE_8 + m::SPACE_1)))
             .left_0()
-            .min_w(px(m::SPACE_8 * 6.0))
+            .min_w(self.width)
             .rounded(px(m::RADIUS_MD))
             .border_1()
             .border_color(c.border_default)
@@ -251,8 +300,11 @@ impl Render for SettingsSelect {
             .id(self.id.clone())
             .debug_selector(move || debug_id.clone())
             .relative()
-            .track_focus(&self.focus)
-            .on_key_down(cx.listener(Self::key_down))
+            .when(self.full_width, |d| d.w_full())
+            .when(self.active, |d| {
+                d.track_focus(&self.focus)
+                    .on_key_down(cx.listener(Self::key_down))
+            })
             .when(open, |d| {
                 d.on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {
                     let inside_menu = this

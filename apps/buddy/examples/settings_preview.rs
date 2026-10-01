@@ -16,17 +16,17 @@ use buddy_ui::chat::page_state::Page;
 use buddy_ui::chat::router::{Loaded, PageRouter};
 use buddy_ui::chat::state::text_of;
 use buddy_ui::gpui::{
-    App, AppContext, AsyncApp, Bounds, ClipboardItem, Context, Entity, Focusable, IntoElement,
-    KeyDownEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    Pixels, PlatformInput, Render, ScrollDelta, ScrollWheelEvent, Subscription, TouchPhase, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowOptions, canvas, div, point,
-    prelude::*, px, size,
+    canvas, div, point, prelude::*, px, size, App, AppContext, AsyncApp, Bounds, ClipboardItem,
+    Context, Entity, Focusable, IntoElement, KeyDownEvent, Keystroke, Modifiers, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput, Render, ScrollDelta,
+    ScrollWheelEvent, Subscription, TouchPhase, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowHandle, WindowOptions,
 };
 use buddy_ui::gpui_platform::application;
 use buddy_ui::settings::controls::{self as settings_controls, SettingsField, SettingsFieldEvent};
 use buddy_ui::settings::select::{SettingsSelect, SettingsSelectChanged};
 use buddy_ui::theme_system::tokens::metrics as m;
-use buddy_ui::theme_system::{Appearance, BuddyTheme, Theme as UiTheme, fonts};
+use buddy_ui::theme_system::{fonts, Appearance, BuddyTheme, Theme as UiTheme};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -41,6 +41,8 @@ mod controls;
 mod fixture;
 #[path = "settings_preview/input.rs"]
 mod input;
+#[path = "settings_preview/provider_test.rs"]
+mod provider_test;
 #[path = "settings_preview/selftest.rs"]
 mod selftest;
 
@@ -49,6 +51,8 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let self_test = args.iter().any(|arg| arg == "--selftest");
     let self_test_controls = args.iter().any(|arg| arg == "--selftest-controls");
+    let self_test_providers = args.iter().any(|arg| arg == "--selftest-providers");
+    let provider = args.iter().any(|arg| arg == "--provider");
     let controls = args.iter().any(|arg| arg == "--controls");
     let dark = args.iter().any(|arg| arg == "--dark");
     application()
@@ -66,7 +70,7 @@ fn main() {
             fonts::install_text_rendering(cx);
             buddy_ui::markdown::init(cx);
             buddy_ui::chat::init(cx);
-            if !self_test && !self_test_controls {
+            if !self_test && !self_test_controls && !self_test_providers {
                 cx.observe_keystrokes(|event, _, cx| {
                     if event.keystroke.key == "escape" || event.keystroke.unparse() == "cmd-q" {
                         cx.quit();
@@ -74,13 +78,29 @@ fn main() {
                 })
                 .detach();
             }
+            if self_test_providers {
+                cx.spawn(async move |cx: &mut AsyncApp| {
+                    let ok = provider_test::run(cx).await;
+                    std::process::exit(if ok { 0 } else { 1 });
+                })
+                .detach();
+                return;
+            }
             let handle = fixture::open_router(cx);
             let control_handle =
                 (controls || self_test_controls).then(|| controls::open_controls(cx));
-            if !self_test && !self_test_controls {
-                let _ = handle.update(cx, |router, _, cx| router.open_settings(cx));
+            if !self_test && !self_test_controls && !self_test_providers {
+                let _ = handle.update(cx, |router, _, cx| {
+                    router.open_settings(cx);
+                    if provider {
+                        router
+                            .settings_view()
+                            .clone()
+                            .update(cx, |view, cx| view.open_provider(cx));
+                    }
+                });
             }
-            if !self_test && !self_test_controls {
+            if !self_test && !self_test_controls && !self_test_providers {
                 cx.activate(true);
             }
             if self_test {

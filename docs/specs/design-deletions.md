@@ -68,6 +68,8 @@
 
 | 2026-10-01 | `docs/design/pages-and-states.md` SettingsPage 的 overlay 骨架句；`docs/design/component-mapping.md` 外层设置组合与 SlideInPanel 角色（**部分**，设置子项 / 添加 Provider / 窗口外壳保留） | S06-01 | 叠加设置不卸载底层草稿 / 流式任务、切页不改变窗口尺寸、退出动画即释放输入 → `settings/view.rs` / `settings/panel.rs` 模块注释及 S06-01 决策记录。 |
 
+| 2026-10-01 | `docs/design/pages-and-states.md` 添加 Provider 流程；`docs/design/component-mapping.md` AddProviderPanel / ProviderCard / FooterActions 的组合、角色与文件树（**部分**，其余设置子项与窗口外壳保留） | S06-02 | 当前 v1 已单次写入完整配置，原设计文档「分步保存」过时；先写盘后发布、保存失败保留表单、同一配置队列串行、原始模型 ID 与 Provider 作用域隔离 → `router_settings.rs` / `provider_merge.rs` 模块文档及 S06-02 决策记录。 |
+
 ## 退役记录
 
 > 每次删除后追加。**必须同时更新 `AGENTS.md` 的 Document Index 表。**

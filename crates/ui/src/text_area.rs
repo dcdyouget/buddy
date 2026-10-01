@@ -210,6 +210,9 @@ struct LaidLine {
     start: usize,
     /// 逻辑行字节长度（不含 `\n`）
     len: usize,
+    /// 绘制文本中的起始偏移与长度；密码遮罩时与原文不同。
+    display_start: usize,
+    display_len: usize,
     line: WrappedLine,
     /// 相对内容顶部的 y
     top: Pixels,
@@ -223,6 +226,54 @@ struct Layout {
     line_height: Pixels,
     /// 布局所用的文本是否为 placeholder
     placeholder: bool,
+    /// 密码绘制文本与原文的 UTF-8 偏移映射。
+    mask_map: Option<MaskMap>,
+}
+
+/// 密码绘制文本与原文的字节边界映射。
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MaskMap {
+    source_to_display: Vec<usize>,
+    display_to_source: Vec<usize>,
+}
+
+impl MaskMap {
+    fn source_offset(&self, offset: usize) -> usize {
+        self.source_to_display[offset.min(self.source_to_display.len().saturating_sub(1))]
+    }
+
+    fn display_offset(&self, offset: usize) -> usize {
+        self.display_to_source[offset.min(self.display_to_source.len().saturating_sub(1))]
+    }
+}
+
+fn masked_text(source: &str) -> (String, MaskMap) {
+    let mut display = String::with_capacity(source.len());
+    let mut source_to_display = vec![0; source.len() + 1];
+    let mut display_to_source = vec![0];
+    for (start, ch) in source.char_indices() {
+        let end = start + ch.len_utf8();
+        let display_start = display.len();
+        for offset in start..end {
+            source_to_display[offset] = display_start;
+        }
+        if ch == '\n' {
+            display.push('\n');
+        } else {
+            display.push('•');
+        }
+        let display_end = display.len();
+        source_to_display[end] = display_end;
+        display_to_source.resize(display_end + 1, start);
+        display_to_source[display_end] = end;
+    }
+    (
+        display,
+        MaskMap {
+            source_to_display,
+            display_to_source,
+        },
+    )
 }
 
 /// 多行文本输入框
@@ -241,6 +292,8 @@ pub struct TextArea {
     last_edit_at: Option<Instant>,
     layout: Option<Layout>,
     scroll_y: Pixels,
+    /// SingleLine 输入的水平滚动偏移；多行输入始终为零。
+    scroll_x: Pixels,
     /// 上一次为「保持光标可见」调整滚动时的 (光标位置, 内容长度)：只在它们变化时才把光标拉回视野，
     /// 否则滚轮向上翻看会在下一帧被拽回光标处
     revealed: Option<(usize, usize)>,
@@ -249,6 +302,10 @@ pub struct TextArea {
     last_activity: Instant,
     blink: Option<gpui::Task<()>>,
     style: TextAreaStyle,
+    /// 是否以密码字符绘制；内容、选区与输入法仍使用原文。
+    masked: bool,
+    /// 是否接受焦点、键盘、鼠标与输入法输入。
+    enabled: bool,
 }
 
 impl EventEmitter<TextAreaEvent> for TextArea {}
@@ -323,17 +380,22 @@ impl TextArea {
             last_edit_at: None,
             layout: None,
             scroll_y: px(0.),
+            scroll_x: px(0.),
             revealed: None,
             enter_mode: EnterMode::Chat,
             last_activity: Instant::now(),
             blink: None,
             style,
+            masked: false,
+            enabled: true,
         }
     }
 
     /// 设置 Enter 键语义（默认 [`EnterMode::Chat`]）
     pub fn set_enter_mode(&mut self, mode: EnterMode) {
         self.enter_mode = mode;
+        self.scroll_x = px(0.);
+        self.revealed = None;
     }
 
     /// 当前内容
@@ -349,6 +411,11 @@ impl TextArea {
     /// 当前滚动偏移（自检用）
     pub fn scroll_y_for_test(&self) -> Pixels {
         self.scroll_y
+    }
+
+    /// 当前水平滚动偏移（自检用）
+    pub fn scroll_x_for_test(&self) -> Pixels {
+        self.scroll_x
     }
 
     /// 上一帧绘制的文字区域（自检用；尚未绘制时为 `None`）
@@ -371,6 +438,7 @@ impl TextArea {
         self.redo.clear();
         self.last_edit_at = None;
         self.scroll_y = px(0.);
+        self.scroll_x = px(0.);
         cx.emit(TextAreaEvent::Changed);
         cx.notify();
     }
@@ -378,6 +446,39 @@ impl TextArea {
     /// 更新外观（主题切换时）
     pub fn set_style(&mut self, style: TextAreaStyle, cx: &mut Context<Self>) {
         self.style = style;
+        cx.notify();
+    }
+
+    /// 是否启用密码字符绘制。
+    pub fn masked(&self) -> bool {
+        self.masked
+    }
+
+    /// 切换密码字符绘制；只改变视觉层，不改变原文、选区或输入法状态。
+    pub fn set_masked(&mut self, masked: bool, cx: &mut Context<Self>) {
+        if self.masked == masked {
+            return;
+        }
+        self.masked = masked;
+        self.layout = None;
+        self.revealed = None;
+        cx.notify();
+    }
+
+    /// 是否接受交互输入。
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// 开关交互输入；禁用时保留布局和文本，但不再注册焦点、输入法或鼠标处理。
+    pub fn set_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.enabled == enabled {
+            return;
+        }
+        self.enabled = enabled;
+        if !enabled {
+            self.blink = None;
+        }
         cx.notify();
     }
 
@@ -456,7 +557,13 @@ impl TextArea {
         let layout = self.layout.as_ref().filter(|l| !l.placeholder)?;
         let lh = layout.line_height;
         let line = layout.lines.iter().rev().find(|l| offset >= l.start)?;
-        let local = (offset - line.start).min(line.len);
+        let display_offset = layout
+            .mask_map
+            .as_ref()
+            .map_or(offset, |map| map.source_offset(offset));
+        let local = display_offset
+            .saturating_sub(line.display_start)
+            .min(line.display_len);
         let p = line.line.position_for_index(local, lh)?;
         Some(point(p.x, line.top + p.y))
     }
@@ -469,12 +576,21 @@ impl TextArea {
         let local = match line.line.closest_index_for_position(point(p.x.max(px(0.)), y), layout.line_height) {
             Ok(i) | Err(i) => i,
         };
-        line.start + local.min(line.len)
+        let display_offset = line.display_start + local.min(line.display_len);
+        layout
+            .mask_map
+            .as_ref()
+            .map_or(line.start + local.min(line.len), |map| {
+                map.display_offset(display_offset)
+            })
     }
 
     fn offset_for_window_point(&self, p: Point<Pixels>) -> usize {
         match self.layout.as_ref() {
-            Some(l) => self.offset_for(point(p.x - l.bounds.left(), p.y - l.bounds.top() + self.scroll_y)),
+            Some(l) => self.offset_for(point(
+                p.x - l.bounds.left() + self.scroll_x,
+                p.y - l.bounds.top() + self.scroll_y,
+            )),
             None => 0,
         }
     }
@@ -732,6 +848,9 @@ impl TextArea {
 
 impl EntityInputHandler for TextArea {
     fn text_for_range(&mut self, range_utf16: Range<usize>, actual_range: &mut Option<Range<usize>>, _: &mut Window, _: &mut Context<Self>) -> Option<String> {
+        if !self.enabled {
+            return None;
+        }
         let start = utf16_to_utf8(&self.content, range_utf16.start);
         let end = utf16_to_utf8(&self.content, range_utf16.end).max(start);
         actual_range.replace(utf8_to_utf16(&self.content, start)..utf8_to_utf16(&self.content, end));
@@ -739,6 +858,9 @@ impl EntityInputHandler for TextArea {
     }
 
     fn selected_text_range(&mut self, _: bool, _: &mut Window, _: &mut Context<Self>) -> Option<UTF16Selection> {
+        if !self.enabled {
+            return None;
+        }
         Some(UTF16Selection {
             range: utf8_to_utf16(&self.content, self.selected_range.start)..utf8_to_utf16(&self.content, self.selected_range.end),
             reversed: self.selection_reversed,
@@ -746,14 +868,23 @@ impl EntityInputHandler for TextArea {
     }
 
     fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
+        if !self.enabled {
+            return None;
+        }
         self.marked_range.as_ref().map(|r| utf8_to_utf16(&self.content, r.start)..utf8_to_utf16(&self.content, r.end))
     }
 
     fn unmark_text(&mut self, _: &mut Window, _: &mut Context<Self>) {
+        if !self.enabled {
+            return;
+        }
         self.marked_range = None;
     }
 
     fn replace_text_in_range(&mut self, range_utf16: Option<Range<usize>>, new_text: &str, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.enabled {
+            return;
+        }
         let range = self.resolve_range(range_utf16);
         // 普通键入合并撤销；输入法上屏（替换标记文本）同样视为键入
         self.edit(range, new_text, true, cx);
@@ -767,6 +898,9 @@ impl EntityInputHandler for TextArea {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.enabled {
+            return;
+        }
         let range = self.resolve_range(range_utf16);
         if self.marked_range.is_none() {
             self.record_undo(false);
@@ -786,16 +920,22 @@ impl EntityInputHandler for TextArea {
     }
 
     fn bounds_for_range(&mut self, range_utf16: Range<usize>, _: Bounds<Pixels>, _: &mut Window, _: &mut Context<Self>) -> Option<Bounds<Pixels>> {
+        if !self.enabled {
+            return None;
+        }
         let layout = self.layout.as_ref()?;
         let start = utf16_to_utf8(&self.content, range_utf16.start);
         let end = utf16_to_utf8(&self.content, range_utf16.end);
         let (a, b) = (self.position_for(start)?, self.position_for(end)?);
-        let origin = layout.bounds.origin - point(px(0.), self.scroll_y);
+        let origin = layout.bounds.origin - point(self.scroll_x, self.scroll_y);
         // 候选窗贴在区间所在行的下方：用起点所在行
         Some(Bounds::from_corners(origin + a, origin + point(if b.y == a.y { b.x } else { a.x }, a.y + layout.line_height)))
     }
 
     fn character_index_for_point(&mut self, p: Point<Pixels>, _: &mut Window, _: &mut Context<Self>) -> Option<usize> {
+        if !self.enabled {
+            return None;
+        }
         // 缺陷 1：布局可能是 placeholder，不断言，按位置换算（空内容时为 0）
         let offset = self.offset_for_window_point(p);
         Some(utf8_to_utf16(&self.content, offset))
@@ -823,18 +963,48 @@ struct Prepaint {
     caret: Option<PaintQuad>,
 }
 
-fn shape(input: &TextArea, width: Pixels, window: &mut Window) -> (Vec<LaidLine>, bool) {
+fn shape(
+    input: &TextArea,
+    width: Pixels,
+    window: &mut Window,
+) -> (Vec<LaidLine>, bool, Option<MaskMap>) {
     let placeholder = input.content.is_empty();
-    let text: SharedString = if placeholder { input.placeholder.clone() } else { input.content.clone().into() };
+    let (text, mask_map): (SharedString, Option<MaskMap>) = if placeholder {
+        (input.placeholder.clone(), None)
+    } else if input.masked {
+        let (text, map) = masked_text(&input.content);
+        (text.into(), Some(map))
+    } else {
+        (input.content.clone().into(), None)
+    };
     let style = window.text_style();
     let font = style.font();
     let color = if placeholder { input.style.placeholder_color } else { input.style.text_color };
     let base = TextRun { len: text.len(), font, color, background_color: None, underline: None, strikethrough: None };
-    let runs: Vec<TextRun> = match input.marked_range.as_ref().filter(|_| !placeholder) {
+    let marked_range = input.marked_range.as_ref().filter(|_| !placeholder).map(|range| {
+        mask_map.as_ref().map_or((range.start, range.end), |map| {
+            (map.source_offset(range.start), map.source_offset(range.end))
+        })
+    });
+    let runs: Vec<TextRun> = match marked_range {
         Some(m) => vec![
-            TextRun { len: m.start, ..base.clone() },
-            TextRun { len: m.end - m.start, underline: Some(UnderlineStyle { color: Some(color), thickness: px(1.), wavy: false }), ..base.clone() },
-            TextRun { len: text.len() - m.end, ..base },
+            TextRun {
+                len: m.0,
+                ..base.clone()
+            },
+            TextRun {
+                len: m.1 - m.0,
+                underline: Some(UnderlineStyle {
+                    color: Some(color),
+                    thickness: px(1.),
+                    wavy: false,
+                }),
+                ..base.clone()
+            },
+            TextRun {
+                len: text.len() - m.1,
+                ..base
+            },
         ]
         .into_iter()
         .filter(|r| r.len > 0)
@@ -842,17 +1012,30 @@ fn shape(input: &TextArea, width: Pixels, window: &mut Window) -> (Vec<LaidLine>
         None => vec![base],
     };
     let lh = input.style.line_height;
-    let shaped = window.text_system().shape_text(text.clone(), input.style.font_size, &runs, Some(width), None).unwrap_or_default();
+    let shaped = window.text_system().shape_text(text.clone(), input.style.font_size, &runs, (input.enter_mode != EnterMode::SingleLine).then_some(width), None).unwrap_or_default();
     let mut lines = Vec::new();
-    let (mut start, mut top) = (0usize, px(0.));
+    let (mut display_start, mut top) = (0usize, px(0.));
     for line in shaped {
-        let len = line.len();
+        let display_len = line.len();
         let height = line.size(lh).height.max(lh);
-        lines.push(LaidLine { start, len, line, top, height });
-        start += len + 1;
+        let (start, len) = mask_map.as_ref().map_or((display_start, display_len), |map| {
+            let source_start = map.display_offset(display_start);
+            let source_end = map.display_offset(display_start + display_len);
+            (source_start, source_end.saturating_sub(source_start))
+        });
+        lines.push(LaidLine {
+            start,
+            len,
+            display_start,
+            display_len,
+            line,
+            top,
+            height,
+        });
+        display_start += display_len + 1;
         top += height;
     }
-    (lines, placeholder)
+    (lines, placeholder, mask_map)
 }
 
 impl IntoElement for TextAreaElement {
@@ -885,7 +1068,7 @@ impl Element for TextAreaElement {
             });
             let area = input.read(cx);
             let (min_h, max_h, lh) = (area.style.min_height, area.style.max_height, area.style.line_height);
-            let (lines, _) = shape(area, width, window);
+            let (lines, _, _) = shape(area, width, window);
             let content_h = lines.last().map_or(lh, |l| l.top + l.height);
             let h = content_h.max(min_h);
             size(width, max_h.map_or(h, |m| h.min(m)))
@@ -895,13 +1078,29 @@ impl Element for TextAreaElement {
     }
 
     fn prepaint(&mut self, _: Option<&GlobalElementId>, _: Option<&gpui::InspectorElementId>, bounds: Bounds<Pixels>, _: &mut (), window: &mut Window, cx: &mut App) -> Prepaint {
-        let (lines, placeholder) = shape(self.input.read(cx), bounds.size.width, window);
+        let (lines, placeholder, mask_map) = shape(self.input.read(cx), bounds.size.width, window);
         let line_height = self.input.read(cx).style.line_height;
         self.input.update(cx, |area, _| {
-            area.layout = Some(Layout { lines, bounds, line_height, placeholder });
+            area.layout = Some(Layout {
+                lines,
+                bounds,
+                line_height,
+                placeholder,
+                mask_map,
+            });
             // 保持光标可见（内容超过最大高度时）
             let content_h = area.layout.as_ref().and_then(|l| l.lines.last()).map_or(px(0.), |l| l.top + l.height);
             let max_scroll = (content_h - bounds.size.height).max(px(0.));
+            let content_w = area
+                .layout
+                .as_ref()
+                .and_then(|l| l.lines.first())
+                .map_or(px(0.), |l| l.line.size(line_height).width);
+            let max_scroll_x = if area.enter_mode == EnterMode::SingleLine {
+                (content_w - bounds.size.width).max(px(0.))
+            } else {
+                px(0.)
+            };
             let key = (area.cursor_offset(), area.content.len());
             if area.revealed != Some(key) {
                 area.revealed = Some(key);
@@ -914,9 +1113,20 @@ impl Element for TextAreaElement {
                 }
             }
             area.scroll_y = area.scroll_y.clamp(px(0.), max_scroll);
+            area.scroll_x = area.scroll_x.clamp(px(0.), max_scroll_x);
+            if area.enter_mode == EnterMode::SingleLine {
+                if let Some(p) = area.position_for(area.cursor_offset()) {
+                    if p.x < area.scroll_x {
+                        area.scroll_x = p.x;
+                    } else if p.x + px(1.5) > area.scroll_x + bounds.size.width {
+                        area.scroll_x = p.x + px(1.5) - bounds.size.width;
+                    }
+                    area.scroll_x = area.scroll_x.clamp(px(0.), max_scroll_x);
+                }
+            }
         });
         let area = self.input.read(cx);
-        let origin = bounds.origin - point(px(0.), area.scroll_y);
+        let origin = bounds.origin - point(area.scroll_x, area.scroll_y);
         let mut selections = Vec::new();
         let range = area.selected_range.clone();
         if !range.is_empty() && !placeholder {
@@ -935,7 +1145,7 @@ impl Element for TextAreaElement {
                 }
             }
         }
-        let caret = (range.is_empty() || placeholder)
+        let caret = (area.enabled && (range.is_empty() || placeholder))
             .then(|| {
                 let p = if placeholder { Some(point(px(0.), px(0.))) } else { area.position_for(area.cursor_offset()) };
                 p.map(|p| fill(Bounds::new(origin + p, size(px(1.5), line_height)), area.style.caret_color))
@@ -945,9 +1155,12 @@ impl Element for TextAreaElement {
     }
 
     fn paint(&mut self, _: Option<&GlobalElementId>, _: Option<&gpui::InspectorElementId>, bounds: Bounds<Pixels>, _: &mut (), prepaint: &mut Prepaint, window: &mut Window, cx: &mut App) {
-        let focus = self.input.read(cx).focus_handle.clone();
-        window.handle_input(&focus, ElementInputHandler::new(bounds, self.input.clone()), cx);
         let area = self.input.read(cx);
+        let focus = area.focus_handle.clone();
+        if area.enabled {
+            window.handle_input(&focus, ElementInputHandler::new(bounds, self.input.clone()), cx);
+        }
+        let scroll_x = area.scroll_x;
         let scroll_y = area.scroll_y;
         let caret_visible = area.caret_visible();
         window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
@@ -959,7 +1172,7 @@ impl Element for TextAreaElement {
             if let Some(layout) = layout.as_ref() {
                 let lh = layout.line_height;
                 for l in &layout.lines {
-                    let origin = bounds.origin + point(px(0.), l.top - scroll_y);
+                    let origin = bounds.origin + point(-scroll_x, l.top - scroll_y);
                     let _ = l.line.paint(origin, lh, TextAlign::Left, None, window, cx);
                 }
             }
@@ -976,56 +1189,58 @@ impl Element for TextAreaElement {
 
 impl Render for TextArea {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.focus_handle.is_focused(window) {
+        if self.enabled && self.focus_handle.is_focused(window) {
             self.ensure_blink(cx);
         } else {
             self.blink = None;
         }
         div()
             .w_full()
-            .key_context("TextArea")
-            .track_focus(&self.focus_handle)
-            .cursor(CursorStyle::IBeam)
             .text_size(self.style.font_size)
             .line_height(self.style.line_height)
-            .on_action(cx.listener(Self::submit))
-            .on_action(cx.listener(Self::newline))
-            .on_action(cx.listener(Self::backspace))
-            .on_action(cx.listener(Self::delete))
-            .on_action(cx.listener(Self::delete_word_left))
-            .on_action(cx.listener(Self::delete_to_line_start))
-            .on_action(cx.listener(Self::left))
-            .on_action(cx.listener(Self::right))
-            .on_action(cx.listener(Self::up))
-            .on_action(cx.listener(Self::down))
-            .on_action(cx.listener(Self::select_left))
-            .on_action(cx.listener(Self::select_right))
-            .on_action(cx.listener(Self::select_up))
-            .on_action(cx.listener(Self::select_down))
-            .on_action(cx.listener(Self::word_left))
-            .on_action(cx.listener(Self::word_right))
-            .on_action(cx.listener(Self::select_word_left))
-            .on_action(cx.listener(Self::select_word_right))
-            .on_action(cx.listener(Self::line_start))
-            .on_action(cx.listener(Self::line_end))
-            .on_action(cx.listener(Self::select_line_start))
-            .on_action(cx.listener(Self::select_line_end))
-            .on_action(cx.listener(Self::doc_start))
-            .on_action(cx.listener(Self::doc_end))
-            .on_action(cx.listener(Self::select_doc_start))
-            .on_action(cx.listener(Self::select_doc_end))
-            .on_action(cx.listener(Self::select_all))
-            .on_action(cx.listener(Self::copy))
-            .on_action(cx.listener(Self::cut))
-            .on_action(cx.listener(Self::paste))
-            .on_action(cx.listener(Self::undo))
-            .on_action(cx.listener(Self::redo))
-            .on_action(cx.listener(Self::show_character_palette))
-            .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
-            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
-            .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
-            .on_mouse_move(cx.listener(Self::on_mouse_move))
-            .on_scroll_wheel(cx.listener(Self::on_scroll))
+            .when(self.enabled, |d| {
+                d.key_context("TextArea")
+                    .track_focus(&self.focus_handle)
+                    .cursor(CursorStyle::IBeam)
+                    .on_action(cx.listener(Self::submit))
+                    .on_action(cx.listener(Self::newline))
+                    .on_action(cx.listener(Self::backspace))
+                    .on_action(cx.listener(Self::delete))
+                    .on_action(cx.listener(Self::delete_word_left))
+                    .on_action(cx.listener(Self::delete_to_line_start))
+                    .on_action(cx.listener(Self::left))
+                    .on_action(cx.listener(Self::right))
+                    .on_action(cx.listener(Self::up))
+                    .on_action(cx.listener(Self::down))
+                    .on_action(cx.listener(Self::select_left))
+                    .on_action(cx.listener(Self::select_right))
+                    .on_action(cx.listener(Self::select_up))
+                    .on_action(cx.listener(Self::select_down))
+                    .on_action(cx.listener(Self::word_left))
+                    .on_action(cx.listener(Self::word_right))
+                    .on_action(cx.listener(Self::select_word_left))
+                    .on_action(cx.listener(Self::select_word_right))
+                    .on_action(cx.listener(Self::line_start))
+                    .on_action(cx.listener(Self::line_end))
+                    .on_action(cx.listener(Self::select_line_start))
+                    .on_action(cx.listener(Self::select_line_end))
+                    .on_action(cx.listener(Self::doc_start))
+                    .on_action(cx.listener(Self::doc_end))
+                    .on_action(cx.listener(Self::select_doc_start))
+                    .on_action(cx.listener(Self::select_doc_end))
+                    .on_action(cx.listener(Self::select_all))
+                    .on_action(cx.listener(Self::copy))
+                    .on_action(cx.listener(Self::cut))
+                    .on_action(cx.listener(Self::paste))
+                    .on_action(cx.listener(Self::undo))
+                    .on_action(cx.listener(Self::redo))
+                    .on_action(cx.listener(Self::show_character_palette))
+                    .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+                    .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
+                    .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
+                    .on_mouse_move(cx.listener(Self::on_mouse_move))
+                    .on_scroll_wheel(cx.listener(Self::on_scroll))
+            })
             .child(TextAreaElement { input: cx.entity() })
     }
 }
@@ -1054,5 +1269,27 @@ mod tests {
         assert_eq!(previous_word(s, s.find("𠮷").unwrap()), s.find("world").unwrap());
         assert_eq!(next_word(s, 0), "你".len());
         assert_eq!(word_range("hello world", 7), 6..11);
+    }
+
+    #[test]
+    fn masked_text_keeps_unicode_source_boundaries() {
+        let source = "a你𠮷\n𐐀";
+        let (display, map) = masked_text(source);
+        assert_eq!(display, "•••\n•");
+        for (offset, _) in source.char_indices() {
+            let display_offset = map.source_offset(offset);
+            assert_eq!(map.display_offset(display_offset), offset);
+        }
+        assert_eq!(map.source_offset(source.len()), display.len());
+        assert_eq!(map.display_offset(display.len()), source.len());
+    }
+
+    #[test]
+    fn masked_text_maps_newline_without_masking_line_break() {
+        let source = "密\n码";
+        let (display, map) = masked_text(source);
+        assert_eq!(display, "•\n•");
+        assert_eq!(map.source_offset("密".len()), "•".len());
+        assert_eq!(map.display_offset("•".len()), "密".len());
     }
 }

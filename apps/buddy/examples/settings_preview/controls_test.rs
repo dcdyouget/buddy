@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "controls_text_test.rs"]
+mod text_test;
+
 async fn draw_controls(handle: WindowHandle<ControlsPreview>, cx: &mut AsyncApp) {
     let _ = cx.update_window(handle.into(), |_, window, cx| {
         window.refresh();
@@ -159,7 +162,8 @@ pub(crate) async fn selftest_controls(
     println!(
         "T36: 粘贴单行归一 {typed}；开关 {toggled}；Tab/ShiftTab {tab_forward}/{tab_backward}；下拉焦点 {mouse_focus}、展开 {mouse_open}、鼠标选择 {mouse_selected}、键盘up/down {keyboard_up}/{keyboard_down}、Esc {opened_before_escape}→{escaped}；按钮 {button_hit}"
     );
-    let ok = typed && toggled && selected && button_hit && tab_forward && tab_backward;
+    let text_ok = text_test::run(handle, &field, cx).await;
+    let ok = typed && toggled && selected && button_hit && tab_forward && tab_backward && text_ok;
     println!(
         "{} S06-01 T36 共用设置控件真实交互",
         if ok { "PASS" } else { "FAIL" }
