@@ -1,6 +1,6 @@
 # S06-02 Provider 卡片与新增流程
 
-> 状态: `doing`
+> 状态: `done`
 > Phase: 06
 > 依赖: S06-01, S02-01
 > 阻塞: —
@@ -47,6 +47,7 @@
 | 本地视觉读取 | 2026-10-01 临时启用 GPUI test-support，读取浅 / 深 760×640、560×640 的实际 `window.render_to_image()`，核对两列卡片与末行半宽、Key 密码字符、显隐 / 外链图标、能力勾选、上下文菜单向上完整展开、固定页脚与深色对比。尺寸变化等待平台回调并断言真实 viewport，未把未完成 resize 的旧帧作为窄窗口证据。诊断代码、Cargo features/lock 全部还原，图片不入库。视觉像素、系统窗口阴影和 IME 候选窗坐标无独立自动化证据；系统阴影仍归 Phase 07。 |
 | 拦截验证 | `NO_PROXY=127.0.0.1,localhost python3 scripts/settings/verify_phase06.py`：45 项均已被行为失败拦截。原设置 14 项，加 Provider / Unicode / 单行 / 保存 / 焦点 / 菜单 / Compat 31 项；首轮 42 项有效，最后菜单项中断后复跑 `--case provider-menu-viewport` 得 1/1，新增 `--case provider-thinking-binding --case provider-max-tokens-binding` 得 2/2。每项正常基线先 PASS，破坏后命中 FAIL / 单测 FAILED 并非零退出，随后还原；编译错误、中断和调试时的基线失败均不算通过。 |
 | 全量回归 | 2026-10-01 `cargo test -q -p buddy-ui --lib`：135 passed / 0 failed；按顺序运行 `chat_preview` / `pages_preview` / `app_preview` / `markdown_preview` / `streaming_preview` 的 `--selftest`，均 rc=0 且有 PASS，覆盖 T03–T34（含网络搜索、生图、附件和真实 engine 保存）。GUI 自测串行，避免平台剪贴板互相覆盖。 |
+| 提交门禁 | 2026-10-01 按代理配置执行 `scripts/gate.sh > /tmp/gate.log 2>&1`：rc=0，输出 `gate: 全部通过`；纪律、图标来源、纪律拦截、workspace 全目标 / markdown lib / v1 编译通过。实现 commit `e5b85ca`。 |
 
 ## 决策记录
 
@@ -67,6 +68,6 @@
 
 ## 完成记录
 
-- 日期：
-- commit：
-- 设计文档处置：
+- 日期：2026-10-01
+- commit：`e5b85ca`
+- 设计文档处置：删除 `pages-and-states.md` 的添加 Provider 流程与过时分步保存说明；删除 `component-mapping.md` 的 AddProviderPanel / ProviderCard / FooterActions 映射，保留其他设置与窗口段落；已登记 `design-deletions.md`「已部分删减的文档」，事务与视觉取舍迁入本 spec。
