@@ -103,6 +103,7 @@ impl McpServerConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn test_default_values() {
@@ -158,5 +159,113 @@ mod tests {
         assert!(cfg.validate_sse().is_err());
         cfg.url = Some("https://example.com/sse".into());
         assert!(cfg.validate_sse().is_ok());
+    }
+
+    #[test]
+    fn json_roundtrip_preserves_stdio_and_sse_fields() {
+        let stdio = McpServerConfig {
+            id: "stdio-1".into(),
+            name: "本地文件".into(),
+            enabled: false,
+            transport: McpTransport::Stdio,
+            command: Some("node".into()),
+            args: vec!["server.js".into(), "--readonly".into()],
+            env: HashMap::from([
+                ("MCP_ROOT".into(), "/tmp/workspace".into()),
+                ("TOKEN".into(), "test-token".into()),
+            ]),
+            url: None,
+            headers: HashMap::new(),
+            timeout_secs: 7,
+            auto_reconnect: false,
+        };
+        let sse = McpServerConfig {
+            id: "sse-1".into(),
+            name: "远程工具".into(),
+            enabled: true,
+            transport: McpTransport::Sse,
+            command: None,
+            args: Vec::new(),
+            env: HashMap::new(),
+            url: Some("https://example.invalid/mcp".into()),
+            headers: HashMap::from([
+                ("Authorization".into(), "Bearer test-token".into()),
+                ("X-Client".into(), "buddy-test".into()),
+            ]),
+            timeout_secs: 1500,
+            auto_reconnect: true,
+        };
+
+        for original in [stdio, sse] {
+            let encoded = serde_json::to_string(&original).unwrap();
+            let decoded: McpServerConfig = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(decoded.id, original.id);
+            assert_eq!(decoded.name, original.name);
+            assert_eq!(decoded.enabled, original.enabled);
+            assert_eq!(decoded.transport, original.transport);
+            assert_eq!(decoded.command, original.command);
+            assert_eq!(decoded.args, original.args);
+            assert_eq!(decoded.env, original.env);
+            assert_eq!(decoded.url, original.url);
+            assert_eq!(decoded.headers, original.headers);
+            assert_eq!(decoded.timeout_secs, original.timeout_secs);
+            assert_eq!(decoded.auto_reconnect, original.auto_reconnect);
+        }
+    }
+
+    #[test]
+    fn serde_rejects_missing_required_fields_and_unknown_transport() {
+        assert!(
+            serde_json::from_str::<McpServerConfig>(r#"{"name":"server","transport":"stdio"}"#)
+                .is_err()
+        );
+        assert!(
+            serde_json::from_str::<McpServerConfig>(r#"{"id":"server","transport":"stdio"}"#)
+                .is_err()
+        );
+        assert!(
+            serde_json::from_str::<McpServerConfig>(r#"{"id":"server","name":"server"}"#).is_err()
+        );
+        assert!(
+            serde_json::from_str::<McpServerConfig>(
+                r#"{"id":"server","name":"server","transport":"websocket"}"#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn validation_keeps_empty_and_zero_boundary_behavior() {
+        let stdio = McpServerConfig {
+            id: String::new(),
+            name: String::new(),
+            enabled: true,
+            transport: McpTransport::Stdio,
+            command: Some(" ".into()),
+            args: Vec::new(),
+            env: HashMap::new(),
+            url: None,
+            headers: HashMap::new(),
+            timeout_secs: 0,
+            auto_reconnect: true,
+        };
+        assert!(stdio.validate_stdio().is_ok());
+        assert_eq!(stdio.timeout_secs, 0);
+
+        let sse = McpServerConfig {
+            id: String::new(),
+            name: String::new(),
+            enabled: true,
+            transport: McpTransport::Sse,
+            command: None,
+            args: Vec::new(),
+            env: HashMap::new(),
+            url: Some(" ".into()),
+            headers: HashMap::new(),
+            timeout_secs: 0,
+            auto_reconnect: true,
+        };
+        assert!(sse.validate_sse().is_ok());
+        assert_eq!(sse.timeout_secs, 0);
     }
 }

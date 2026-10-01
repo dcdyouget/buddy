@@ -1,4 +1,4 @@
-use crate::models::{normalize_model_ids, AppConfig};
+use crate::models::{AppConfig, normalize_model_ids};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -35,6 +35,8 @@ pub(super) fn save_config(dir: &PathBuf, config: &AppConfig) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::mcp::{McpServerConfig, McpTransport};
+    use std::collections::HashMap;
     use std::sync::{Arc, Barrier};
 
     #[test]
@@ -60,12 +62,95 @@ mod tests {
         assert_eq!(migrated.providers[0].enabled_model_ids, ["provider::model"]);
         assert_eq!(migrated.providers[0].api_key, "test-only-key");
         assert!(migrated.models[0].supports_vision);
+        assert!(migrated.mcp_servers.is_empty());
         assert_eq!(fs::read_to_string(dir.join("config.json")).unwrap(), legacy);
 
         save_config(&dir, &migrated).unwrap();
         assert_eq!(
             serde_json::to_value(read_config(&dir).unwrap()).unwrap(),
             serde_json::to_value(&migrated).unwrap()
+        );
+    }
+
+    #[test]
+    fn invalid_mcp_config_falls_back_to_defaults_without_rewriting_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let invalid = r#"{
+            "hotkey": "must-not-survive",
+            "mcp_servers": [{
+                "id": "broken",
+                "name": "broken",
+                "transport": "unknown"
+            }]
+        }"#;
+        let dir = directory.path().to_path_buf();
+        fs::write(dir.join("config.json"), invalid).unwrap();
+
+        let config = read_config(&dir).unwrap();
+
+        assert_eq!(config.hotkey, "CmdOrCtrl+J");
+        assert!(config.providers.is_empty());
+        assert!(config.mcp_servers.is_empty());
+        assert_eq!(fs::read_to_string(dir.join("config.json")).unwrap(), invalid);
+    }
+
+    #[test]
+    fn mcp_servers_roundtrip_through_disk_without_losing_fields() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = AppConfig {
+            hotkey: "mcp-roundtrip".into(),
+            mcp_servers: vec![
+                McpServerConfig {
+                    id: "stdio-1".into(),
+                    name: "本地文件".into(),
+                    enabled: false,
+                    transport: McpTransport::Stdio,
+                    command: Some("node".into()),
+                    args: vec!["server.js".into(), "--readonly".into()],
+                    env: HashMap::from([
+                        ("MCP_ROOT".into(), "/tmp/workspace".into()),
+                        ("TOKEN".into(), "test-token".into()),
+                    ]),
+                    url: None,
+                    headers: HashMap::new(),
+                    timeout_secs: 7,
+                    auto_reconnect: false,
+                },
+                McpServerConfig {
+                    id: "sse-1".into(),
+                    name: "远程工具".into(),
+                    enabled: true,
+                    transport: McpTransport::Sse,
+                    command: None,
+                    args: Vec::new(),
+                    env: HashMap::new(),
+                    url: Some("https://example.invalid/mcp".into()),
+                    headers: HashMap::from([
+                        ("Authorization".into(), "Bearer test-token".into()),
+                        ("X-Client".into(), "buddy-test".into()),
+                    ]),
+                    timeout_secs: 1500,
+                    auto_reconnect: true,
+                },
+            ],
+            ..AppConfig::default()
+        };
+        let dir = directory.path().to_path_buf();
+
+        save_config(&dir, &config).unwrap();
+
+        let raw: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(dir.join("config.json")).unwrap()).unwrap();
+        assert_eq!(
+            raw["mcp_servers"],
+            serde_json::to_value(&config.mcp_servers).unwrap()
+        );
+
+        let restored = read_config(&dir).unwrap();
+        assert_eq!(restored.hotkey, config.hotkey);
+        assert_eq!(
+            serde_json::to_value(restored.mcp_servers).unwrap(),
+            serde_json::to_value(config.mcp_servers).unwrap()
         );
     }
 

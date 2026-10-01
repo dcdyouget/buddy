@@ -15,3 +15,5 @@ pub use view::{SettingsEvent, SettingsView};
 
 #[cfg(test)]
 mod model_config_tests;
+#[cfg(test)]
+mod model_mcp_tests;

@@ -233,6 +233,8 @@ S00-04 首探在首次合成之前，得到「无 `CABackdropLayer`」的**错�
 
 ## 8. 下一批任务入口
 
+S06-04 核对结果：当前 v1 没有 MCP 设置入口，engine 只有配置结构与占位 runtime；配置往返、其他设置编辑保留及既有无效数据边界见对应 spec。未新增配置 UI、连接状态或服务启动。
+
 Phase 06 详细 spec 已展开，具体下一项以注册表为准。设置骨架由 `crates/ui/src/settings/` 承接，Router 已使用真实 SettingsView。后续 Provider / 模型、MCP、热键与主题从对应 spec 进入；v1 没有 MCP 编辑 UI，热键系统注册 / 冲突仍归 Phase 07。窗口尺寸、底边锚定、拖动与阴影仍属 Phase 07。
 
 ### 8.1 跨 spec 移交（展开对应 Phase 的 spec 文件时**必须并入**其验收标准）
