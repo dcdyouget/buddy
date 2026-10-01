@@ -31,6 +31,7 @@ use gpui::{
     App, Context, Entity, EventEmitter, Focusable, SharedString, Subscription, Task, Window,
     WindowHandle, div, prelude::*,
 };
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -141,6 +142,7 @@ pub struct PageRouter {
     model_menu: Option<WindowHandle<ModelMenu>>,
     /// 配置保存的串行队列（v1 `configUpdateQueue`：快速连选两个模型时，第二次保存不能被第一次覆盖）
     config_save: Option<Task<()>>,
+    config_save_state: Rc<RefCell<config_save::ConfigSaveState>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -177,6 +179,9 @@ impl PageRouter {
                     crate::settings::SettingsEvent::Back => this.close_settings(cx),
                     crate::settings::SettingsEvent::AddProvider(submission) => {
                         this.save_provider(submission.clone(), cx)
+                    }
+                    crate::settings::SettingsEvent::EditModel(edit) => {
+                        this.save_model_edit(edit.clone(), cx)
                     }
                 },
             ),
@@ -216,6 +221,9 @@ impl PageRouter {
         ];
         let mut this = Self {
             engine,
+            config_save_state: Rc::new(RefCell::new(config_save::ConfigSaveState::new(
+                config.clone(),
+            ))),
             config,
             settings,
             settings_motion: crate::settings::panel::SlideMotion::default(),
@@ -271,8 +279,13 @@ impl PageRouter {
         &self.composer
     }
 
-    /// 配置变化（设置页保存后 / 外部补齐 Key）：更新配置并执行 v1 `App.tsx` 的配置副作用
+    /// 无排队写入时替换外部配置并执行页面副作用；产品内编辑须走配置保存队列。
     pub fn set_config(&mut self, config: AppConfig, cx: &mut Context<Self>) {
+        self.config_save_state.borrow_mut().reset(config.clone());
+        self.publish_config(config, cx);
+    }
+
+    fn publish_config(&mut self, config: AppConfig, cx: &mut Context<Self>) {
         self.config = config;
         self.settings
             .update(cx, |view, cx| view.set_config(self.config.clone(), cx));
@@ -340,28 +353,9 @@ impl PageRouter {
             return;
         }
         let mut config = self.config.clone();
-        config.selected_model_id = id;
-        self.set_config(config.clone(), cx);
-        let engine = self.engine.clone();
-        let previous = self.config_save.take();
-        self.config_save = Some(cx.spawn(async move |this, cx| {
-            if let Some(previous) = previous {
-                previous.await;
-            }
-            let saved = this.update(cx, |_, cx| {
-                spawn_engine(cx, async move { engine.save_config(config).await })
-            });
-            let Ok(saved) = saved else { return };
-            if let Err(message) = saved.await {
-                let _ = this.update(cx, |this, cx| {
-                    this.conversation.update(cx, |c, cx| {
-                        c.state.error = Some(format!("保存默认模型失败：{message}"));
-                        c.state.revision += 1;
-                        cx.notify();
-                    })
-                });
-            }
-        }));
+        config.selected_model_id = id.clone();
+        self.publish_config(config, cx);
+        self.save_model_selection(id, cx);
     }
 
     /// 等待进行中的配置保存完成（自检用）
@@ -524,6 +518,8 @@ impl PageRouter {
     }
 }
 
+#[path = "router_config_save.rs"]
+mod config_save;
 #[path = "router_settings.rs"]
 mod settings_save;
 

@@ -4,9 +4,10 @@ use super::panel::{AddProviderPanel, ProviderEvent};
 use crate::theme_system::tokens::metrics as m;
 use crate::{
     chat_bridge::spawn_engine,
+    settings::model_config::{context_options, format_context},
     settings::select::{SettingsSelect, SettingsSelectChanged},
 };
-use gpui::{px, AppContext, Context};
+use gpui::{AppContext, Context, px};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 impl AddProviderPanel {
@@ -158,22 +159,6 @@ impl AddProviderPanel {
             .update(cx, |select, cx| select.set_selected(thinking_index, cx));
         self.max_tokens_select
             .update(cx, |select, cx| select.set_selected(max_index, cx));
-    }
-}
-
-fn context_options(value: u32) -> Vec<u32> {
-    let mut options = vec![128_000, 256_000, 512_000, 1_000_000];
-    if !options.contains(&value) {
-        options.push(value);
-    }
-    options.sort_unstable();
-    options
-}
-fn format_context(value: u32) -> String {
-    if value >= 1_000_000 {
-        format!("{:.1}M", value as f32 / 1_000_000.0)
-    } else {
-        format!("{}K", (value as f64 / 1_000.0).round() as u32)
     }
 }
 

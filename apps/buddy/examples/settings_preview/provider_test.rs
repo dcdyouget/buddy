@@ -42,12 +42,34 @@ async fn open_panel(
 ) -> Option<Entity<AddProviderPanel>> {
     let _ = handle.update(cx, |router, _, cx| router.open_settings(cx));
     settle(handle, cx).await;
-    let add = handle
-        .read_with(cx, |router, app| {
-            router.settings_view().read(app).add_button_bounds()
-        })
-        .ok()
-        .flatten()?;
+    // Saved-model rows are now editable and taller. Scroll using real wheel
+    // input and re-read painted bounds before clicking the add entry once.
+    let mut add = None;
+    for _ in 0..8 {
+        let (bounds, scroll) = handle
+            .read_with(cx, |router, app| {
+                let view = router.settings_view().read(app);
+                (view.add_button_bounds(), view.scroll_bounds())
+            })
+            .ok()?;
+        let bounds = bounds?;
+        let viewport = input::viewport_size(handle, cx)?;
+        if bounds.top() >= scroll.top()
+            && bounds.bottom() <= scroll.bottom()
+            && bounds.left() >= px(0.)
+            && bounds.right() <= viewport.width
+        {
+            add = Some(bounds);
+            break;
+        }
+        let delta = if bounds.top() < scroll.top() {
+            420.0
+        } else {
+            -420.0
+        };
+        input::wheel(handle, delta, cx).await;
+    }
+    let add = add?;
     input::click(
         handle,
         f32::from(add.origin.x + add.size.width / 2.0),

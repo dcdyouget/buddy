@@ -4,6 +4,7 @@
 //! cargo run -p buddy-app --example settings_preview
 //! cargo run -p buddy-app --example settings_preview -- --selftest
 //! cargo run -p buddy-app --example settings_preview -- --controls
+//! cargo run -p buddy-app --example settings_preview -- --models
 //! ```
 //!
 //! 预览直接使用 `PageRouter` 和真实 `SettingsView`。示例只构造沙盒配置，
@@ -16,17 +17,17 @@ use buddy_ui::chat::page_state::Page;
 use buddy_ui::chat::router::{Loaded, PageRouter};
 use buddy_ui::chat::state::text_of;
 use buddy_ui::gpui::{
-    canvas, div, point, prelude::*, px, size, App, AppContext, AsyncApp, Bounds, ClipboardItem,
-    Context, Entity, Focusable, IntoElement, KeyDownEvent, Keystroke, Modifiers, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput, Render, ScrollDelta,
-    ScrollWheelEvent, Subscription, TouchPhase, Window, WindowBackgroundAppearance, WindowBounds,
-    WindowHandle, WindowOptions,
+    App, AppContext, AsyncApp, Bounds, ClipboardItem, Context, Entity, Focusable, IntoElement,
+    KeyDownEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    Pixels, PlatformInput, Render, ScrollDelta, ScrollWheelEvent, Subscription, TouchPhase, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowOptions, canvas, div, point,
+    prelude::*, px, size,
 };
 use buddy_ui::gpui_platform::application;
 use buddy_ui::settings::controls::{self as settings_controls, SettingsField, SettingsFieldEvent};
 use buddy_ui::settings::select::{SettingsSelect, SettingsSelectChanged};
 use buddy_ui::theme_system::tokens::metrics as m;
-use buddy_ui::theme_system::{fonts, Appearance, BuddyTheme, Theme as UiTheme};
+use buddy_ui::theme_system::{Appearance, BuddyTheme, Theme as UiTheme, fonts};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -41,6 +42,8 @@ mod controls;
 mod fixture;
 #[path = "settings_preview/input.rs"]
 mod input;
+#[path = "settings_preview/model_test.rs"]
+mod model_test;
 #[path = "settings_preview/provider_test.rs"]
 mod provider_test;
 #[path = "settings_preview/selftest.rs"]
@@ -52,7 +55,10 @@ fn main() {
     let self_test = args.iter().any(|arg| arg == "--selftest");
     let self_test_controls = args.iter().any(|arg| arg == "--selftest-controls");
     let self_test_providers = args.iter().any(|arg| arg == "--selftest-providers");
+    let self_test_models = args.iter().any(|arg| arg == "--selftest-models");
+    let any_self_test = self_test || self_test_controls || self_test_providers || self_test_models;
     let provider = args.iter().any(|arg| arg == "--provider");
+    let models = args.iter().any(|arg| arg == "--models");
     let controls = args.iter().any(|arg| arg == "--controls");
     let dark = args.iter().any(|arg| arg == "--dark");
     application()
@@ -70,13 +76,21 @@ fn main() {
             fonts::install_text_rendering(cx);
             buddy_ui::markdown::init(cx);
             buddy_ui::chat::init(cx);
-            if !self_test && !self_test_controls && !self_test_providers {
+            if !any_self_test {
                 cx.observe_keystrokes(|event, _, cx| {
                     if event.keystroke.key == "escape" || event.keystroke.unparse() == "cmd-q" {
                         cx.quit();
                     }
                 })
                 .detach();
+            }
+            if self_test_models {
+                cx.spawn(async move |cx: &mut AsyncApp| {
+                    let ok = model_test::run(cx).await;
+                    std::process::exit(if ok { 0 } else { 1 });
+                })
+                .detach();
+                return;
             }
             if self_test_providers {
                 cx.spawn(async move |cx: &mut AsyncApp| {
@@ -86,10 +100,14 @@ fn main() {
                 .detach();
                 return;
             }
-            let handle = fixture::open_router(cx);
+            let handle = if models {
+                model_test::open_router(cx)
+            } else {
+                fixture::open_router(cx)
+            };
             let control_handle =
                 (controls || self_test_controls).then(|| controls::open_controls(cx));
-            if !self_test && !self_test_controls && !self_test_providers {
+            if !any_self_test {
                 let _ = handle.update(cx, |router, _, cx| {
                     router.open_settings(cx);
                     if provider {
@@ -100,7 +118,7 @@ fn main() {
                     }
                 });
             }
-            if !self_test && !self_test_controls && !self_test_providers {
+            if !any_self_test {
                 cx.activate(true);
             }
             if self_test {

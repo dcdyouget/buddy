@@ -1,10 +1,11 @@
 //! 设置页固定选项选择器。
 
-use crate::icons::{icon, IconName};
-use crate::theme_system::{tokens::metrics as m, BuddyTheme};
+use crate::icons::{IconName, icon};
+use crate::theme_system::{BuddyTheme, tokens::metrics as m};
 use gpui::{
-    canvas, div, prelude::*, px, App, Bounds, Context, ElementId, EventEmitter, FocusHandle,
-    Focusable, FontWeight, KeyDownEvent, MouseDownEvent, Pixels, Render, SharedString, Window,
+    App, Bounds, Context, ElementId, EventEmitter, FocusHandle, Focusable, FontWeight,
+    KeyDownEvent, MouseDownEvent, Pixels, Render, SharedString, Window, canvas, div, prelude::*,
+    px,
 };
 use std::cell::Cell;
 use std::rc::Rc;
@@ -96,6 +97,24 @@ impl SettingsSelect {
     /// 当前选项文本。
     pub fn selected_value(&self) -> Option<SharedString> {
         self.options.get(self.selected).cloned()
+    }
+
+    /// 从外部配置同步选项与当前值；不会把同步误当成用户编辑事件。
+    pub fn reset_options(
+        &mut self,
+        options: impl IntoIterator<Item = impl Into<SharedString>>,
+        selected: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let options: Vec<SharedString> = options.into_iter().map(Into::into).collect();
+        let selected = selected.min(options.len().saturating_sub(1));
+        if self.options == options && self.selected == selected {
+            return;
+        }
+        self.options = options;
+        self.selected = selected;
+        self.open = false;
+        cx.notify();
     }
 
     /// 设置当前选项并发出变化事件。

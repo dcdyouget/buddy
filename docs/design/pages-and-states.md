@@ -5,7 +5,8 @@
 > - 已实现并删除：State vs Component 表、EmptyPage、NoApiKeyPage、State Flow、Known Implementation Notes、模型下拉（S05-15，`crates/ui/src/chat/model_menu.rs`）、ChatPage 的审批 / 提问（S05-13，`ask_card.rs` / `approval_panel.rs`） —— 转换条件与 why 见 `crates/ui/src/chat/page_state.rs` 模块文档，路由与 engine 接入见 `crates/ui/src/chat/router.rs`
 > - 设置骨架由 S06-01 实现，overlay 与窗口尺寸约束见 `crates/ui/src/settings/` 和 `crates/ui/src/chat/router.rs`；本段已部分退役。
 > - 新增 Provider 流程由 S06-02 替代，理由见对应 spec 决策记录，代码见 `crates/ui/src/settings/provider/` 与 `crates/ui/src/chat/router_settings.rs`。
-> - 未实现（保留）：设置子项（S06-03 至 S06-06）、Global Interactions（S07-*）
+> - 模型列表、上下文与能力配置由 S06-03 替代，理由见对应 spec，代码见 `crates/ui/src/settings/model_list/` 与 `crates/ui/src/settings/model_config.rs`。
+> - 未实现（保留）：设置子项（S06-04 至 S06-06）、Global Interactions（S07-*）
 >
 > 页面状态定义于 `src/types/index.ts`（v1，`v1-final`）；v2 的页面枚举是 `page_state::Page`。
 
@@ -13,7 +14,7 @@
 
 ### SettingsPage（S06-*）
 
-剩余设置子项为主题、快捷键与模型列表。骨架和新增 Provider 流程不再在此重复定义。
+剩余设置子项为主题与快捷键。骨架、新增 Provider 与模型编辑不再在此重复定义。
 
 设置操作通过 config store 即时保存。
 

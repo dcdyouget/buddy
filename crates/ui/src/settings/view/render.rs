@@ -121,10 +121,12 @@ impl Render for SettingsView {
                     |this, event: &KeyDownEvent, window, cx| {
                         match event.keystroke.key.as_str() {
                             "tab" => {
-                                // 与可见页面顺序一致：返回，再到列表底部的添加入口。
-                                let order = [this.back.clone(), this.add.clone()];
+                                // 与可见页面顺序一致：返回、模型控件、列表底部的添加入口。
+                                let mut order = vec![("back".to_string(), this.back.clone())];
+                                order.extend(this.model_list.read(cx).focus_order(cx).into_iter());
+                                order.push(("add".to_string(), this.add.clone()));
                                 let current =
-                                    order.iter().position(|focus| focus.is_focused(window));
+                                    order.iter().position(|(_, focus)| focus.is_focused(window));
                                 let next = match current {
                                     Some(i) if event.keystroke.modifiers.shift => {
                                         (i + order.len() - 1) % order.len()
@@ -133,7 +135,11 @@ impl Render for SettingsView {
                                     None if event.keystroke.modifiers.shift => order.len() - 1,
                                     None => 0,
                                 };
-                                window.focus(&order[next], cx);
+                                let (id, focus) = &order[next];
+                                window.focus(focus, cx);
+                                if id != "back" {
+                                    this.scroll_to_model_control(id, cx);
+                                }
                                 cx.stop_propagation();
                             }
                             "enter" | "space" if this.back.is_focused(window) => {
