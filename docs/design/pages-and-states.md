@@ -3,7 +3,8 @@
 > **部分退役（S05-18，2026-09-29）**
 >
 > - 已实现并删除：State vs Component 表、EmptyPage、NoApiKeyPage、State Flow、Known Implementation Notes、模型下拉（S05-15，`crates/ui/src/chat/model_menu.rs`）、ChatPage 的审批 / 提问（S05-13，`ask_card.rs` / `approval_panel.rs`） —— 转换条件与 why 见 `crates/ui/src/chat/page_state.rs` 模块文档，路由与 engine 接入见 `crates/ui/src/chat/router.rs`
-> - 未实现（保留）：SettingsPage（S06-*）、Global Interactions（S07-*）
+> - 设置骨架由 S06-01 实现，overlay 与窗口尺寸约束见 `crates/ui/src/settings/` 和 `crates/ui/src/chat/router.rs`；本段已部分退役。
+> - 未实现（保留）：设置子项与添加 Provider（S06-02 至 S06-06）、Global Interactions（S07-*）
 >
 > 页面状态定义于 `src/types/index.ts`（v1，`v1-final`）；v2 的页面枚举是 `page_state::Page`。
 
@@ -11,7 +12,7 @@
 
 ### SettingsPage（S06-*）
 
-作为右侧 overlay 叠加在原页面上，包含主题、快捷键、模型列表和 FooterActions。添加 Provider 使用第二层 `AddProviderPanel` 侧滑层，支持预设、Base URL、API Key、获取模型、测速和添加模型。
+剩余设置子项为主题、快捷键与模型列表；添加 Provider 使用第二层 `AddProviderPanel` 侧滑层，支持预设、Base URL、API Key、获取模型、测速和添加模型。骨架、分组、滚动和覆盖层不再在此重复定义。
 
 设置操作通过 config store 即时保存；添加 Provider 会分步保存 provider、模型和默认模型，期间保持设置页不变，全部成功后返回展开的 `conversation`。
 

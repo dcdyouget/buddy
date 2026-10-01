@@ -66,6 +66,8 @@
 
 | 2026-10-01 | `docs/design/component-mapping.md`（**部分**：聊天 / 空态 / 无 Key 页面组合、聊天组件角色与文件树；保留设置与窗口外壳） | S05-01 至 S05-18；S05-08 声明的 Phase 05 部分退役 | 虚拟列表与行拆分 → `transcript.rs` / `rows.rs` 模块文档；共用输入草稿 → S05-07 决策记录；生图 / 搜索专用分派 → S05-11 / S05-12 决策记录；审批 / 提问与状态页组合 → S05-13 / S05-18 决策记录。原文「毛玻璃容器」已过时，剩余窗口容器按 `AGENTS.md` 实色决策。 |
 
+| 2026-10-01 | `docs/design/pages-and-states.md` SettingsPage 的 overlay 骨架句；`docs/design/component-mapping.md` 外层设置组合与 SlideInPanel 角色（**部分**，设置子项 / 添加 Provider / 窗口外壳保留） | S06-01 | 叠加设置不卸载底层草稿 / 流式任务、切页不改变窗口尺寸、退出动画即释放输入 → `settings/view.rs` / `settings/panel.rs` 模块注释及 S06-01 决策记录。 |
+
 ## 退役记录
 
 > 每次删除后追加。**必须同时更新 `AGENTS.md` 的 Document Index 表。**

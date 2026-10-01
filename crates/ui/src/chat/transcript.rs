@@ -922,12 +922,17 @@ impl Transcript {
         let weak = cx.entity().downgrade();
         let nested = self.nested_scroll.clone();
         gpui::canvas(
-            |_, _, _| {},
-            move |bounds, _, window, _| {
+            |bounds, window, _| window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal),
+            move |bounds, hitbox, window, _| {
                 let weak = weak.clone();
                 let nested = nested.clone();
-                window.on_mouse_event(move |event: &gpui::ScrollWheelEvent, phase, _, cx| {
-                    if phase != gpui::DispatchPhase::Capture || !bounds.contains(&event.position) {
+                let hitbox = hitbox.clone();
+                window.on_mouse_event(move |event: &gpui::ScrollWheelEvent, phase, window, cx| {
+                    // 捕获阶段也必须尊重设置等前景覆盖层；仅检查 bounds 会吞掉其滚轮。
+                    if phase != gpui::DispatchPhase::Capture
+                        || !bounds.contains(&event.position)
+                        || !hitbox.should_handle_scroll(window)
+                    {
                         return;
                     }
                     let m = event.modifiers;

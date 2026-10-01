@@ -81,7 +81,8 @@ Buddy is a cross-platform (macOS / Windows) AI chat tool. Press a global hotkey 
 | Phase 03 主题与设计令牌 | ✅ 7/7 |
 | Phase 04 Markdown 栈 | ✅ 9/9 |
 | Phase 05 | 见注册表 |
-| Phase 06–10 | 未开始 |
+| Phase 06 | 见注册表 |
+| Phase 07–10 | 未开始 |
 
 > **两个高风险门槛（S00-02 / S00-03）已通过；9 项风险中 4 项消除（R1/R3/R5/R7）、1 项降级（R2）。**
 > **完全不需要 fork GPUI。** 全栈闭包 770 包（+77），毒性依赖零残留。
@@ -114,7 +115,7 @@ Buddy is a cross-platform (macOS / Windows) AI chat tool. Press a global hotkey 
 | `docs/evidence/v1-baseline/` | **v1 基线**：页面×状态目检清单、令牌实测值、性能、长会话样本（S01-06 产出；不含截图，视觉验收由用户对照运行中的 v1 目检） | 做验收时 |
 | `docs/design/overview.md` | Architecture overview & key decisions | When needing context |
 | `docs/design/pages-and-states.md` | 7 page specs + state machine | When building pages |
-| `docs/design/component-mapping.md` | 未实现的设置 / 窗口外壳组件映射（聊天部分已退役） | 做 Phase 06 / 07 时 |
+| `docs/design/component-mapping.md` | 未实现的设置子项 / 窗口外壳映射（聊天与设置骨架已退役） | 做 Phase 06 / 07 时 |
 | `docs/design/rust-architecture.md` | Rust module layout & responsibilities | When writing Rust |
 | `docs/release-workflow.md` | macOS ARM64 / Windows release, environment checks, OSS updater flow | When implementing or executing releases |
 | `docs/CONVENTIONS.md` | Coding rules for ALL agents | **Always** — read once, follow always |

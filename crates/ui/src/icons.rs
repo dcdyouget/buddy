@@ -102,6 +102,8 @@ icons! {
     CircleX => "circle-x",
     /// 回到问题（lucide `arrow-up`）
     ArrowUp => "arrow-up",
+    /// 返回设置前的页面（lucide `arrow-left`）
+    ArrowLeft => "arrow-left",
     /// 设置 API Key（lucide `key-round`）
     KeyRound => "key-round",
     /// 展开到对话（lucide `chevron-up`）

@@ -372,6 +372,13 @@ async fn stored(engine: &Arc<ChatEngine>, cx: &mut AsyncApp) -> Vec<Message> {
 
 // ───────────────────────────── 自检 ─────────────────────────────
 
+/// 等设置层进入动画完成后点击真实返回按钮。
+async fn click_settings_back(handle: WindowHandle<PageRouter>, cx: &mut AsyncApp) {
+    cx.background_executor().timer(Duration::from_millis(230)).await;
+    draw(handle, cx).await;
+    click(handle, 32.0, 28.0, cx).await;
+}
+
 /// T25：页面状态机端到端
 async fn selftest_flow(url: &str, cx: &mut AsyncApp) -> bool {
     let engine = ChatEngine::new(sandbox("flow", Some(&mock_config(url))));
@@ -387,7 +394,7 @@ async fn selftest_flow(url: &str, cx: &mut AsyncApp) -> bool {
     // 空态输入区的设置小齿轮（独立气泡：无外边距；从右往下量：发送 28、间隔 4、模型 24、间隔 4、齿轮 24）
     click(handle, WIDTH - 5.0 - 28.0 - 4.0 - 24.0 - 4.0 - 12.0, HEIGHT - 5.0 - 16.0, cx).await;
     check("空态点小齿轮 → 设置", page(handle, cx) == Page::Settings);
-    click(handle, WIDTH / 2.0, HEIGHT / 2.0 + 44.0, cx).await;
+    click_settings_back(handle, cx).await;
     check("设置返回 → 对话页（上一页是紧凑页）", page(handle, cx) == Page::Conversation);
     let _ = handle.update(cx, |r, _, cx| r.set_config(mock_config(url), cx));
     let mut bad = mock_config(url);
@@ -446,7 +453,7 @@ async fn selftest_flow(url: &str, cx: &mut AsyncApp) -> bool {
     click(handle, WIDTH - 13.0 - 28.0 - 4.0 - 24.0 - 4.0 - 12.0, HEIGHT - 13.0 - 16.0, cx).await;
     check("对话页点小齿轮 → 设置", page(handle, cx) == Page::Settings);
     check("设置叠加在对话页之上（底层页不卸载）", handle.read_with(cx, |r, _| r.base_page()).unwrap() == Page::Conversation);
-    click(handle, WIDTH / 2.0, HEIGHT / 2.0 + 44.0, cx).await; // 占位设置页的「返回」
+    click_settings_back(handle, cx).await; // 设置页左上角的「返回」
     check("返回 → 对话页", page(handle, cx) == Page::Conversation);
 
     // 页面切换事件（窗口壳据此改尺寸）：离开紧凑页的那次会展开，内容页之间 / 回到紧凑页不展开
@@ -494,7 +501,7 @@ async fn selftest_no_key(url: &str, cx: &mut AsyncApp) -> bool {
     check("草稿保留", handle.read_with(cx, |r, cx| r.composer().read(cx).draft(cx)).unwrap() == "你好");
     click(handle, WIDTH / 2.0, HEIGHT / 2.0, cx).await; // 无 Key 页整块面板
     check("点面板 → 设置", page(handle, cx) == Page::Settings);
-    click(handle, WIDTH / 2.0, HEIGHT / 2.0 + 44.0, cx).await;
+    click_settings_back(handle, cx).await;
     check("设置返回 → 对话页（上一页是紧凑页）", page(handle, cx) == Page::Conversation);
 
     // 只在内存里补齐配置、盘上仍没有：engine 拒绝发送（占用生成通道前就失败）→ 移除空占位并报错，用户消息保留

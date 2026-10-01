@@ -10,7 +10,7 @@
 //! | 界面生成的提示消息（配额 / 服务器 / 网络） | 取走 `pending_saves` → `save_message`（v1 `saveMessage`） |
 //! | 历史分页 | [`Conversation::with_history_page`] + `load_messages`（读取前先把偏移换算为「最新一页」） |
 //! | 模型按钮 | [`super::model_menu`] 在按钮上方打开菜单；选择后保存配置（串行） |
-//! | 设置 | 叠加层（[`PageState::base_page`] 保持底层页不卸载）；设置页本体归 S06-01，此处是占位 |
+//! | 设置 | 叠加层（[`PageState::base_page`] 保持底层页不卸载）；设置本体为 `crate::settings::SettingsView`，侧滑层退出即释放输入 |
 //!
 //! **页面切换不改变窗口尺寸**：路由器不接触窗口，只发出 [`RouterEvent::PageChanged`]，
 //! 「离开紧凑页时展开一次」由 Phase 07 依 [`expands_window`] 执行。
@@ -25,12 +25,11 @@ use super::page_state::{EmptySend, Page, PageState, classify_empty_send, has_val
 use super::session::{Conversation, HistoryLoader};
 use super::state::{HISTORY_PAGE_SIZE, user_message_with_images};
 use crate::chat_bridge::{self, spawn_engine};
-use crate::theme_system::{BuddyTheme, tokens::metrics as m};
 use buddy_engine::chat::ChatEngine;
 use buddy_engine::models::{AppConfig, ImageAttachment, Message};
 use gpui::{
-    AnyElement, App, Context, Entity, EventEmitter, Focusable, FontWeight, SharedString,
-    Subscription, Task, Window, WindowHandle, div, prelude::*, px,
+    App, Context, Entity, EventEmitter, Focusable, SharedString, Subscription, Task, Window,
+    WindowHandle, div, prelude::*,
 };
 use std::rc::Rc;
 use std::sync::Arc;
@@ -126,6 +125,8 @@ pub enum RouterEvent {
 pub struct PageRouter {
     engine: Arc<ChatEngine>,
     config: AppConfig,
+    settings: Entity<crate::settings::SettingsView>,
+    settings_motion: crate::settings::panel::SlideMotion,
     pages: PageState,
     conversation: Entity<Conversation>,
     composer: Entity<Composer>,
@@ -167,7 +168,14 @@ impl PageRouter {
         let no_key = cx.new(NoKeyPage::new);
         let actions = tool_actions(&engine, &conversation);
         let chat = cx.new(|cx| ChatPage::new(conversation.clone(), composer.clone(), actions, cx));
+        let settings = cx.new(|cx| crate::settings::SettingsView::new(config.clone(), cx));
         let subscriptions = vec![
+            cx.subscribe(
+                &settings,
+                |this, _, event: &crate::settings::SettingsEvent, cx| match event {
+                    crate::settings::SettingsEvent::Back => this.close_settings(cx),
+                },
+            ),
             cx.subscribe_in(
                 &composer,
                 window,
@@ -205,6 +213,8 @@ impl PageRouter {
         let mut this = Self {
             engine,
             config,
+            settings,
+            settings_motion: crate::settings::panel::SlideMotion::default(),
             pages: PageState::new(),
             conversation,
             composer,
@@ -260,11 +270,27 @@ impl PageRouter {
     /// 配置变化（设置页保存后 / 外部补齐 Key）：更新配置并执行 v1 `App.tsx` 的配置副作用
     pub fn set_config(&mut self, config: AppConfig, cx: &mut Context<Self>) {
         self.config = config;
+        self.settings.update(cx, |view, cx| view.set_config(self.config.clone(), cx));
         // 无效配置由 `apply_config` 处理（内容页退回空态）；有效时才可能从「无 Key」页补齐进入对话
         self.apply_config(cx);
         if self.valid_config() {
             self.transition(cx, |p| p.config_changed(true));
         }
+    }
+
+    /// 设置覆盖层实体（操作自检用）。
+    pub fn settings_view(&self) -> &Entity<crate::settings::SettingsView> {
+        &self.settings
+    }
+
+    /// 退出动画的绘制进度（自检用）；关闭后不再接受输入。
+    pub fn settings_present(&self) -> bool {
+        self.settings_motion.present()
+    }
+
+    /// 覆盖层当前可见量（真实帧动画自检用）。
+    pub fn settings_amount(&self) -> f32 {
+        self.settings_motion.amount()
     }
 
     /// 模型菜单窗口（自检用）
@@ -376,6 +402,11 @@ impl PageRouter {
             return;
         }
         let to = self.pages.current();
+        if (from == Page::Settings) != (to == Page::Settings) {
+            let shown = to == Page::Settings;
+            self.settings_motion.set_shown(shown);
+            self.settings.update(cx, |view, cx| view.set_active(shown, cx));
+        }
         let base = self.pages.base_page();
         self.composer
             .update(cx, |c, cx| c.set_standalone(base == Page::Empty, cx));
@@ -486,52 +517,6 @@ impl PageRouter {
         self.was_streaming = streaming;
     }
 
-    /// 设置页占位（S06-01 实现设置页后替换）
-    fn settings_placeholder(&self, cx: &mut Context<Self>) -> AnyElement {
-        let c = cx.buddy_theme().colors;
-        div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap(px(m::SPACE_3))
-            .rounded(px(m::RADIUS_XL))
-            .border_1()
-            .border_color(c.border_default)
-            .bg(c.bg_surface)
-            .child(
-                div()
-                    .text_color(c.text_primary)
-                    .text_size(px(m::FONT_SIZE_LG))
-                    .font_weight(FontWeight(600.0))
-                    .child("设置"),
-            )
-            .child(
-                div()
-                    .text_color(c.text_muted)
-                    .text_size(px(m::FONT_SIZE_SM))
-                    .child("设置页尚未实现（S06-01）"),
-            )
-            .child(
-                div()
-                    .id("settings-back")
-                    .px(px(m::SPACE_4))
-                    .py(px(m::SPACE_2))
-                    .rounded(px(m::RADIUS_MD))
-                    .border_1()
-                    .border_color(c.border_default)
-                    .text_color(c.text_primary)
-                    .cursor_pointer()
-                    .hover(|s| s.bg(c.control_surface))
-                    .on_click(cx.listener(|this, _, _, cx| this.close_settings(cx)))
-                    .child("返回"),
-            )
-            .into_any_element()
-    }
 }
 
 impl Render for PageRouter {
@@ -544,8 +529,20 @@ impl Render for PageRouter {
             Page::NoApiKey => self.no_key.clone().into_any_element(),
             Page::Conversation | Page::Streaming => self.chat.clone().into_any_element(),
         };
-        let settings =
-            (self.pages.current() == Page::Settings).then(|| self.settings_placeholder(cx));
+        let settings = self.settings_motion.present().then(|| {
+            let amount = self.settings_motion.amount();
+            if self.settings_motion.animating() {
+                window.request_animation_frame();
+            }
+            div()
+                .absolute()
+                .top_0()
+                .left(gpui::relative(1.0 - amount))
+                .size_full()
+                .opacity(amount)
+                .child(self.settings.clone())
+                .into_any_element()
+        });
         div().size_full().relative().child(base).children(settings)
     }
 }
