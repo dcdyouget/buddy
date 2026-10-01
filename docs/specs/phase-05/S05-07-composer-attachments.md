@@ -1,6 +1,6 @@
 # S05-07 Composer 附件（粘贴 / 拖拽 / 选择 / 草稿）
 
-> 状态: `doing`
+> 状态: `done`
 > Phase: 05
 > 依赖: S05-06
 > 阻塞: —
@@ -38,6 +38,7 @@
 | 本地渲染 | 用户 2026-10-01 授权 agent 自行验收。读取真实 GPUI 帧：普通 / 紧凑 Composer、视觉模型不支持提示、浅 / 深主题；真实 Transcript 的双列图片先于正文、自然比例与纯图片间距；历史图片失败占位及修复后真实点击重试的加载结果。强制出帧使用 `window.refresh(); window.draw(cx).clear(cx)`，临时 `render_to_image` 诊断代码 / feature / 图片不提交。 |
 | 拦截验证 | `python3 scripts/chat/verify_phase05.py`：附件相关 10/10 被行为 FAIL 拦截（纯图发送、5 MB 边界、MIME 白名单、Cmd-V 入口、4 张上限、拖放入口、删除已保存图片、实体销毁清理、发送后清空草稿、历史图片重试）。每次先跑正常基线，再故意改坏一个实现；单测 rc=101 或 T33/T34 rc=1 且含对应 FAIL，编译错误与超时不算拦截；所有源码按原始字节还原。 |
 | 最终回归 | `cargo test -q -p buddy-ui --lib`：119 passed；`NO_PROXY=127.0.0.1,localhost cargo run -q -p buddy-app --example <名称> -- --selftest`：`chat_preview`、`pages_preview`、`app_preview`、`markdown_preview`、`streaming_preview` 均 rc=0 且包含对应 PASS。完整 chat 回归的 T33 按本次发送增量断言，避免前序测试记录造成误报；该修正后相关拦截再次通过。 |
+| 提交门禁 | 按项目代理配置运行 `scripts/gate.sh`，退出码 0；v1 源码、根 Cargo.toml / Cargo.lock 无改动。 |
 
 ## 决策记录
 
@@ -53,6 +54,6 @@
 
 ## 完成记录
 
-- 日期：
-- commit：
-- 设计文档处置：
+- 日期：2026-10-01（用户授权 agent 本地读取实际渲染结果完成验收）
+- commit：`f6542b6`
+- 设计文档处置：本 spec 未指定独立退役文档；聊天组件映射的部分退役随实现提交，见 `docs/specs/design-deletions.md`「已部分删减的文档」。

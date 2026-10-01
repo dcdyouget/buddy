@@ -1,6 +1,6 @@
 # S05-12 图片生成卡片
 
-> 状态: `doing`
+> 状态: `done`
 > Phase: 05
 > 依赖: S05-10
 > 阻塞: —
@@ -36,6 +36,7 @@
 | 本地视觉验收 | 读取真实 GPUI 帧：生成中、完成折叠、展开元数据、图片加载失败占位及重试、浅 / 深主题；750×640 的真实 Transcript 同时展示 800×1200 竖图与 1200×800 横图，均按自然比例缩放并排；560×760 的卡片验证下载与复制反馈。出帧为 `window.refresh(); window.draw(cx).clear(cx)`；临时 `render_to_image` 代码、feature、锁文件变化与图片不提交。 |
 | 拦截验证 | `python3 scripts/chat/verify_phase05.py`：生图相关 7/7 被 T32 的行为 FAIL 拦截（专用卡片分派、展开、复制提示词、失败占位尺寸、异步行高重测、清 cache 后重试、下载成功反馈）。均先通过正常基线，变异后 rc=1 且输出 `FAIL S05-12 T32`，编译错误 / 超时不算；源码按原始字节还原。最后对齐 v1 保存转圈、错误色与视口尺寸限制后，7 项复跑仍全部拦截。 |
 | 最终回归 | `cargo test -q -p buddy-ui --lib`：119 passed；`NO_PROXY=127.0.0.1,localhost cargo run -q -p buddy-app --example <名称> -- --selftest`：`chat_preview`、`pages_preview`、`app_preview`、`markdown_preview`、`streaming_preview` 均 rc=0 且包含对应 PASS。普通构建验证 T32 全部布尔断言，未保留 test-support 或临时渲染诊断。 |
+| 提交门禁 | 按项目代理配置运行 `scripts/gate.sh`，退出码 0；v1 源码、根 Cargo.toml / Cargo.lock 无改动。 |
 
 ## 决策记录
 
@@ -49,6 +50,6 @@
 
 ## 完成记录
 
-- 日期：
-- commit：
-- 设计文档处置：
+- 日期：2026-10-01（用户授权 agent 本地读取实际渲染结果完成验收）
+- commit：`f6542b6`
+- 设计文档处置：本 spec 未指定独立退役文档；聊天组件映射的部分退役随实现提交，见 `docs/specs/design-deletions.md`「已部分删减的文档」。
