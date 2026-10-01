@@ -1,6 +1,6 @@
 # S06-01 设置页骨架与控件集
 
-> 状态: `doing`
+> 状态: `done`
 > Phase: 06
 > 依赖: S03-01
 > 阻塞: —
@@ -43,7 +43,7 @@
 | 动画逻辑 | `cargo test -q -p buddy-ui --lib settings::panel::tests::exits_release_input_before_paint_finishes`：起点 / 200ms 终点与退出立即释放输入；动画位移另由 T35 实际布局证明。 |
 | 本地视觉读取 | 2026-10-01 临时启用 GPUI test-support，读取设置浅 / 深 760×640 与共用控件 560×640 的实际 `window.render_to_image()` 输出，核对标题、分组、间距、滚动区域、菜单覆盖及深色图标。诊断代码与 Cargo.toml / Cargo.lock 全部还原，图片不入库。视觉样式与系统减弱动态效果分支无独立自动化证据，不将交互拦截等同视觉测试。 |
 | 拦截验证 | `python3 scripts/settings/verify_phase06.py`；14/14 有效拦截：动画单测、底层滚轮隔离、设置挂载、鼠标 / 键盘返回、设置滚动、覆盖层 occlude、退出释放、动画位移、草稿保留、下拉鼠标 / 键盘 / Esc、单行粘贴。键盘变异初版产生借用编译错误未计入，修正为可编译变异后 T36 明确 FAIL。每次只变异一处，检查明确 FAIL 与非零退出，编译错误 / 超时不计为拦截；结束还原原始字节。 |
-| 回归与门禁 | `cargo test -q -p buddy-ui --lib`：120 passed。`chat_preview`、`pages_preview`、`app_preview`、`markdown_preview`、`streaming_preview` 均按 `NO_PROXY=127.0.0.1,localhost cargo run -q -p buddy-app --example <名字> -- --selftest` 全量执行，rc=0 且有 PASS（含搜索 / 生图 / 附件 T31–T34）。提交前执行 `scripts/gate.sh` 并检查 rc=0。 |
+| 回归与门禁 | `cargo test -q -p buddy-ui --lib`：120 passed。`chat_preview`、`pages_preview`、`app_preview`、`markdown_preview`、`streaming_preview` 均按 `NO_PROXY=127.0.0.1,localhost cargo run -q -p buddy-app --example <名字> -- --selftest` 全量执行，rc=0 且有 PASS（含搜索 / 生图 / 附件 T31–T34）。提交门禁 `scripts/gate.sh`：rc=0，纪律 18 项与其拦截、图标、v2 全目标和 v1 编译全部通过。 |
 
 ## 决策记录
 
@@ -60,6 +60,6 @@
 
 ## 完成记录
 
-- 日期：
-- commit：
-- 设计文档处置：
+- 日期：2026-10-01
+- commit：`8a8c150`
+- 设计文档处置：按 RULES §7 部分删除 SettingsPage overlay 骨架与组件映射的外层设置组合 / SlideInPanel 角色；why 已迁入上述决策记录与代码注释，登记于 `docs/specs/design-deletions.md` 的「已部分删减的文档」。设置子项、添加 Provider 与窗口外壳段落保留。
