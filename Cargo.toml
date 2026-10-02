@@ -11,7 +11,7 @@ members = [
 # ⚠️ 必须 exclude v1 的 Tauri 工程。
 # 否则 src-tauri/Cargo.toml 会向上找到本 workspace，因不是成员而报错，
 # 导致 v1 无法构建 —— 而 v1 在 Phase 05 之前必须保持可用（S01-05 退路）。
-exclude = ["src-tauri"]
+exclude = ["src-tauri", "vendor/global-hotkey"]
 
 [workspace.package]
 version = "2.0.0"
@@ -129,4 +129,6 @@ unicode-segmentation = "1"
 # ⚠️ 到那时**必须加回来**，否则会因 API 不匹配而编译失败。见
 #    docs/evidence/s00-06/README.md §1 与 THIRD_PARTY_NOTICES.md §5。
 [patch.crates-io]
+# S07-03: Carbon must reject conflicts, not silently register an inactive shared hotkey.
+global-hotkey = { path = "vendor/global-hotkey" }
 async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }

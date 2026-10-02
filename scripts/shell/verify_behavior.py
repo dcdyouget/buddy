@@ -22,6 +22,10 @@ GUI = ("cargo", "run", "-q", "-p", "buddy-app", "--example", "shell_preview", "-
 FAIL = "FAIL S07-03/S07-04"
 
 CASES = [
+    Case("selection-before-activation", RUNTIME, "            let capture = selection::begin_before_show(cx);", "            let _ = show(handle, cx).await;\n            let capture = selection::begin_before_show(cx);", GUI, FAIL),
+    Case("selection-publish", RUNTIME, "router.accept_selected_text(&text, cx)", "{ let _ = (router, text, cx); }", GUI, FAIL),
+    Case("streaming-focus-bubble", "crates/ui/src/chat/composer.rs", "                .track_focus(&self.text.focus_handle(cx))", "", GUI, FAIL),
+    Case("os-exclusive-registration", "vendor/global-hotkey/src/platform_impl/macos/mod.rs", "                    K_EVENT_HOT_KEY_EXCLUSIVE,", "                    0,", GUI, FAIL),
     Case("press-dedup", CORE, "HotKeyState::Pressed => self.pressed.insert(event.id),", "HotKeyState::Pressed => { self.pressed.insert(event.id); true },", UNIT, "FAILED"),
     Case("release-no-toggle", CORE, "self.pressed.remove(&event.id);\n                false", "self.pressed.remove(&event.id);\n                true", UNIT, "FAILED"),
     Case("current-id", CORE, "if self.current.is_none_or(|hotkey| hotkey.id() != event.id) {", "if false {", UNIT, "FAILED"),
@@ -40,7 +44,7 @@ CASES = [
     Case("outside-click-delivery", VISIBILITY, "let _ = sender.send(VisibilityEvent::ExternalMouseDown);", "let _ = &sender;", GUI, FAIL),
     Case("esc-hide", "crates/ui/src/shell/mod.rs", "runtime::request_hide(handle, cx);", "let _ = (handle, cx);", GUI, FAIL),
     Case("hotkey-save-registration", PREFERENCES, "Some(update) => update(&candidate.hotkey),", "Some(_) => Ok(()),", GUI, FAIL),
-    Case("hotkey-save-rollback", PREFERENCES, "Some(update) => update(&baseline.hotkey),", "Some(_) => Ok(()),", GUI, FAIL),
+    Case("hotkey-save-rollback", PREFERENCES, "Some(update) => update(&baseline.hotkey),", "Some(_) => Ok::<(), String>(()),", GUI, FAIL),
     Case("approval-esc-priority", "crates/ui/src/chat/chat_page.rs", "cx.stop_propagation();\n                    decide(id, Decision::Deny, cx);", "decide(id, Decision::Deny, cx);", GUI, FAIL),
     Case("hidden-does-not-cancel", "crates/ui/src/chat/router.rs", "self.window_visibility_changed(false, cx);", "self.engine.stop_generation(); self.window_visibility_changed(false, cx);", GUI, FAIL),
 ]
@@ -81,7 +85,7 @@ def main() -> int:
             rc, output = run(case.command, logs / f"{case.name}.log")
         finally:
             path.write_bytes(original)
-        intercepted = rc not in (0, 124) and case.fail_marker in output and "error[E" not in output and "could not compile" not in output and "权限预检未通过" not in output
+        intercepted = rc not in (0, 124) and case.fail_marker in output and "error[E" not in output and "could not compile" not in output and not any(marker in output for marker in ("权限预检未通过", "会话已锁定", "未获得 CGEventPost 权限"))
         results.append(intercepted)
         print(f"{'PASS' if intercepted else 'FAIL'} {case.name}: rc={rc}; 源码已还原", flush=True)
         if not intercepted:

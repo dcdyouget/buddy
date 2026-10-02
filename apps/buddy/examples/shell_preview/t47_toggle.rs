@@ -1,334 +1,25 @@
 //! T47：真实 macOS 全局热键切换、旧键失效和流式隐藏重显。
 
-use super::{external_target, fixture, input, os_input};
+use super::{external_target, fixture, hotkey_owner, input, os_input};
 use buddy_ui::chat::page_state::Page;
 use buddy_ui::chat_bridge::spawn_engine;
-use buddy_ui::gpui::{
-    AppContext, AsyncApp, Capslock, Entity, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers,
-    ModifiersChangedEvent, PlatformInput, WindowHandle,
-};
-use buddy_ui::shell::native::{NativeWindowSnapshot, probe_main_window};
-use buddy_ui::shell::{self, AppShell};
-use std::sync::Arc;
+use buddy_ui::gpui::{AppContext, AsyncApp};
+use buddy_ui::shell;
 use std::time::Duration;
 
-const OLD_KEY: &str = "F18";
-const NEW_KEY: &str = "F19";
-const OLD_CONFIG: &str = "CmdOrCtrl+Alt+Shift+F18";
-const NEW_CONFIG: &str = "CmdOrCtrl+Alt+Shift+F19";
+const OLD_KEY: &str = "B";
+const NEW_KEY: &str = "N";
+const OLD_CONFIG: &str = "CmdOrCtrl+Alt+Shift+B";
+const NEW_CONFIG: &str = "CmdOrCtrl+Alt+Shift+N";
 
-fn probe(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Option<NativeWindowSnapshot> {
-    cx.update_window(handle.into(), |_, window, _| probe_main_window(window).ok())
-        .ok()
-        .flatten()
-}
+#[path = "t47_support.rs"]
+mod support;
 
-fn visible(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Option<bool> {
-    probe(handle, cx).map(|snapshot| snapshot.is_visible)
-}
-
-async fn wait_visible(handle: WindowHandle<AppShell>, expected: bool, cx: &mut AsyncApp) -> bool {
-    for attempt in 0..100 {
-        if attempt == 0 {
-            cx.background_executor()
-                .timer(Duration::from_millis(120))
-                .await;
-        }
-        input::draw(handle, cx).await;
-        if visible(handle, cx) == Some(expected) {
-            return true;
-        }
-        cx.background_executor()
-            .timer(Duration::from_millis(20))
-            .await;
-    }
-    false
-}
-
-async fn wait_visible_without_draw(
-    handle: WindowHandle<AppShell>,
-    expected: bool,
-    cx: &mut AsyncApp,
-) -> bool {
-    for attempt in 0..120 {
-        if attempt == 0 {
-            cx.background_executor()
-                .timer(Duration::from_millis(120))
-                .await;
-        }
-        if visible(handle, cx) == Some(expected) {
-            return true;
-        }
-        cx.background_executor()
-            .timer(Duration::from_millis(20))
-            .await;
-    }
-    false
-}
-
-async fn press_global(
-    handle: WindowHandle<AppShell>,
-    key: &str,
-    expected: bool,
-    cx: &mut AsyncApp,
-) -> bool {
-    if !os_input::combo_down(key) {
-        return false;
-    }
-    let down = if expected {
-        wait_visible(handle, expected, cx).await
-    } else {
-        wait_visible_without_draw(handle, expected, cx).await
-    };
-    let up = os_input::combo_up(key);
-    let settled = if expected {
-        wait_visible(handle, expected, cx).await
-    } else {
-        wait_visible_without_draw(handle, expected, cx).await
-    };
-    down && up && settled
-}
-
-async fn config_with_hotkey(
-    engine: &Arc<buddy_engine::chat::ChatEngine>,
-    hotkey: &str,
-    cx: &mut AsyncApp,
-) -> Result<(), String> {
-    let engine = engine.clone();
-    let read_engine = engine.clone();
-    let mut config = cx
-        .update(|app| spawn_engine(app, async move { read_engine.get_config().await }))
-        .await?;
-    config.hotkey = hotkey.to_owned();
-    let save_engine = engine.clone();
-    cx.update(|app| spawn_engine(app, async move { save_engine.save_config(config).await }))
-        .await?;
-    Ok(())
-}
-
-fn router_of(
-    handle: WindowHandle<AppShell>,
-    cx: &mut AsyncApp,
-) -> Option<Entity<buddy_ui::chat::router::PageRouter>> {
-    handle.read_with(cx, |shell, _| shell.router()).ok()
-}
-
-fn equivalent_hotkey(left: &str, right: &str) -> bool {
-    fn parts(value: &str) -> Vec<String> {
-        let mut parts = value
-            .split('+')
-            .map(|part| part.trim().to_ascii_lowercase())
-            .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>();
-        parts.sort_unstable();
-        parts
-    }
-    parts(left) == parts(right)
-}
-
-async fn wait_streaming(handle: WindowHandle<AppShell>, expected: bool, cx: &mut AsyncApp) -> bool {
-    for _ in 0..180 {
-        input::draw(handle, cx).await;
-        if handle
-            .read_with(cx, |shell, app| {
-                shell
-                    .router()
-                    .read(app)
-                    .conversation()
-                    .read(app)
-                    .state
-                    .is_streaming()
-                    == expected
-            })
-            .unwrap_or(false)
-        {
-            return true;
-        }
-        cx.background_executor()
-            .timer(Duration::from_millis(20))
-            .await;
-    }
-    false
-}
-
-async fn wait_streaming_without_draw(
-    handle: WindowHandle<AppShell>,
-    expected: bool,
-    cx: &mut AsyncApp,
-) -> bool {
-    for _ in 0..220 {
-        if handle
-            .read_with(cx, |shell, app| {
-                shell
-                    .router()
-                    .read(app)
-                    .conversation()
-                    .read(app)
-                    .state
-                    .is_streaming()
-                    == expected
-            })
-            .unwrap_or(false)
-        {
-            return true;
-        }
-        cx.background_executor()
-            .timer(Duration::from_millis(20))
-            .await;
-    }
-    false
-}
-
-async fn wait_file(path: &std::path::Path, cx: &mut AsyncApp) -> bool {
-    for _ in 0..150 {
-        if path.is_file() {
-            return true;
-        }
-        cx.background_executor()
-            .timer(Duration::from_millis(20))
-            .await;
-    }
-    false
-}
-
-async fn dispatch_modifiers(handle: WindowHandle<AppShell>, mods: Modifiers, cx: &mut AsyncApp) {
-    let event = PlatformInput::ModifiersChanged(ModifiersChangedEvent {
-        modifiers: mods,
-        capslock: Capslock::default(),
-    });
-    let _ = cx.update_window(handle.into(), |_, window, cx| {
-        window.dispatch_event(event, cx)
-    });
-    input::draw(handle, cx).await;
-}
-
-async fn dispatch_key_down(
-    handle: WindowHandle<AppShell>,
-    key: &str,
-    mods: Modifiers,
-    cx: &mut AsyncApp,
-) {
-    let event = PlatformInput::KeyDown(KeyDownEvent {
-        keystroke: Keystroke {
-            modifiers: mods,
-            key: key.into(),
-            key_char: None,
-        },
-        is_held: false,
-        prefer_character_input: false,
-    });
-    let _ = cx.update_window(handle.into(), |_, window, cx| {
-        window.dispatch_event(event, cx)
-    });
-    input::draw(handle, cx).await;
-}
-
-async fn dispatch_key_up(
-    handle: WindowHandle<AppShell>,
-    key: &str,
-    mods: Modifiers,
-    cx: &mut AsyncApp,
-) {
-    let event = PlatformInput::KeyUp(KeyUpEvent {
-        keystroke: Keystroke {
-            modifiers: mods,
-            key: key.into(),
-            key_char: None,
-        },
-    });
-    let _ = cx.update_window(handle.into(), |_, window, cx| {
-        window.dispatch_event(event, cx)
-    });
-    input::draw(handle, cx).await;
-}
-
-async fn record_hotkey(
-    handle: WindowHandle<AppShell>,
-    router: &Entity<buddy_ui::chat::router::PageRouter>,
-    key: &str,
-    expected_config: &str,
-    cx: &mut AsyncApp,
-) -> bool {
-    let _ = router.update(cx, |router, cx| router.open_settings(cx));
-    for _ in 0..100 {
-        input::draw(handle, cx).await;
-        if router.read_with(cx, |router, app| {
-            router.page() == Page::Settings && router.settings_view().read(app).active()
-        }) {
-            break;
-        }
-        cx.background_executor()
-            .timer(Duration::from_millis(20))
-            .await;
-    }
-    input::settle(handle, cx).await;
-    let recorder = router.read_with(cx, |router, app| {
-        router.settings_view().read(app).hotkey_recorder().clone()
-    });
-    let Some(bounds) = recorder.read_with(cx, |recorder, _| recorder.button_bounds_for_test())
-    else {
-        return false;
-    };
-    input::click(
-        handle,
-        f32::from(bounds.origin.x + bounds.size.width / 2.0),
-        f32::from(bounds.origin.y + bounds.size.height / 2.0),
-        false,
-        cx,
-    )
-    .await;
-    let mods = Modifiers {
-        platform: true,
-        alt: true,
-        shift: true,
-        ..Modifiers::none()
-    };
-    dispatch_modifiers(handle, mods, cx).await;
-    dispatch_key_down(handle, key, mods, cx).await;
-    dispatch_key_up(handle, key, mods, cx).await;
-    dispatch_modifiers(handle, Modifiers::none(), cx).await;
-    for _ in 0..100 {
-        if let Some(task) = router.update(cx, |router, _| router.take_config_save()) {
-            task.await;
-            break;
-        }
-        cx.background_executor()
-            .timer(Duration::from_millis(20))
-            .await;
-    }
-    router.read_with(cx, |router, app| {
-        equivalent_hotkey(&router.config().hotkey, expected_config)
-            && !router
-                .settings_view()
-                .read(app)
-                .hotkey_recorder()
-                .read(app)
-                .saving()
-    })
-}
-
-fn block_engine_directory(
-    engine: &Arc<buddy_engine::chat::ChatEngine>,
-) -> Option<std::path::PathBuf> {
-    let directory = engine.data_dir().to_path_buf();
-    let backup = directory.with_extension("t47-directory-backup");
-    if std::fs::rename(&directory, &backup).is_err() {
-        return None;
-    }
-    if std::fs::write(&directory, b"t47 blocked").is_err() {
-        let _ = std::fs::rename(&backup, &directory);
-        return None;
-    }
-    Some(backup)
-}
-
-fn restore_engine_directory(
-    engine: &Arc<buddy_engine::chat::ChatEngine>,
-    backup: std::path::PathBuf,
-) -> bool {
-    let directory = engine.data_dir();
-    std::fs::remove_file(directory).is_ok() && std::fs::rename(backup, directory).is_ok()
-}
+use support::{
+    block_engine_directory, config_with_hotkey, equivalent_hotkey, press_global, probe,
+    record_hotkey, restore_engine_directory, router_of, visible, wait_file, wait_shown_and_focused,
+    wait_streaming, wait_streaming_without_draw,
+};
 
 pub(crate) async fn run(cx: &mut AsyncApp) -> bool {
     macro_rules! fail {
@@ -360,17 +51,40 @@ pub(crate) async fn run(cx: &mut AsyncApp) -> bool {
     let shown = shell::runtime::show(handle, cx).await.is_ok();
     cx.update(|app| app.activate(true));
     input::draw(handle, cx).await;
-    let shown_and_focused =
-        shown && probe(handle, cx).is_some_and(|snapshot| snapshot.is_visible && snapshot.is_key);
+    let immediate_focus = probe(handle, cx);
+    println!(
+        "T47 初始显示即时状态：visible={} key={}",
+        immediate_focus
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.is_visible),
+        immediate_focus
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.is_key),
+    );
+    let final_focus = if shown {
+        wait_shown_and_focused(handle, cx).await
+    } else {
+        None
+    };
+    let shown_and_focused = final_focus.is_some();
+    println!(
+        "T47 初始显示最终状态：visible={} key={}（等待上限 2s）",
+        final_focus
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.is_visible),
+        final_focus.as_ref().is_some_and(|snapshot| snapshot.is_key),
+    );
 
     // 按下与释放分别注入；释放阶段不得再次切换。
     let old_hide = press_global(handle, OLD_KEY, false, cx).await;
     let old_show = press_global(handle, OLD_KEY, true, cx).await;
 
-    let config_updated = record_hotkey(handle, &router, "f19", NEW_CONFIG, cx).await;
-    let registered = cx
+    let config_updated = record_hotkey(handle, &router, "n", NEW_CONFIG, cx).await;
+    let baseline_hotkey = router.read_with(cx, |router, _| router.config().hotkey.clone());
+    let baseline_registered = cx
         .update(|app| shell::runtime::registered_hotkey(app))
-        .is_some_and(|value| value.contains("F19"));
+        .unwrap_or_default();
+    let registered = baseline_registered.contains("N");
     let _ = router.update(cx, |router, cx| router.close_settings(cx));
     let old_ignored = os_input::combo(OLD_KEY);
     cx.background_executor()
@@ -390,19 +104,61 @@ pub(crate) async fn run(cx: &mut AsyncApp) -> bool {
     } else {
         false
     };
-    if let Some(mut target) = unfocused_child.take() {
-        let _ = target.child.kill();
-        let _ = target.child.wait();
-        let _ = std::fs::remove_file(target.ready);
-        let _ = std::fs::remove_file(target.ack);
+    if let Some(target) = unfocused_child.take() {
+        drop(target);
     }
     let new_hide = press_global(handle, NEW_KEY, false, cx).await;
     let new_show = press_global(handle, NEW_KEY, true, cx).await;
 
+    // A separate process owns the candidate: this exercises actual OS registration conflict.
+    let owner = match hotkey_owner::spawn() {
+        Ok(owner) => owner,
+        Err(error) => fail!(format!("启动热键占用进程失败：{error}")),
+    };
+    let owner_ready = wait_file(&owner.ready, cx).await;
+    let conflict_attempt =
+        owner_ready && !record_hotkey(handle, &router, "b", OLD_CONFIG, cx).await;
+    let conflict_error = router.read_with(cx, |router, app| {
+        router
+            .settings_view()
+            .read(app)
+            .hotkey_recorder()
+            .read(app)
+            .error()
+            .is_some_and(|message| message.contains("注册全局热键") && message.contains("失败"))
+    });
+    let conflict_memory =
+        router.read_with(cx, |router, _| router.config().hotkey == baseline_hotkey);
+    let conflict_registration = cx
+        .update(|app| shell::runtime::registered_hotkey(app))
+        .as_deref()
+        == Some(baseline_registered.as_str());
+    let conflict_disk = {
+        let engine = engine.clone();
+        cx.update(|app| spawn_engine(app, async move { engine.get_config().await }))
+            .await
+            .is_ok_and(|config| config.hotkey == baseline_hotkey)
+    };
+    let owner_receives = owner_ready && os_input::combo(OLD_KEY) && wait_file(&owner.ack, cx).await;
+    let _ = router.update(cx, |router, cx| router.close_settings(cx));
+    let old_still_works = press_global(handle, NEW_KEY, false, cx).await
+        && press_global(handle, NEW_KEY, true, cx).await;
+    let conflict_preserved = conflict_attempt
+        && conflict_error
+        && conflict_memory
+        && conflict_registration
+        && conflict_disk
+        && owner_receives
+        && old_still_works;
+    println!(
+        "T47 OS冲突：ready/失败/错误/内存/注册/磁盘/owner ACK/旧注册仍可切换 {owner_ready}/{conflict_attempt}/{conflict_error}/{conflict_memory}/{conflict_registration}/{conflict_disk}/{owner_receives}/{old_still_works}"
+    );
+    drop(owner);
+
     let Some(backup) = block_engine_directory(&engine) else {
         fail!("无法构造真实保存失败沙盒");
     };
-    let failure_attempt = !record_hotkey(handle, &router, "f18", OLD_CONFIG, cx).await;
+    let failure_attempt = !record_hotkey(handle, &router, "b", OLD_CONFIG, cx).await;
     let failure_error = router.read_with(cx, |router, app| {
         router
             .settings_view()
@@ -412,19 +168,45 @@ pub(crate) async fn run(cx: &mut AsyncApp) -> bool {
             .error()
             .is_some_and(|message| message.contains("保存快捷键失败"))
     });
-    let memory_kept = router.read_with(cx, |router, _| router.config().hotkey == NEW_CONFIG);
-    let registered_kept = cx
+    let memory_value = router.read_with(cx, |router, _| router.config().hotkey.clone());
+    let recorder_value = router.read_with(cx, |router, app| {
+        router
+            .settings_view()
+            .read(app)
+            .hotkey_recorder()
+            .read(app)
+            .current()
+            .to_owned()
+    });
+    let registered_value = cx
         .update(|app| shell::runtime::registered_hotkey(app))
-        .is_some_and(|value| equivalent_hotkey(&value, NEW_CONFIG));
+        .unwrap_or_else(|| "<无注册热键>".to_owned());
+    let memory_kept = memory_value == baseline_hotkey;
+    let registered_kept = equivalent_hotkey(&registered_value, &baseline_registered);
     let restored = restore_engine_directory(&engine, backup);
-    let disk_kept = if restored {
+    let disk_result = if restored {
         let read_engine = engine.clone();
-        cx.update(|app| spawn_engine(app, async move { read_engine.get_config().await }))
+        match cx
+            .update(|app| spawn_engine(app, async move { read_engine.get_config().await }))
             .await
-            .is_ok_and(|config| config.hotkey == NEW_CONFIG)
+        {
+            Ok(config) => format!("{}", config.hotkey),
+            Err(error) => format!("<读取失败: {error}>"),
+        }
     } else {
-        false
+        "<恢复目录失败>".to_owned()
     };
+    let disk_kept = disk_result == baseline_hotkey;
+    println!(
+        "T47 失败回滚诊断：候选尝试失败={}；错误={}；Router 热键={:?}；录制器={:?}；已注册={:?}；磁盘={:?}；目录恢复={}",
+        failure_attempt,
+        failure_error,
+        memory_value,
+        recorder_value,
+        registered_value,
+        disk_result,
+        restored,
+    );
     let _ = router.update(cx, |router, cx| router.close_settings(cx));
     let failure_recovery =
         failure_attempt && failure_error && memory_kept && registered_kept && disk_kept && restored;
@@ -451,7 +233,7 @@ pub(crate) async fn run(cx: &mut AsyncApp) -> bool {
                 .state
                 .messages
                 .last()
-                .is_some_and(|message| message.content.contains("79,"))
+                .is_some_and(|message| crate::fixture::complete_slow_response(&message.content))
         })
         .unwrap_or(false);
 
@@ -467,6 +249,7 @@ pub(crate) async fn run(cx: &mut AsyncApp) -> bool {
         && refocused
         && new_hide
         && new_show
+        && conflict_preserved
         && failure_recovery
         && same_router
         && pasted

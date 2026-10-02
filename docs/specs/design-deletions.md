@@ -37,8 +37,8 @@
 
 | 设计文档 | 退役于 spec | why 迁移要求 |
 |---------|------------|-------------|
-| `docs/design/rust-architecture.md`（已部分退役，剩余：生命周期 / 热键 / 托盘 / 定位职责及旧模块追溯） | S02-*, S07-11 | 模块职责边界的理由需迁移到 crate 级文档注释 |
-| `docs/design/pages-and-states.md`（已部分退役，剩余：系统菜单栏设置入口与 Global Interactions S07-*） | S07-*, S10-03 | 剩余段落随各 spec 实现后删除 |
+| `docs/design/rust-architecture.md`（已部分退役，剩余：生命周期 / 托盘 / 定位职责及旧模块追溯） | S02-*, S07-11 | 模块职责边界的理由需迁移到 crate 级文档注释 |
+| `docs/design/pages-and-states.md`（已部分退役，剩余：系统菜单栏设置入口 S07-09 与光标屏幕定位 S07-06） | S07-*, S10-03 | 剩余段落随各 spec 实现后删除 |
 | `docs/design/overview.md` | 最后 | 架构约束需先迁移到 `AGENTS.md` 后再删 |
 
 > 上表中不存在的路径已被移除（原列有 `docs/design/colors_and_type.css` 与 `docs/design/prototypes/`）。
@@ -61,6 +61,7 @@
 
 | 日期 | 文件 / 段落 | 由哪些 spec 替代 | why 迁移去向 |
 |------|------------|-----------------|-------------|
+| 2026-10-03 | `docs/design/rust-architecture.md` 热键模块 / 注册职责 / HotkeyState 与失焦隐藏职责；`docs/design/pages-and-states.md` Global Interactions 的热键、选区、Esc / 隐藏（**部分**；保留生命周期 / 托盘 / 定位及系统菜单栏入口） | S07-03 / S07-04 | 三态切换、唯一事件桥、注册事务与写盘失败回滚、Carbon 独占冲突、复制完成后激活 → S07-03 决策记录与 `shell/runtime.rs` / `hotkey/core.rs`；真实外点而非 resignKey、子层 Esc 优先、隐藏不断流 → S07-04 决策记录与 `shell/visibility.rs` / `chat/composer.rs`。旧失焦描述与当前 v1 不符，v2 外点按硬约束 7。 |
 | 2026-10-02 | `docs/design/rust-architecture.md` §Window Configuration（**部分**；保留生命周期 / 热键 / 托盘 / 定位与模块追溯） | S07-01 | 当前 v1 为 560×60，旧 460×78 和毛玻璃描述已过时；不磁盘持久化尺寸、内容切换保留用户尺寸、只从紧凑页展开 → S07-01 决策记录与 `crates/ui/src/shell/config.rs` / `sizing.rs` 注释 |
 | 2026-10-02 | `docs/design/component-mapping.md`（**部分**：Settings Composition、ThemeSetting / HotkeySetting / HotkeyRecorder / KbdRow 角色与文件映射）；`docs/design/pages-and-states.md`（**部分**：剩余设置子项、config store 保存说明与 `html.dark` 主题切换；保留系统菜单栏入口与窗口交互） | S06-05（`crates/ui/src/settings/hotkey.rs` / `hotkey_state.rs`）、S06-06（`crates/ui/src/settings/theme_control.rs`、`crates/ui/src/chat/router_preferences.rs`） | 热键平台展示、KeyUp 提交、修饰键快照及 Phase 07 注册边界 → S06-05 决策记录；仅浅 / 深、先写盘后发布与新 Router 从配置恢复 → S06-06 决策记录；共享配置队列在前项结束后读成功基底 → `router_preferences.rs` 注释。原生控件保存禁用 / 就地错误 / 聚焦提示差异 → 对应 spec 决策记录 |
 | 2026-09-29 | `docs/design/pages-and-states.md`（**部分**：State vs Component、EmptyPage、NoApiKeyPage、State Flow、Known Implementation Notes、模型下拉、ChatPage 审批 / 提问；保留 SettingsPage、Global Interactions） | S05-13（提问与审批 `ask_card.rs` / `approval_panel.rs`）、S05-15（模型下拉 `model_menu.rs`）、S05-16（空态 / 无 Key 页）、S05-18（状态机 `crates/ui/src/chat/page_state.rs`、路由器 `router.rs`） | 设置叠加层不卸载底层页、添加 Provider 中间态不得打断设置流程、窗口仅在离开紧凑页时展开一次（硬约束 6 的准确含义）→ `page_state.rs` 模块文档与 `expands_window`；模型菜单独立于窗口绘制、紧凑窗口不扩高 → `model_menu.rs` 模块文档；审批的 Esc 拒绝 / 无论结果都关闭浮层 / 「本次都允许」语义 → `approval_panel.rs` 模块文档，提问的配对与回答载荷 → `ask_card.rs` 模块文档；启动总是空态 → 同文件与 spec 决策记录；`add-provider` 遗留类型值不迁移。**文档与代码不符**：EmptyPage 段写的紧凑窗口 460×78 已过时（v1 实为 560×60，`tauri.conf.json` / `geometry.rs`）；「`setPage` 会在 compact → content 时主动 resize，与硬约束冲突」实为硬约束的准确含义，非冲突 |

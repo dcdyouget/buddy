@@ -1,6 +1,6 @@
 //! T48 的设置页、覆盖层、审批和外点流程。
 
-use super::super::{external_target, input, os_input};
+use super::super::{external_target, fixture, input, os_input};
 use super::{
     visible, wait_streaming, wait_streaming_without_draw, wait_visible, wait_visible_without_draw,
 };
@@ -85,6 +85,31 @@ async fn wait_approval(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> boo
     false
 }
 
+async fn wait_approval_cleared(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> bool {
+    for _ in 0..160 {
+        input::draw(handle, cx).await;
+        if handle
+            .read_with(cx, |shell, app| {
+                shell
+                    .router()
+                    .read(app)
+                    .conversation()
+                    .read(app)
+                    .state
+                    .approval
+                    .is_none()
+            })
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        cx.background_executor()
+            .timer(Duration::from_millis(20))
+            .await;
+    }
+    false
+}
+
 async fn wait_file(path: &Path, cx: &mut AsyncApp) -> bool {
     for _ in 0..150 {
         if path.is_file() {
@@ -113,9 +138,13 @@ async fn external_click_hides(handle: WindowHandle<AppShell>, cx: &mut AsyncApp)
                 Some((
                     fields.next()?.parse::<f64>().ok()?,
                     fields.next()?.parse::<f64>().ok()?,
+                    fields.next()?.parse::<f64>().ok()?,
+                    fields.next()?.parse::<f64>().ok()?,
                 ))
             });
-        values.is_some_and(|(x, y)| os_input::click_screen(x + 40.0, y + 40.0))
+        values.is_some_and(|(x, y, width, height)| {
+            os_input::click_screen(x + width / 2.0, y + height / 2.0)
+        })
     } else {
         false
     };
@@ -244,16 +273,24 @@ pub(crate) async fn run(
         false
     };
 
-    let approval_prompted =
-        input::paste_text(handle, "请写文件 /tmp/buddy-shell-preview-t48.txt", cx).await;
+    let approval_root = fixture::sandbox("t48-approval");
+    let approval_path = approval_root.join("denied.txt");
+    let approval_prompt = format!("请写文件 {}", approval_path.display());
+    let approval_prompted = input::paste_text(handle, &approval_prompt, cx).await;
     if approval_prompted {
         input::press(handle, "enter", cx).await;
     }
     let approval_open = approval_prompted && wait_approval(handle, cx).await;
     input::press(handle, "escape", cx).await;
+    let approval_cleared = wait_approval_cleared(handle, cx).await;
+    let approval_stopped = wait_streaming(handle, false, cx).await;
+    let approval_file_absent = !approval_path.is_file();
     let approval_consumed = approval_open
-        && wait_streaming(handle, false, cx).await
+        && approval_cleared
+        && approval_file_absent
+        && approval_stopped
         && visible(handle, cx) == Some(true);
+    let _ = std::fs::remove_dir_all(approval_root);
 
     let external_stream_started = start_slow_stream(handle, cx).await;
     let external_clicked = external_click_hides(handle, cx).await;
@@ -270,7 +307,7 @@ pub(crate) async fn run(
                 .state
                 .messages
                 .last()
-                .is_some_and(|message| message.content.contains("79,"))
+                .is_some_and(|message| crate::fixture::complete_slow_response(&message.content))
         })
         .unwrap_or(false);
     let same_router = handle

@@ -7,7 +7,8 @@
 > - 新增 Provider 流程由 S06-02 替代，理由见对应 spec 决策记录，代码见 `crates/ui/src/settings/provider/` 与 `crates/ui/src/chat/router_settings.rs`。
 > - 模型列表、上下文与能力配置由 S06-03 替代，理由见对应 spec，代码见 `crates/ui/src/settings/model_list/` 与 `crates/ui/src/settings/model_config.rs`。
 > - 热键录制与仅浅 / 深的主题控件由 S06-05 / S06-06 替代，配置先写盘后发布，主题经 `Theme` 全局刷新。理由见对应 spec，代码见 `crates/ui/src/settings/` 与 `crates/ui/src/chat/router_preferences.rs`。
-> - 未实现（保留）：系统菜单栏设置入口与 Global Interactions（S07-*）
+> - 热键切换、外部选区与 Esc / 外点隐藏由 S07-03 / S07-04 替代，理由见对应 spec，代码见 `crates/ui/src/shell/runtime.rs`、`selection.rs`、`visibility.rs`。旧失焦隐藏描述不符合当前 v1，v2 按硬约束 7 监听真实外点。
+> - 未实现（保留）：系统菜单栏设置入口（S07-09）与光标屏幕定位（S07-06）
 >
 > 页面状态定义于 `src/types/index.ts`（v1，`v1-final`）；v2 的页面枚举是 `page_state::Page`。
 
@@ -17,9 +18,6 @@
 
 设置页既可从输入区进入，也可由系统菜单栏“设置…”直接打开；菜单栏“开机自启”使用原生勾选状态并与 `config.auto_start` 同步。
 
-## Global Interactions（S07-*）
+## 窗口定位（S07-06）
 
-- Esc：隐藏 Tauri 窗口，不停止生成。
-- 失焦：由 Rust window event 隐藏窗口，不停止生成。
-- 全局快捷键：默认 `CmdOrCtrl+J`，切换显示/隐藏并按光标屏幕定位。
-- 外部选中文本：后端发 `selected-text`，前端在 empty/noapikey/conversation 时写入 draft。
+- 唤起窗口时按光标所在屏幕定位。

@@ -130,6 +130,10 @@ zed 的绝大多数 crate 都是 GPL-3.0-or-later，包括 `markdown` / `languag
 
 ---
 
+### Buddy 的 macOS 热键补丁（2026-10-03）
+
+`vendor/global-hotkey/` 来自 crates.io `global-hotkey 0.8.0`，许可证为 `Apache-2.0 OR MIT`，保留 `LICENSE-APACHE`、`LICENSE-MIT` 及源码版权声明。本地只修改 Carbon 注册 options 为独占，避免外部占键时静默成功；注册事务 / 事件桥 API 不变，其他平台源码不变。来源、字节级差异及复核方法见该目录的 `VENDOR.md`。此补丁只作用于 v2 workspace；v1 的独立 Cargo manifest 不受影响。
+
 ## 6. `[patch]` 未复制的项及理由
 
 | 未复制 | 原因 |

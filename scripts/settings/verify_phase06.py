@@ -35,6 +35,7 @@ MASK_UNIT = ("cargo", "test", "-q", "-p", "buddy-ui", "--lib", "text_area::tests
 MOTION = ("cargo", "test", "-q", "-p", "buddy-ui", "--lib", "settings::panel::tests::exits_release_input_before_paint_finishes")
 
 CASES = [
+    Case("streaming-pump", "crates/ui/src/chat/session.rs", "c.state.tick(now);", "let _ = now;", UI, "FAIL S06-01 T35"),
     Case("motion-unit", "crates/ui/src/settings/panel.rs", "        self.shown\n", "        !self.shown\n", MOTION, "FAILED"),
     Case("transcript-wheel-occlusion", "crates/ui/src/chat/transcript.rs", "|| !hitbox.should_handle_scroll(window)", "|| false", UI, "FAIL S06-01 T35"),
     Case("settings-route", "crates/ui/src/chat/router.rs", ".child(self.settings.clone())", ".child(div())", UI, "FAIL S06-01 T35"),

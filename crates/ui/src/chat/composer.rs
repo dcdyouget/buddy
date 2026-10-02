@@ -218,6 +218,9 @@ impl Render for Composer {
         let body = if self.streaming {
             let label = format!("{} · 生成中...", self.streaming_model.clone().unwrap_or_else(|| "AI".into()));
             div()
+                // The input is replaced during streaming. Preserve its focus ancestry so
+                // unhandled Esc still bubbles to AppShell without enabling text editing.
+                .track_focus(&self.text.focus_handle(cx))
                 .flex()
                 .items_center()
                 .gap(px(m::SPACE_1))

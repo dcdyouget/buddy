@@ -172,8 +172,8 @@
 |----|------|------|------|------|
 | S07-01 | 窗口创建工厂与配置 | S01-01 | `done` | `phase-07/S07-01-window-factory.md` |
 | S07-02 | 无装饰 / 去阴影 / acceptsFirstMouse | S00-02 | `done` | `phase-07/S07-02-native-appearance.md` |
-| S07-03 | 全局热键唤起与切换 | S00-03 | `blocked` | `phase-07/S07-03-global-hotkey.md` |
-| S07-04 | Esc / 点击外部关闭（不断流） | S07-02 | `blocked` | `phase-07/S07-04-dismiss.md` |
+| S07-03 | 全局热键唤起与切换 | S00-03 | `doing` | `phase-07/S07-03-global-hotkey.md` |
+| S07-04 | Esc / 点击外部关闭（不断流） | S07-02 | `doing` | `phase-07/S07-04-dismiss.md` |
 | S07-05 | 置顶与全工作区可见 | S07-02 | `todo` | `phase-07/S07-05-window-level.md` |
 | S07-06 | 多显示器与窗口定位 | S07-01 | `todo` | `phase-07/S07-06-positioning.md` |
 | S07-07 | 窗口拖动与选择隔离 | S07-02 | `todo` | `phase-07/S07-07-drag-selection.md` |
@@ -357,3 +357,4 @@
 | 2026-10-02 | S07-02 | `doing` → `done` | `4a511e0`；首次显示前完成主窗口原生补丁，T46 三次实际属性读回与模拟首击通过；本地读取浅 / 深实际帧，原生 7 项拦截有效、全组 22/23，焦点变异漏检如实登记，脚本 rc=1 不计作通过。167 UI 单测、8 组预览回归与门禁通过；Phase 07 1→2，合计 65→66；OS 首击投递 / 上游 selector / Windows 等无独立自动化证据边界已登记 |
 | 2026-10-02 | S07-03 / S07-04 | `todo` → `doing` | 全局热键、事务式注册更新、Esc 与真实外部点击隐藏；保留同一 Router / 流式，选中文本唤起按当前 v1 核查。外部点击有别于 v1 已移除的失焦隐藏，将明确记录硬约束要求的行为差异 |
 | 2026-10-02 | S07-03 / S07-04 | `doing` → `blocked` | 实现与 T47–T49 / 拦截脚本已接入，182 UI 单测、8 组预览回归及纯逻辑 10/10 拦截通过；本机 CGSSessionScreenIsLocked=1、前台 loginwindow，真实系统输入预检停止且未投递。等待解锁后验证热键 / 外点 / Cmd+C 与 11 项 GUI 拦截；不等待用户目检、不填完成记录、done 计数不变 |
+| 2026-10-03 | S07-03 / S07-04 | `blocked` → `doing` | 本轮只读预检 CGSSessionScreenIsLocked=false、CGPreflightPostEventAccess=true；恢复真实热键 / 外点 / 选区与有效拦截验收，done 计数不变 |

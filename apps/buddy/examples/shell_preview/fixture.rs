@@ -120,3 +120,8 @@ pub(crate) fn manual_engine(dark: bool) -> Arc<buddy_engine::chat::ChatEngine> {
     buddy_engine::storage::save_config(&data_dir, &config).expect("写入 mock 配置");
     buddy_engine::chat::ChatEngine::new(data_dir)
 }
+
+/// Full SSE payload, not merely its last token: catches drops while the window is hidden.
+pub(crate) fn complete_slow_response(text: &str) -> bool {
+    text == (0..80).map(|index| format!("{index},")).collect::<String>()
+}

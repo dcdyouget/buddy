@@ -12,12 +12,17 @@ use buddy_ui::shell::{self, config::ShellConfig};
 mod external_target;
 #[path = "shell_preview/fixture.rs"]
 mod fixture;
+#[path = "shell_preview/hotkey_owner.rs"]
+mod hotkey_owner;
 #[path = "shell_preview/selftest.rs"]
 mod selftest;
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|arg| arg == "--hotkey-owner") {
+        hotkey_owner::run_child();
+    }
     if args.iter().any(|arg| arg == "--external-target") {
         external_target::run_child();
     }

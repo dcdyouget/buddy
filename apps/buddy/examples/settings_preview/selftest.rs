@@ -16,6 +16,42 @@ async fn find_settings_button(handle: WindowHandle<PageRouter>, cx: &mut AsyncAp
         .unwrap_or(false)
 }
 
+/// 等待真实的流式 pump / Pacer 放出目标文本；每轮都让后台任务运行并重绘窗口。
+async fn wait_for_stream_text(
+    handle: WindowHandle<PageRouter>,
+    conversation: &Entity<buddy_ui::chat::session::Conversation>,
+    expected: &str,
+    cx: &mut AsyncApp,
+) -> String {
+    const POLL_INTERVAL: Duration = Duration::from_millis(20);
+    const MAX_POLLS: usize = 100; // 最多 100 轮，不手动 tick / flush
+
+    for _ in 0..MAX_POLLS {
+        cx.background_executor().timer(POLL_INTERVAL).await;
+        draw(handle, cx).await;
+        let text = conversation.read_with(cx, |conversation, _| {
+            conversation
+                .state
+                .live
+                .as_ref()
+                .map(|live| text_of(&live.blocks))
+                .unwrap_or_default()
+        });
+        if text == expected {
+            return text;
+        }
+    }
+
+    conversation.read_with(cx, |conversation, _| {
+        conversation
+            .state
+            .live
+            .as_ref()
+            .map(|live| text_of(&live.blocks))
+            .unwrap_or_default()
+    })
+}
+
 pub(crate) async fn selftest(handle: WindowHandle<PageRouter>, cx: &mut AsyncApp) -> bool {
     cx.background_executor()
         .timer(Duration::from_millis(100))
@@ -143,19 +179,7 @@ pub(crate) async fn selftest(handle: WindowHandle<PageRouter>, cx: &mut AsyncApp
             );
         });
     });
-    draw(handle, cx).await;
-    cx.background_executor()
-        .timer(Duration::from_millis(80))
-        .await;
-    draw(handle, cx).await;
-    let stream_text_one = conversation.read_with(cx, |conversation, _| {
-        conversation
-            .state
-            .live
-            .as_ref()
-            .map(|live| text_of(&live.blocks))
-            .unwrap_or_default()
-    });
+    let stream_text_one = wait_for_stream_text(handle, &conversation, "第一段", cx).await;
     let _ = cx.update_window(handle.into(), |_, _, cx| {
         conversation.update(cx, |conversation, cx| {
             conversation.apply_events(
@@ -167,23 +191,16 @@ pub(crate) async fn selftest(handle: WindowHandle<PageRouter>, cx: &mut AsyncApp
             );
         });
     });
-    cx.background_executor()
-        .timer(Duration::from_millis(80))
-        .await;
-    draw(handle, cx).await;
-    let stream_text_two = conversation.read_with(cx, |conversation, _| {
-        conversation
-            .state
-            .live
-            .as_ref()
-            .map(|live| text_of(&live.blocks))
-            .unwrap_or_default()
-    });
+    let stream_text_two = wait_for_stream_text(handle, &conversation, "第一段第二段", cx).await;
     let streaming_in_settings =
         conversation.read_with(cx, |conversation, _| conversation.state.is_streaming());
     let stream_grew = stream_text_one == "第一段"
         && stream_text_two.starts_with("第一段")
         && stream_text_two.len() > stream_text_one.len();
+    let stream_complete = stream_text_two == "第一段第二段";
+    println!(
+        "T35 诊断：stream_text_one={stream_text_one:?}，stream_text_two={stream_text_two:?}，完整第二段 {stream_complete}",
+    );
     let messages_in_settings =
         conversation.read_with(cx, |conversation, _| conversation.state.messages.len());
 
@@ -241,6 +258,7 @@ pub(crate) async fn selftest(handle: WindowHandle<PageRouter>, cx: &mut AsyncApp
         && reopened_during_exit
         && streaming_in_settings
         && stream_grew
+        && stream_complete
         && closed_by_mouse
         && draft_kept
         && stream_kept

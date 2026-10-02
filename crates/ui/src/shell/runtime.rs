@@ -110,7 +110,14 @@ pub async fn toggle(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Result
     if snapshot.is_visible && snapshot.is_key {
         hide(handle, cx).await
     } else {
-        let capture = (!snapshot.is_visible).then(|| selection::begin_before_show(cx));
+        // CGEventPost enqueues Cmd+C; activating now can deliver it to Buddy instead of
+        // the external app. Finish the bounded capture (and restore clipboard) first.
+        let selected = if !snapshot.is_visible {
+            let capture = selection::begin_before_show(cx);
+            selection::finish_after_copy(cx, capture).await
+        } else {
+            None
+        };
         let idle = cx.update(|cx| {
             if !cx.has_global::<Runtime>() {
                 return false;
@@ -131,22 +138,13 @@ pub async fn toggle(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Result
                 .map_err(|e| e.to_string())?;
         }
         let shown = show(handle, cx).await;
-        let may_publish_selection = shown.is_ok();
-        if let Some(capture) = capture {
-            // 不延迟窗口显示；取词读回和剪贴板恢复单独异步进行。
-            cx.update(|cx| {
-                cx.spawn(async move |cx| {
-                    if let Some(text) = selection::finish_after_copy(cx, capture).await
-                        && may_publish_selection
-                    {
-                        let _ = handle.update(cx, |shell, _, cx| {
-                            shell
-                                .router()
-                                .update(cx, |router, cx| router.accept_selected_text(&text, cx))
-                        });
-                    }
-                })
-                .detach()
+        if shown.is_ok()
+            && let Some(text) = selected
+        {
+            let _ = handle.update(cx, |shell, _, cx| {
+                shell
+                    .router()
+                    .update(cx, |router, cx| router.accept_selected_text(&text, cx))
             });
         }
         shown

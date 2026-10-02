@@ -153,7 +153,7 @@ pub(crate) async fn run(cx: &mut AsyncApp) -> bool {
                 .state
                 .messages
                 .last()
-                .is_some_and(|message| message.content.contains("79,"))
+                .is_some_and(|message| crate::fixture::complete_slow_response(&message.content))
         })
         .unwrap_or(false);
     let _ = shell::runtime::show(handle, cx).await;

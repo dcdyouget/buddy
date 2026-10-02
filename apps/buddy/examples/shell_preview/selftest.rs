@@ -1,7 +1,7 @@
 //! Phase 07 窗口壳真实输入验收模块。
 
-use super::external_target;
 use super::fixture;
+use super::{external_target, hotkey_owner};
 #[path = "input.rs"]
 mod input;
 #[path = "os_input.rs"]
@@ -45,10 +45,16 @@ pub async fn run_windows(cx: &mut AsyncApp) -> bool {
 
 /// 系统热键 / 显隐定向自测，减少就地变异时无关窗口流程。
 pub async fn run_behaviors(cx: &mut AsyncApp) -> bool {
+    let clipboard = cx.update(|app| app.read_from_clipboard());
     let t47 = t47_toggle::run(cx).await;
     let t48 = t47 && t48_dismiss::run(cx).await;
     let t49 = t48 && t49_selection::run(cx).await;
     let ok = t47 && t48 && t49;
+    cx.update(|app| {
+        app.write_to_clipboard(
+            clipboard.unwrap_or_else(|| buddy_ui::gpui::ClipboardItem::new_string(String::new())),
+        )
+    });
     println!(
         "{} S07-03/S07-04 behavior 自测",
         if ok { "PASS" } else { "FAIL" }

@@ -21,8 +21,8 @@ pub struct SelectionCapture {
 
 /// 在窗口显示前开始一次取词捕获。
 ///
-/// 读取旧剪贴板和发送 Cmd+C 都在调用线程同步完成。调用方应在该函数返回后再
-/// 显示或激活窗口，这样目标应用仍是前台应用，模拟按键才会送到正确的接收者。
+/// 读取旧剪贴板和投递 Cmd+C 在调用线程同步完成，但 OS 处理按键是异步的。
+/// 调用方必须等 `finish_after_copy` 完成后再显示或激活，避免抢走外部应用的复制事件。
 #[cfg(target_os = "macos")]
 pub fn begin_before_show(cx: &mut AsyncApp) -> SelectionCapture {
     let (previous_item, previous_text) = cx.update(|cx| {
@@ -55,10 +55,7 @@ pub fn begin_before_show(_cx: &mut AsyncApp) -> SelectionCapture {
 /// 计时使用 GPUI 后台执行器，不在 UI 线程 sleep。返回值已经 trim；空文本或与旧
 /// 剪贴板文本相同的结果返回 `None`。无论读取是否成功，旧剪贴板都会尝试恢复。
 #[cfg(target_os = "macos")]
-pub async fn finish_after_copy(
-    cx: &mut AsyncApp,
-    capture: SelectionCapture,
-) -> Option<String> {
+pub async fn finish_after_copy(cx: &mut AsyncApp, capture: SelectionCapture) -> Option<String> {
     cx.background_executor().timer(COPY_SETTLE_DELAY).await;
 
     cx.update(|cx| {
@@ -74,10 +71,7 @@ pub async fn finish_after_copy(
 
 /// 非 macOS 平台没有系统取词路径，不读取、不恢复窗口剪贴板。
 #[cfg(not(target_os = "macos"))]
-pub async fn finish_after_copy(
-    _cx: &mut AsyncApp,
-    _capture: SelectionCapture,
-) -> Option<String> {
+pub async fn finish_after_copy(_cx: &mut AsyncApp, _capture: SelectionCapture) -> Option<String> {
     None
 }
 
@@ -195,6 +189,9 @@ mod tests {
             changed_selection("旧文本", Some(" 旧文本\n")),
             Some("旧文本".into())
         );
-        assert_eq!(changed_selection("", Some(" 新文本 ")), Some("新文本".into()));
+        assert_eq!(
+            changed_selection("", Some(" 新文本 ")),
+            Some("新文本".into())
+        );
     }
 }

@@ -63,3 +63,7 @@
 - 日期：2026-10-01
 - commit：`8a8c150`
 - 设计文档处置：按 RULES §7 部分删除 SettingsPage overlay 骨架与组件映射的外层设置组合 / SlideInPanel 角色；why 已迁入上述决策记录与代码注释，登记于 `docs/specs/design-deletions.md` 的「已部分删减的文档」。设置子项、添加 Provider 与窗口外壳段落保留。
+
+### 2026-10-03 回归补证
+
+T35 的固定 80ms 文本采样在解锁桌面复跑时读到空串 / “第一”，不能代表完整渐显已完成。自测改为有界等待真实 pump 放出完整两段，保留原增长断言并增加全文比对；未改产品节奏。`scripts/settings/verify_phase06.py --case streaming-pump` 正常基线 PASS，故意禁用 tick 后真实 FAIL（rc=1），拦截 1/1、脚本 rc=0。详情见 S07-03 / S07-04 本轮回归证据。

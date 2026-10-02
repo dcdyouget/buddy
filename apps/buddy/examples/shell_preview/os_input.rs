@@ -1,6 +1,6 @@
 //! 仅供 shell 预览自测使用的 macOS 系统输入注入。
 //!
-//! 组合键限定为预览专用的 CmdOrCtrl+Alt+Shift+F18/F19，调用方必须先检查权限。这里不发送产品默认
+//! 组合键限定为预览专用的 CmdOrCtrl+Alt+Shift+B/N，调用方必须先检查权限。这里不发送产品默认
 //! 热键，也不向任意用户窗口发送鼠标或键盘事件。
 
 #[cfg(target_os = "macos")]
@@ -19,11 +19,12 @@ mod macos {
     const FLAG_SHIFT: u64 = 1 << 17;
     const FLAG_COMMAND: u64 = 1 << 20;
     const FLAG_ALTERNATE: u64 = 1 << 19;
-    const F18: u16 = 79;
-    const F19: u16 = 80;
+    const B: u16 = 11;
+    const N: u16 = 45;
     const KEY_SHIFT: u16 = 56;
     const KEY_COMMAND: u16 = 55;
     const KEY_ALTERNATE: u16 = 58;
+    const KEY_A: u16 = 0;
     const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
 
     #[link(name = "ApplicationServices", kind = "framework")]
@@ -96,8 +97,8 @@ mod macos {
 
     fn key_for_name(name: &str) -> Option<u16> {
         match name {
-            "F18" => Some(F18),
-            "F19" => Some(F19),
+            "B" => Some(B),
+            "N" => Some(N),
             _ => None,
         }
     }
@@ -126,6 +127,11 @@ mod macos {
 
     pub(super) fn combo(name: &str) -> bool {
         combo_down(name) && combo_up(name)
+    }
+
+    /// 向当前真实 key window 发送 Cmd+A；调用方必须先完成会话和辅助功能预检。
+    pub(super) fn select_all() -> bool {
+        post(KEY_A, FLAG_COMMAND, true) && post(KEY_A, FLAG_COMMAND, false)
     }
 
     pub(super) fn click_screen(x: f64, y: f64) -> bool {
@@ -221,6 +227,16 @@ pub(crate) fn combo(name: &str) -> bool {
 
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn combo(_: &str) -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn select_all() -> bool {
+    macos::select_all()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn select_all() -> bool {
     false
 }
 
