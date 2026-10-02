@@ -1,6 +1,7 @@
 # Rust Backend Architecture
 
 > 实现入口：`src-tauri/src/lib.rs`
+> 已实现并退役：S07-01 主窗口配置（理由见对应 spec）；未实现：下列原生生命周期、热键、托盘与定位职责，由 Phase 07 后续项承接。
 
 ## Module Map
 
@@ -64,10 +65,6 @@ lib.rs
 ## Registered Commands
 
 `send_message`、`stop_generation`、`approve_tool_call`、`answer_tool_question`、`get_config`、`save_config`、`fetch_models`、`test_latency`、`load_messages`、`save_message`。
-
-## Window Configuration
-
-初始窗口为 460×78、无装饰、透明、可调整尺寸、最小 360×60、跨工作区、跳过任务栏；`alwaysOnTop=false`、`focus=false`。macOS 最低版本 12，并启用 private API 与毛玻璃效果。
 
 ## Main Dependencies
 

@@ -57,6 +57,7 @@ pub mod http;
 pub mod icons;
 pub mod markdown;
 pub mod settings;
+pub mod shell;
 pub mod text_area;
 pub mod theme_system;
 

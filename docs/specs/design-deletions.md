@@ -37,9 +37,8 @@
 
 | 设计文档 | 退役于 spec | why 迁移要求 |
 |---------|------------|-------------|
-| `docs/design/rust-architecture.md` | S02-*, S07-01 | 模块职责边界的理由需迁移到 crate 级文档注释 |
+| `docs/design/rust-architecture.md`（已部分退役，剩余：生命周期 / 热键 / 托盘 / 定位职责及旧模块追溯） | S02-*, S07-11 | 模块职责边界的理由需迁移到 crate 级文档注释 |
 | `docs/design/pages-and-states.md`（已部分退役，剩余：系统菜单栏设置入口与 Global Interactions S07-*） | S07-*, S10-03 | 剩余段落随各 spec 实现后删除 |
-| `docs/design/component-mapping.md`（已部分退役，剩余：窗口容器 S07-*） | S07-* | 剩余段落随实现删除 |
 | `docs/design/overview.md` | 最后 | 架构约束需先迁移到 `AGENTS.md` 后再删 |
 
 > 上表中不存在的路径已被移除（原列有 `docs/design/colors_and_type.css` 与 `docs/design/prototypes/`）。
@@ -62,6 +61,7 @@
 
 | 日期 | 文件 / 段落 | 由哪些 spec 替代 | why 迁移去向 |
 |------|------------|-----------------|-------------|
+| 2026-10-02 | `docs/design/rust-architecture.md` §Window Configuration（**部分**；保留生命周期 / 热键 / 托盘 / 定位与模块追溯） | S07-01 | 当前 v1 为 560×60，旧 460×78 和毛玻璃描述已过时；不磁盘持久化尺寸、内容切换保留用户尺寸、只从紧凑页展开 → S07-01 决策记录与 `crates/ui/src/shell/config.rs` / `sizing.rs` 注释 |
 | 2026-10-02 | `docs/design/component-mapping.md`（**部分**：Settings Composition、ThemeSetting / HotkeySetting / HotkeyRecorder / KbdRow 角色与文件映射）；`docs/design/pages-and-states.md`（**部分**：剩余设置子项、config store 保存说明与 `html.dark` 主题切换；保留系统菜单栏入口与窗口交互） | S06-05（`crates/ui/src/settings/hotkey.rs` / `hotkey_state.rs`）、S06-06（`crates/ui/src/settings/theme_control.rs`、`crates/ui/src/chat/router_preferences.rs`） | 热键平台展示、KeyUp 提交、修饰键快照及 Phase 07 注册边界 → S06-05 决策记录；仅浅 / 深、先写盘后发布与新 Router 从配置恢复 → S06-06 决策记录；共享配置队列在前项结束后读成功基底 → `router_preferences.rs` 注释。原生控件保存禁用 / 就地错误 / 聚焦提示差异 → 对应 spec 决策记录 |
 | 2026-09-29 | `docs/design/pages-and-states.md`（**部分**：State vs Component、EmptyPage、NoApiKeyPage、State Flow、Known Implementation Notes、模型下拉、ChatPage 审批 / 提问；保留 SettingsPage、Global Interactions） | S05-13（提问与审批 `ask_card.rs` / `approval_panel.rs`）、S05-15（模型下拉 `model_menu.rs`）、S05-16（空态 / 无 Key 页）、S05-18（状态机 `crates/ui/src/chat/page_state.rs`、路由器 `router.rs`） | 设置叠加层不卸载底层页、添加 Provider 中间态不得打断设置流程、窗口仅在离开紧凑页时展开一次（硬约束 6 的准确含义）→ `page_state.rs` 模块文档与 `expands_window`；模型菜单独立于窗口绘制、紧凑窗口不扩高 → `model_menu.rs` 模块文档；审批的 Esc 拒绝 / 无论结果都关闭浮层 / 「本次都允许」语义 → `approval_panel.rs` 模块文档，提问的配对与回答载荷 → `ask_card.rs` 模块文档；启动总是空态 → 同文件与 spec 决策记录；`add-provider` 遗留类型值不迁移。**文档与代码不符**：EmptyPage 段写的紧凑窗口 460×78 已过时（v1 实为 560×60，`tauri.conf.json` / `geometry.rs`）；「`setPage` 会在 compact → content 时主动 resize，与硬约束冲突」实为硬约束的准确含义，非冲突 |
 
@@ -79,6 +79,7 @@
 
 | 日期 | 文件/段落 | 替代它的 spec | why 迁移去向 |
 |------|----------|-------------|-------------|
+| 2026-10-02 | `docs/design/component-mapping.md`（整份；最后剩余 GlassPanel 实色窗口容器） | S07-01 / S07-02 | 页面由既有 Theme 实色根容器承载，统一主窗口工厂与原生 16px 内容裁剪替代剩余映射；不透明内容 / 透明原生角区 / 不使用 vibrancy → S07-02 决策记录，尺寸策略 → S07-01 决策记录。AGENTS Document Index 已同步移除 |
 | 2026-09-10 | `.design/`（整目录，7 文件） | 无（冗余产物） | 无需迁移：动效令牌与 `src/styles/global.css` 完全重复；用户明确「代码实现就是前端设计」 |
 
 | 2026-09-26 | `docs/design/rust-data-models.md`（整份） | S02-03, S02-02, S02-01（代码在 `crates/engine/src/models/`、`streaming.rs`） | 字段语义已在代码注释：模型 ID 规则与「不按 `::` 猜测」→ `models/model_identity.rs:4,12-13,20`；`ImageAttachment.path` 持久化 / `data_url` 临时 → `models/message.rs` 结构体注释；`parent_message_id` 仅影响嵌套显示 → `message.rs` 字段注释；时间戳为 Unix 秒 → `created_at` 注释；`QuestionOption` camelCase → `streaming.rs:245`；**ID 并非全为 UUID → 本次新增于 `Message.id`**；未知模型上下文回退 128000 → 测试 `test_unknown_model_defaults_to_128k` 锁定。「保存时 `selected_model_id` 必须能在 `models` 中找到」的校验在 v1 `commands.rs`，移交 S02-08 覆盖表。前端 `supports_long_cache_retention` 为 v1 TS 专属，不迁 |

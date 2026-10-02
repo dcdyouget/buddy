@@ -858,6 +858,7 @@ dependencies = [
  "log",
  "objc",
  "pulldown-cmark",
+ "raw-window-handle",
  "reqwest",
  "serde_json",
  "theme",
