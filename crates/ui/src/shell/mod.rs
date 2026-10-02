@@ -4,8 +4,12 @@
 //! 原生外观在首个可见帧之前应用；底边锚定与屏幕定位由 S07-06 承接。
 
 pub mod config;
+pub mod hotkey;
 pub mod native;
+pub mod runtime;
+pub mod selection;
 pub mod sizing;
+mod visibility;
 
 use crate::chat::page_state::Page;
 use crate::chat::router::{PageRouter, RouterEvent, preload};
@@ -13,8 +17,8 @@ use crate::chat_bridge::spawn_engine;
 use buddy_engine::chat::ChatEngine;
 use config::ShellConfig;
 use gpui::{
-    App, AppContext, AsyncApp, Context, Entity, Render, Subscription, Window, WindowHandle, div,
-    prelude::*,
+    App, AppContext, AsyncApp, Context, Entity, KeyDownEvent, Render, Subscription, Window,
+    WindowHandle, div, prelude::*,
 };
 use std::sync::Arc;
 
@@ -54,8 +58,18 @@ impl AppShell {
 }
 
 impl Render for AppShell {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div().size_full().child(self.router.clone())
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .on_key_down(cx.listener(|_, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape"
+                    && let Some(handle) = window.window_handle().downcast::<AppShell>()
+                {
+                    cx.stop_propagation();
+                    runtime::request_hide(handle, cx);
+                }
+            }))
+            .child(self.router.clone())
     }
 }
 

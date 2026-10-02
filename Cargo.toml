@@ -85,6 +85,10 @@ env_logger = "0.11"
 objc = "0.2"
 # 主窗口原生句柄（S07-02）；GPUI 闭包已有 0.6.2，不新增包
 raw-window-handle = "0.6"
+# 系统全局热键（S07-03），与 S00-03 实测版本一致
+global-hotkey = "0.8"
+# macOS 外部鼠标事件监听（S07-04）；GPUI 闭包已有 0.1.6
+block = "0.1"
 # 文本输入的字形 / 词边界（S05-06）；与 gpui 闭包中同一版本，不新增包
 unicode-segmentation = "1"
 

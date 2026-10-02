@@ -33,13 +33,29 @@ impl PageRouter {
         let state = self.config_save_state.clone();
         let sequence = state.borrow_mut().begin(None);
         let engine = self.engine.clone();
+        let hotkey_updater = self.hotkey_updater.clone();
         let (completed, completion) = tokio::sync::oneshot::channel();
         cx.spawn(async move |router, cx| {
             if let Some(previous) = previous {
                 previous.await;
             }
             // 在前项完成后才取基底，避免主题、热键与模型保存互相覆盖。
-            let candidate = edit.apply(&state.borrow().config());
+            let baseline = state.borrow().config();
+            let candidate = edit.apply(&baseline);
+            // 注册新键失败时既不写盘也不注销旧键；写盘失败再恢复旧注册。
+            let registration = if edit.is_hotkey() {
+                cx.update(|_| match &hotkey_updater {
+                    Some(update) => update(&candidate.hotkey),
+                    None => Ok(()),
+                })
+            } else {
+                Ok(())
+            };
+            if let Err(error) = registration {
+                let _ = settings.update(cx, |view, cx| view.preference_failed(true, error, cx));
+                let _ = completed.send(());
+                return;
+            }
             let to_save = candidate.clone();
             let work =
                 cx.update(|cx| spawn_engine(cx, async move { engine.save_config(to_save).await }));
@@ -52,6 +68,18 @@ impl PageRouter {
                     });
                 }
                 Err(error) => {
+                    let rollback = if edit.is_hotkey() {
+                        cx.update(|_| match &hotkey_updater {
+                            Some(update) => update(&baseline.hotkey),
+                            None => Ok(()),
+                        })
+                    } else {
+                        Ok(())
+                    };
+                    let error = match rollback {
+                        Ok(()) => error,
+                        Err(rollback) => format!("{error}；旧快捷键恢复失败：{rollback}"),
+                    };
                     let _ = settings.update(cx, |view, cx| {
                         view.preference_failed(edit.is_hotkey(), error, cx)
                     });

@@ -85,13 +85,24 @@ pub(crate) fn manual_engine(dark: bool) -> Arc<buddy_engine::chat::ChatEngine> {
                 }
                 let body = serde_json::from_slice::<serde_json::Value>(&bytes[body_start..body_start + length]).unwrap_or_default();
                 let prompt = body["messages"].as_array().and_then(|messages| messages.iter().rev().find(|message| message["role"] == "user"))
-                    .map(|message| message["content"].to_string()).unwrap_or_default();
+                    .and_then(|message| message["content"].as_str()).unwrap_or_default();
                 if prompt.contains("401") {
                     let response = b"HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
                     let _ = socket.write_all(response).await;
                     return;
                 }
                 let _ = socket.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n").await;
+                let last_is_tool = body["messages"].as_array().and_then(|messages| messages.last())
+                    .is_some_and(|message| message["role"] == "tool");
+                if !last_is_tool && prompt.contains("请写文件") {
+                    if let Some(path) = prompt.split_whitespace().find(|word| word.starts_with('/')) {
+                        let arguments = serde_json::json!({"path":path,"content":"hello"}).to_string();
+                        let data = serde_json::json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"shell-write","type":"function","function":{"name":"create_file","arguments":arguments}}]}}]});
+                        let _ = socket.write_all(format!("data: {data}\n\n").as_bytes()).await;
+                        let _ = socket.write_all(b"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n").await;
+                        return;
+                    }
+                }
                 let count = if prompt.contains('慢') { 80 } else { 6 };
                 for index in 0..count {
                     if prompt.contains('慢') { tokio::time::sleep(std::time::Duration::from_millis(20)).await; }

@@ -144,6 +144,8 @@ pub struct PageRouter {
     /// 配置保存的串行队列（v1 `configUpdateQueue`：快速连选两个模型时，第二次保存不能被第一次覆盖）
     config_save: Option<Task<()>>,
     config_save_state: Rc<RefCell<config_save::ConfigSaveState>>,
+    /// 外壳注入系统热键事务；独立页面预览没有原生注册。
+    hotkey_updater: Option<Rc<dyn Fn(&str) -> Result<(), String>>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -233,6 +235,7 @@ impl PageRouter {
                 config.clone(),
             ))),
             config,
+            hotkey_updater: None,
             settings,
             settings_motion: crate::settings::panel::SlideMotion::default(),
             pages: PageState::new(),
@@ -265,6 +268,51 @@ impl PageRouter {
     /// 当前配置
     pub fn config(&self) -> &AppConfig {
         &self.config
+    }
+
+    /// 生产外壳在保存热键前更新系统注册，写盘失败时恢复旧键。
+    pub fn set_hotkey_updater(&mut self, update: Rc<dyn Fn(&str) -> Result<(), String>>) {
+        self.hotkey_updater = Some(update);
+    }
+
+    /// 外部选中文本只写入当前 v1 允许的输入页，不触发发送。
+    pub fn accept_selected_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        let text = text.trim();
+        if !text.is_empty()
+            && matches!(
+                self.page(),
+                Page::Empty | Page::NoApiKey | Page::Conversation
+            )
+        {
+            self.composer
+                .update(cx, |composer, cx| composer.set_draft(text, cx));
+        }
+    }
+
+    /// 显隐通知直接更新缓冲；不依赖隐藏窗口的绘制或系统焦点回调。
+    pub fn window_visibility_changed(&mut self, visible: bool, cx: &mut Context<Self>) {
+        self.conversation.update(cx, |conversation, cx| {
+            if visible {
+                conversation.window_shown(cx);
+            } else {
+                conversation.window_hidden(cx);
+            }
+        });
+        self.focus_composer = visible && self.page() != Page::Settings;
+        cx.notify();
+    }
+
+    /// 原生隐藏前关闭独立菜单并放出流式缓冲，保留整个会话。
+    pub fn prepare_window_hide(&mut self, cx: &mut Context<Self>) {
+        if let Some(menu) = self.model_menu.take() {
+            let _ = menu.update(cx, |menu, window, cx| menu.close(window, cx));
+        }
+        self.window_visibility_changed(false, cx);
+    }
+
+    /// v1 闲置十分钟后呼出回紧凑页，历史和生成任务仍保留。
+    pub fn invoked_after_idle(&mut self, cx: &mut Context<Self>) {
+        self.transition(cx, |pages| pages.set_page(Page::Empty));
     }
 
     /// 对话页（自检用）

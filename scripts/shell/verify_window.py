@@ -14,7 +14,7 @@ SIZING = "crates/ui/src/shell/sizing.rs"
 SHELL = "crates/ui/src/shell/mod.rs"
 NATIVE = "crates/ui/src/shell/native.rs"
 UNIT = ("cargo", "test", "-q", "-p", "buddy-ui", "--lib", "shell::")
-GUI = ("cargo", "run", "-q", "-p", "buddy-app", "--example", "shell_preview", "--", "--selftest")
+GUI = ("cargo", "run", "-q", "-p", "buddy-app", "--example", "shell_preview", "--", "--selftest-window")
 FAIL = "FAIL S07-01/S07-02"
 
 CASES = [

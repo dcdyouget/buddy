@@ -35,10 +35,13 @@ serde_json.workspace = true
 unicode-segmentation.workspace = true
 # 消息时间按本地时区格式化（S05-14）；engine 已依赖，不新增包
 chrono.workspace = true
+# 全局热键的原生注册与事件，由 shell 维持生存期
+global-hotkey.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc.workspace = true
 raw-window-handle.workspace = true
+block.workspace = true
 
 [dev-dependencies]
 

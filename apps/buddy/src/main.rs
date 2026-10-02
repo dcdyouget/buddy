@@ -19,12 +19,18 @@ fn main() {
         .run(move |cx: &mut App| {
             shell::init(cx);
             cx.spawn(async move |cx: &mut AsyncApp| {
-                if let Err(error) =
-                    shell::open_main_window(ChatEngine::new(data_dir), ShellConfig::default(), cx)
-                        .await
+                match shell::open_main_window(ChatEngine::new(data_dir), ShellConfig::default(), cx)
+                    .await
                 {
-                    log::error!("创建主窗口失败：{error}");
-                    cx.update(|cx| cx.quit());
+                    Ok(handle) => {
+                        if let Err(error) = shell::runtime::install(handle, cx).await {
+                            log::error!("安装主窗口事件失败：{error}");
+                        }
+                    }
+                    Err(error) => {
+                        log::error!("创建主窗口失败：{error}");
+                        cx.update(|cx| cx.quit());
+                    }
                 }
             })
             .detach();
