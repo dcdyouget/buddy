@@ -174,8 +174,8 @@
 | S07-02 | 无装饰 / 去阴影 / acceptsFirstMouse | S00-02 | `done` | `phase-07/S07-02-native-appearance.md` |
 | S07-03 | 全局热键唤起与切换 | S00-03 | `done` | `phase-07/S07-03-global-hotkey.md` |
 | S07-04 | Esc / 点击外部关闭（不断流） | S07-02 | `done` | `phase-07/S07-04-dismiss.md` |
-| S07-05 | 置顶与全工作区可见 | S07-02 | `todo` | `phase-07/S07-05-window-level.md` |
-| S07-06 | 多显示器与窗口定位 | S07-01 | `todo` | `phase-07/S07-06-positioning.md` |
+| S07-05 | 置顶与全工作区可见 | S07-02 | `blocked` | `phase-07/S07-05-window-level.md` |
+| S07-06 | 多显示器与窗口定位 | S07-01 | `blocked` | `phase-07/S07-06-positioning.md` |
 | S07-07 | 窗口拖动与选择隔离 | S07-02 | `todo` | `phase-07/S07-07-drag-selection.md` |
 | S07-08 | 入场动画与减弱动效 | S07-02 | `todo` | `phase-07/S07-08-entrance-motion.md` |
 | S07-09 | tray 图标与菜单 | S00-03 | `todo` | `phase-07/S07-09-tray.md` |
@@ -360,3 +360,5 @@
 | 2026-10-03 | S07-03 / S07-04 | `blocked` → `doing` | 本轮只读预检 CGSSessionScreenIsLocked=false、CGPreflightPostEventAccess=true；恢复真实热键 / 外点 / 选区与有效拦截验收，done 计数不变 |
 | 2026-10-03 | S07-03 | `doing` → `done` | `2ddf6d6`；解锁桌面 T47–T49、真实 OS 冲突与外部选区、Esc / 外点及完整慢流验收；行为 25/25（24+1 两轮）、窗口 23/23 有效拦截，182 UI 单测、9 组预览、浅深渲染与门禁 rc=0；对应设计部分退役并登记，偏离 v1 见 spec。Phase 07 2→3，合计 66→67 |
 | 2026-10-03 | S07-04 | `doing` → `done` | `2ddf6d6`；解锁桌面 T47–T49、真实 OS 冲突与外部选区、Esc / 外点及完整慢流验收；行为 25/25（24+1 两轮）、窗口 23/23 有效拦截，182 UI 单测、9 组预览、浅深渲染与门禁 rc=0；对应设计部分退役并登记，偏离 v1 见 spec。Phase 07 3→4，合计 67→68 |
+| 2026-10-03 | S07-05 / S07-06 | `todo` → `doing` | S07-03/04 完成后推进当前 v1 普通层级 / 全工作区与定位；前者补真实全屏空间证据，后者移植每屏内存位置、工作区裁剪和底边锚定。子 agent 文件分工，GUI / 变异与最终整合由主 agent 串行。 |
+| 2026-10-03 | S07-05 / S07-06 | `doing` → `blocked` | 定位与 T50/T51 已接线；桌面再次锁定（CGSSessionScreenIsLocked=1，CGPreflightPostEventAccess=true），T51 的 T47 前置预检停止，未发送系统输入。纯几何修正后 9/9 有效拦截、191 UI 单测通过；真实全屏 / 定位 / 6 项 GUI 拦截等待解锁，不是审批；计数仍 Phase 07 4/13、合计 68/104 |

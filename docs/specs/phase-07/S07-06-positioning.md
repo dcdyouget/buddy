@@ -1,9 +1,9 @@
 # S07-06 多显示器与窗口定位
 
-> 状态: `todo`
+> 状态: `blocked`
 > Phase: 07
 > 依赖: S07-01
-> 阻塞: —
+> 阻塞: macOS 会话再次锁定；真实系统验收与 GUI 变异等待解锁，不是审批。
 > 退役设计文档: docs/design/rust-architecture.md SavedWindowPositions / 定位职责
 
 ## 目标
@@ -20,8 +20,10 @@
 ## 实现要点
 
 - 移植鼠标所在屏幕、每屏运行期位置记忆、工作区裁剪和保存防抖。
-- 区分逻辑 / 物理 / macOS 原点，处理不同 DPI / 负坐标 / 屏幕拔插。
+- 全局热键沿用 v1 的焦点屏优先；托盘 / 鼠标呼出沿用 v1 的鼠标屏优先。
+- 区分 GPUI / AppKit 原点，内部统一全局左上逻辑点，处理负坐标 / 屏幕拔插；窗口尺寸全程使用 AppKit 逻辑点，不手动缩放。
 - 内容增高固定底边，尺寸调用 S07-01 统一策略。
+- 呼出定位沿用 v1：saved 位置只有在完整显示器 frame 内才复用，否则在完整 frame 居中；visible work area 与边距只用于页面 resize 的裁剪。
 
 ## 验收标准
 
@@ -31,7 +33,17 @@
 
 ## 证据
 
-待实施后填写可复现命令、观察值、拦截结果与证据边界。
+- `crates/ui/src/shell/positioning.rs` / `positioning/tests.rs`：DPI 逻辑点、负坐标、左下 / 左上往返、屏幕来源回退、全屏 frame 居中与无效 saved 回退、resize 工作区裁剪和底边锚定。
+- `positioning_native.rs` / `positioning_native/ffi.rs`：公开 AppKit NSWindow / NSScreen、CGDisplay UUID；不新增依赖、不改 GPUI。`positioning_controller.rs` 接线移动 160ms 防抖、失活 / 隐藏立即保存、待页面尺寸提交后再按新尺寸呼出；原生 setFrame 在退出 GPUI 借用后执行。
+- `cargo test -q -p buddy-ui --lib`：191 passed，rc=0，无编译 warning（`/tmp/positioning-unit-final.log`）。
+- `scripts/shell/verify_positioning.py` 的 9 个纯逻辑 case：修正 v1 唤起语义后重新跑基线，9/9 均通过故意改坏 → 测试 FAILED（rc=101）→ 原始字节还原；脚本 rc=0，日志 `/tmp/positioning-interception-final.log`。覆盖原点、裁剪最小 / 最大 / 超大目标、中心 / 底边、saved、屏幕 fallback、位置保存；之前版本首轮 9/9 不替代本轮证据。
+- `shell_preview --selftest-positioning` 已接线 T51，但 T47 前置锁屏预检 rc=1，未发送系统输入；T51 未执行。真实移动后读回防抖早 / 晚状态、隐藏时故意移走窗口后热键恢复、底边 / 中心 / 工作区、用户尺寸与同 Router 等断言仍待验。4 个 GUI 变异尚未运行，不能宣称有效。
+- `python3 scripts/shell/verify_window.py --case resize-subscription`：更新尺寸接线锚点后基线 PASS，故意移除 controller 调用触发 T45 真实尺寸 FAIL，1/1 有效、脚本 rc=0（`/tmp/positioning-resize-interception.log`）。该项不投递 OS 输入，不能代替 T51。
+- 多屏 / 混合 DPI / 屏幕拔插目前只有纯逻辑覆盖，无真实硬件证据；单屏也须解锁后完成。
+
+2026-10-03 静态回归：chat / pages / app / markdown / streaming / settings preview 的 `--selftest`、settings 的 `--selftest-preferences`、shell 的 `--selftest-window` 共 8 组 rc=0 / PASS（`/tmp/preview-s0706-summary.log`）。T45 已在当前定位接线上验证尺寸策略，T46 读回 level=0 / collection=257 等原生属性；锁屏下这些值不能证明真实工作区 / 聚焦 / 系统定位行为。完整 `--selftest` 待解锁后执行。
+
+2026-10-03：暂存后运行 `scripts/gate.sh`，rc=0，输出「gate: 全部通过」（`/tmp/gate-s0706.log`）；门禁不代替上述待验 GUI 行为。
 
 ## 决策记录
 
@@ -39,12 +51,16 @@
 |------|------|------|
 | 行为依据 | 当前 v1 源码 | 旧素材尺寸 / 毛玻璃 / 置顶描述不覆盖当前源码与已接受决定。 |
 | 视觉验收 | agent 本地读取真实渲染 | 用户已授权自行验收，不再等待用户目检。 |
+| 屏幕来源 | 焦点屏 / 鼠标屏分别沿用 v1 | 全局热键使用 `NSScreen.mainScreen`；鼠标呼出使用 `NSEvent.mouseLocation`；两者均按当前窗口屏幕再回退 primary。 |
+| 呼出 frame | 完整 frame 居中与 saved 合法性检查 | v1 的初始 / saved 定位不按 Dock / 菜单栏 visible frame 裁剪；工作区裁剪仅用于页面尺寸变化。 |
+| 运行期 key | CGDisplay UUID | v1 使用位置坐标作 key；v2 仅运行期记忆，不需兼容历史磁盘数据，UUID 可稳定应对显示器重排。 |
+| 坐标与 DPI | AppKit 逻辑点，统一左上内部坐标 | 原生桥负责 AppKit 左下坐标转换；不把 backing scale 重复乘入窗口尺寸。 |
 
 ## 完成记录
 
 - 日期：
 - commit：
-- 设计文档处置：
+- 设计文档处置：保留 rust-architecture.md 的 SavedWindowPositions / 定位职责与 pages-and-states.md 定位段；验收后再部分退役登记。
 
 ## 备注
 

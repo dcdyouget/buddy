@@ -29,7 +29,7 @@ CASES = [
     Case("zero-minimum-validation", CONFIG, "if self.min_size.width == 0 || self.min_size.height == 0 {", "if false {", UNIT, "FAILED"),
     Case("initial-minimum-validation", CONFIG, "if self.initial_size.width < self.min_size.width\n            || self.initial_size.height < self.min_size.height", "if false", UNIT, "FAILED"),
     Case("page-size-dispatch", SIZING, "Page::Conversation | Page::Streaming => CONVERSATION_SIZE,", "Page::Conversation | Page::Streaming => SETTINGS_SIZE,", GUI, FAIL),
-    Case("resize-subscription", SHELL, "window.resize(target.to_gpui());", "let _ = target;", GUI, FAIL),
+    Case("resize-subscription", SHELL, "positioning_controller::resize(shell, target, window, cx);", "let _ = target;", GUI, FAIL),
     Case("settings-origin", SHELL, "settings_origin = Some(from);", "settings_origin = None;", GUI, FAIL),
     Case("compact-return", SIZING, "return Some(COMPACT_SIZE);", "return None;", GUI, FAIL),
     Case("preserve-user-size", SIZING, "    None\n}\n", "    Some(page_size(to))\n}\n", GUI, FAIL),

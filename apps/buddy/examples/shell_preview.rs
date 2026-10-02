@@ -12,8 +12,12 @@ use buddy_ui::shell::{self, config::ShellConfig};
 mod external_target;
 #[path = "shell_preview/fixture.rs"]
 mod fixture;
+#[path = "shell_preview/fullscreen_target.rs"]
+mod fullscreen_target;
 #[path = "shell_preview/hotkey_owner.rs"]
 mod hotkey_owner;
+#[path = "shell_preview/level_native.rs"]
+mod level_native;
 #[path = "shell_preview/selftest.rs"]
 mod selftest;
 
@@ -23,20 +27,29 @@ fn main() {
     if args.iter().any(|arg| arg == "--hotkey-owner") {
         hotkey_owner::run_child();
     }
+    if args.iter().any(|arg| arg == "--fullscreen-target") {
+        fullscreen_target::run_child();
+    }
     if args.iter().any(|arg| arg == "--external-target") {
         external_target::run_child();
     }
     let self_test = args.iter().any(|arg| arg == "--selftest");
     let behavior_test = args.iter().any(|arg| arg == "--selftest-behavior");
     let window_test = args.iter().any(|arg| arg == "--selftest-window");
+    let level_test = args.iter().any(|arg| arg == "--selftest-level");
+    let positioning_test = args.iter().any(|arg| arg == "--selftest-positioning");
     let dark = args.iter().any(|arg| arg == "--dark");
     application()
         .with_assets(buddy_ui::icons::Assets)
         .run(move |cx: &mut App| {
             shell::init(cx);
-            if self_test || behavior_test || window_test {
+            if self_test || behavior_test || window_test || level_test || positioning_test {
                 cx.spawn(async move |cx: &mut AsyncApp| {
-                    let passed = if behavior_test {
+                    let passed = if level_test {
+                        selftest::run_levels(cx).await
+                    } else if positioning_test {
+                        selftest::run_positioning(cx).await
+                    } else if behavior_test {
                         selftest::run_behaviors(cx).await
                     } else if window_test {
                         selftest::run_windows(cx).await

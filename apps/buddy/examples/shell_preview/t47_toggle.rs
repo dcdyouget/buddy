@@ -3,7 +3,7 @@
 use super::{external_target, fixture, hotkey_owner, input, os_input};
 use buddy_ui::chat::page_state::Page;
 use buddy_ui::chat_bridge::spawn_engine;
-use buddy_ui::gpui::{AppContext, AsyncApp};
+use buddy_ui::gpui::AsyncApp;
 use buddy_ui::shell;
 use std::time::Duration;
 

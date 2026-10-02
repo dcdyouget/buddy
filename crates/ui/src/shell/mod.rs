@@ -1,15 +1,19 @@
 //! 主窗口外壳：统一创建入口和页面尺寸策略（S07-01 / S07-02）。
 //!
 //! PageRouter 只负责内容，尺寸由外壳订阅页面变更决定。
-//! 原生外观在首个可见帧之前应用；底边锚定与屏幕定位由 S07-06 承接。
+//! 原生外观在首个可见帧之前应用；页面展开固定底边并裁剪到当前屏幕工作区。
 
 pub mod config;
 pub mod hotkey;
 pub mod native;
+pub mod positioning;
+mod positioning_controller;
+pub mod positioning_native;
 pub mod runtime;
 pub mod selection;
 pub mod sizing;
 mod visibility;
+pub mod workspaces;
 
 use crate::chat::page_state::Page;
 use crate::chat::router::{PageRouter, RouterEvent, preload};
@@ -17,7 +21,7 @@ use crate::chat_bridge::spawn_engine;
 use buddy_engine::chat::ChatEngine;
 use config::ShellConfig;
 use gpui::{
-    App, AppContext, AsyncApp, Context, Entity, KeyDownEvent, Render, Subscription, Window,
+    App, AppContext, AsyncApp, Context, Entity, KeyDownEvent, Render, Subscription, Task, Window,
     WindowHandle, div, prelude::*,
 };
 use std::sync::Arc;
@@ -26,6 +30,10 @@ use std::sync::Arc;
 pub struct AppShell {
     router: Entity<PageRouter>,
     _page_subscription: Subscription,
+    positions: positioning::PositionMemory,
+    pending_position_save: Option<Task<()>>,
+    pending_resize: Option<Task<()>>,
+    _position_subscriptions: [Subscription; 2],
 }
 
 impl AppShell {
@@ -34,26 +42,36 @@ impl AppShell {
         let subscription = cx.subscribe_in(
             &router,
             window,
-            move |_, _, event: &RouterEvent, window, _| {
+            move |shell, _, event: &RouterEvent, window, cx| {
                 let RouterEvent::PageChanged { from, to } = *event;
                 let target = sizing::resize_target(from, to, settings_origin);
                 if to == Page::Settings {
                     settings_origin = Some(from);
                 }
                 if let Some(target) = target {
-                    window.resize(target.to_gpui());
+                    positioning_controller::resize(shell, target, window, cx);
                 }
             },
         );
+        let position_subscriptions = positioning_controller::observe(window, cx);
         Self {
             router,
             _page_subscription: subscription,
+            positions: positioning::PositionMemory::default(),
+            pending_position_save: None,
+            pending_resize: None,
+            _position_subscriptions: position_subscriptions,
         }
     }
 
     /// 主窗口共用的页面路由器。
     pub fn router(&self) -> Entity<PageRouter> {
         self.router.clone()
+    }
+
+    /// 当前进程为指定显示器记住的位置；供窗口诊断读取，不从磁盘恢复。
+    pub fn saved_window_position(&self, display_key: &str) -> Option<positioning::Point> {
+        self.positions.saved(display_key)
     }
 }
 

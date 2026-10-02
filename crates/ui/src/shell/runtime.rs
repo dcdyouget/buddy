@@ -1,6 +1,6 @@
 //! 进程唯一的全局热键 / 外部点击运行时；隐藏仅操作原生窗口。
 
-use super::{AppShell, hotkey::GlobalHotkey, selection, visibility};
+use super::{AppShell, hotkey::GlobalHotkey, positioning_controller, selection, visibility};
 use gpui::{App, AppContext, AsyncApp, Global, Task, WindowHandle};
 use std::{
     cell::RefCell,
@@ -158,7 +158,8 @@ pub async fn hide(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Result<(
         return Ok(());
     }
     handle
-        .update(cx, |shell, _, cx| {
+        .update(cx, |shell, window, cx| {
+            positioning_controller::save_before_hide(shell, window);
             shell
                 .router()
                 .update(cx, |router, cx| router.prepare_window_hide(cx))
@@ -177,6 +178,7 @@ pub async fn hide(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Result<(
 
 /// 唤回当前主窗口；原生调用在 GPUI App 借用已结束后同步执行。
 pub async fn show(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Result<(), String> {
+    positioning_controller::restore(handle, true, cx).await?;
     let prepared = prepare(handle, cx)?;
     prepared.show_and_focus().map_err(|e| e.to_string())?;
     handle

@@ -2,6 +2,7 @@
 
 use super::fixture;
 use super::{external_target, hotkey_owner};
+use super::{fullscreen_target, level_native};
 #[path = "input.rs"]
 mod input;
 #[path = "os_input.rs"]
@@ -16,6 +17,10 @@ mod t47_toggle;
 mod t48_dismiss;
 #[path = "t49_selection.rs"]
 mod t49_selection;
+#[path = "t50_level.rs"]
+mod t50_level;
+#[path = "t51_positioning.rs"]
+mod t51_positioning;
 
 use buddy_ui::gpui::AsyncApp;
 
@@ -23,9 +28,28 @@ use buddy_ui::gpui::AsyncApp;
 pub async fn run(cx: &mut AsyncApp) -> bool {
     let windows = run_windows(cx).await;
     let behavior = run_behaviors(cx).await;
-    let ok = windows && behavior;
+    let levels = behavior && t50_level::run(cx).await;
+    let positioning = levels && t51_positioning::run(cx).await;
+    let ok = windows && behavior && levels && positioning;
     println!(
-        "{} S07-01/S07-02/S07-03/S07-04 shell 自测",
+        "{} S07-01/S07-02/S07-03/S07-04/S07-05/S07-06 shell 自测",
+        if ok { "PASS" } else { "FAIL" }
+    );
+    ok
+}
+
+pub async fn run_levels(cx: &mut AsyncApp) -> bool {
+    let behavior = run_behaviors(cx).await;
+    let ok = behavior && t50_level::run(cx).await;
+    println!("{} S07-05 level 自测", if ok { "PASS" } else { "FAIL" });
+    ok
+}
+
+pub async fn run_positioning(cx: &mut AsyncApp) -> bool {
+    let behavior = run_behaviors(cx).await;
+    let ok = behavior && t51_positioning::run(cx).await;
+    println!(
+        "{} S07-06 positioning 自测",
         if ok { "PASS" } else { "FAIL" }
     );
     ok

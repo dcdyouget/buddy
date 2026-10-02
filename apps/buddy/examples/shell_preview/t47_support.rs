@@ -1,6 +1,6 @@
 //! T47 的窗口、系统输入、录制和 engine 沙盒辅助函数。
 
-use super::super::{fixture, input, os_input};
+use super::super::{input, os_input};
 use buddy_ui::chat::page_state::Page;
 use buddy_ui::chat_bridge::spawn_engine;
 use buddy_ui::gpui::{
