@@ -1,6 +1,6 @@
 # S07-04 Esc / 点击外部关闭（不断流）
 
-> 状态: `doing`
+> 状态: `done`
 > Phase: 07
 > 依赖: S07-02
 > 阻塞: —
@@ -26,9 +26,9 @@
 
 ## 验收标准
 
-- [ ] 真实外部点击 / Esc / 弹窗焦点变化，慢流式隐藏重显内容和终态完整。
-- [ ] 误取消生成和错误 Esc 优先级有独立拦截。
-- [ ] 回归、有效拦截、本地实际渲染验收和提交门禁有记录；临时诊断还原。
+- [x] 真实外部点击 / Esc / 弹窗焦点变化，慢流式隐藏重显内容和终态完整。
+- [x] 误取消生成和错误 Esc 优先级有独立拦截。
+- [x] 回归、有效拦截、本地实际渲染验收和提交门禁有记录；临时诊断还原。
 
 ## 证据
 
@@ -45,7 +45,7 @@
 | 2026-10-02 锁屏记录（历史） | `NO_PROXY=127.0.0.1,localhost cargo run -q -p buddy-app --example shell_preview -- --selftest-behavior`：rc=1；T47 的锁屏预检在任何系统键鼠投递前停止，因此 T48/T49 未执行。CGSSessionScreenIsLocked=1、前台 loginwindow，不能把聚焦失败当作本项有效拦截。临时原生诊断已还原；该记录不代表 2026-10-03 已解锁桌面结果。 |
 | 有效拦截边界 | 原整轮首轮结果为 24/25、rc=1，唯一 `hotkey-save-rollback` 因变异编译失败不计有效；修正为 `Ok::<(), String>(())` 后单项基线 PASS 且真实行为 FAIL、rc=0，补足独立有效证据，最终 25/25。两轮日志分别为 `/tmp/behavior-interception.log`、`/tmp/behavior-rollback-interception.log`；不将首轮整轮 rc=1 改写为整轮 rc=0。每项源码均在 finally 后还原。2026-10-03 解锁后窗口整轮也完成 23/23 有效拦截，见下行。 |
 | 2026-10-03 窗口拦截 | `python3 scripts/shell/verify_window.py > /tmp/window-interception-current.log 2>&1`：23/23，脚本 rc=0；native-focus 在解锁桌面实际触发 FAIL，补齐上轮锁屏时 22/23 的漏检。该脚本验证 S07-01/02，不能替代本项行为链路。 |
-| 上轮提交门禁 | 暂存后按代理环境运行 `scripts/gate.sh > /tmp/gate.log 2>&1`：rc=0，输出 `gate: 全部通过`（含 workspace / v1 编译）。未 push；本次提交保存待验实现，不填完成记录。 |
+| 2026-10-03 提交门禁 | 暂存后按代理环境运行 `scripts/gate.sh > /tmp/gate.log 2>&1`：rc=0，输出 `gate: 全部通过`（含 workspace / v1 编译）。实现提交 `2ddf6d6`，仅本地提交，未 push。 |
 
 ## 决策记录
 
@@ -61,8 +61,8 @@
 
 ## 完成记录
 
-- 日期：
-- commit：
+- 日期：2026-10-03
+- commit：`2ddf6d6`（本轮修复与系统验收；基础实现 `80f6660`）
 - 设计文档处置：Global Interactions 中 Esc / 外点 / 热键与选区段落已部分退役，保留 S07-06 定位；已登记 design-deletions.md 的“已部分删减的文档”。
 
 ## 备注
