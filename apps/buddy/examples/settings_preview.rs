@@ -44,6 +44,8 @@ mod fixture;
 mod input;
 #[path = "settings_preview/model_test.rs"]
 mod model_test;
+#[path = "settings_preview/preferences_test.rs"]
+mod preferences_test;
 #[path = "settings_preview/provider_test.rs"]
 mod provider_test;
 #[path = "settings_preview/selftest.rs"]
@@ -56,7 +58,12 @@ fn main() {
     let self_test_controls = args.iter().any(|arg| arg == "--selftest-controls");
     let self_test_providers = args.iter().any(|arg| arg == "--selftest-providers");
     let self_test_models = args.iter().any(|arg| arg == "--selftest-models");
-    let any_self_test = self_test || self_test_controls || self_test_providers || self_test_models;
+    let self_test_preferences = args.iter().any(|arg| arg == "--selftest-preferences");
+    let any_self_test = self_test
+        || self_test_controls
+        || self_test_providers
+        || self_test_models
+        || self_test_preferences;
     let provider = args.iter().any(|arg| arg == "--provider");
     let models = args.iter().any(|arg| arg == "--models");
     let controls = args.iter().any(|arg| arg == "--controls");
@@ -87,6 +94,14 @@ fn main() {
             if self_test_models {
                 cx.spawn(async move |cx: &mut AsyncApp| {
                     let ok = model_test::run(cx).await;
+                    std::process::exit(if ok { 0 } else { 1 });
+                })
+                .detach();
+                return;
+            }
+            if self_test_preferences {
+                cx.spawn(async move |cx: &mut AsyncApp| {
+                    let ok = preferences_test::run(cx).await;
                     std::process::exit(if ok { 0 } else { 1 });
                 })
                 .detach();

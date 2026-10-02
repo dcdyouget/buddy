@@ -115,7 +115,7 @@ Buddy is a cross-platform (macOS / Windows) AI chat tool. Press a global hotkey 
 | `docs/evidence/v1-baseline/` | **v1 基线**：页面×状态目检清单、令牌实测值、性能、长会话样本（S01-06 产出；不含截图，视觉验收由用户对照运行中的 v1 目检） | 做验收时 |
 | `docs/design/overview.md` | Architecture overview & key decisions | When needing context |
 | `docs/design/pages-and-states.md` | 7 page specs + state machine | When building pages |
-| `docs/design/component-mapping.md` | 未实现的设置子项 / 窗口外壳映射（聊天与设置骨架已退役） | 做 Phase 06 / 07 时 |
+| `docs/design/component-mapping.md` | 未实现的窗口外壳映射（聊天与设置组件已部分退役） | 做 Phase 07 时 |
 | `docs/design/rust-architecture.md` | Rust module layout & responsibilities | When writing Rust |
 | `docs/release-workflow.md` | macOS ARM64 / Windows release, environment checks, OSS updater flow | When implementing or executing releases |
 | `docs/CONVENTIONS.md` | Coding rules for ALL agents | **Always** — read once, follow always |

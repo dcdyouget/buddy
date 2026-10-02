@@ -2,11 +2,18 @@
 
 use super::*;
 
-fn model_focus_state(handle: WindowHandle<PageRouter>, cx: &mut AsyncApp) -> Option<bool> {
+fn model_focus_state(handle: WindowHandle<PageRouter>, cx: &mut AsyncApp) -> Option<[bool; 3]> {
     handle
         .read_with(cx, |router, app| {
             let view = router.settings_view().read(app);
-            !view.model_list().read(app).focus_order(app).is_empty()
+            [
+                !view.model_list().read(app).focus_order(app).is_empty(),
+                !view.theme_control().read(app).focus_controls().is_empty(),
+                view.hotkey_recorder()
+                    .read(app)
+                    .focus_control(app)
+                    .is_some(),
+            ]
         })
         .ok()
 }
@@ -46,7 +53,7 @@ pub(super) async fn run(handle: WindowHandle<PageRouter>, cx: &mut AsyncApp) -> 
         println!("T40: 打开面板 false");
         return false;
     };
-    let model_focus_hidden = model_focus_state(handle, cx) == Some(false);
+    let model_focus_hidden = model_focus_state(handle, cx) == Some([false; 3]);
     let initial = focused_control(handle, &panel, cx).as_deref() == Some("back");
     input::press(handle, "tab", cx).await;
     let first_preset = focused_control(handle, &panel, cx).as_deref() == Some("preset-deepseek");
@@ -83,7 +90,7 @@ pub(super) async fn run(handle: WindowHandle<PageRouter>, cx: &mut AsyncApp) -> 
             !router.settings_view().read(app).provider_open()
         })
         .unwrap_or(false);
-    let model_focus_restored = model_focus_state(handle, cx) == Some(true);
+    let model_focus_restored = model_focus_state(handle, cx) == Some([true; 3]);
     // Start with the add entry outside the viewport, so the following check
     // independently proves focus navigation scrolls it back into view.
     input::wheel(handle, 10_000., cx).await;

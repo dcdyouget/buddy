@@ -25,6 +25,7 @@ use super::page_state::{EmptySend, Page, PageState, classify_empty_send, has_val
 use super::session::{Conversation, HistoryLoader};
 use super::state::{HISTORY_PAGE_SIZE, user_message_with_images};
 use crate::chat_bridge::{self, spawn_engine};
+use crate::theme_system::BuddyTheme;
 use buddy_engine::chat::ChatEngine;
 use buddy_engine::models::{AppConfig, ImageAttachment, Message};
 use gpui::{
@@ -161,6 +162,7 @@ impl PageRouter {
             history,
             offset,
         } = loaded;
+        crate::theme_system::set_appearance(config.theme.clone().into(), cx);
         let conversation = cx.new(|_| {
             Conversation::with_history_page(history, offset, history_loader(engine.clone()))
         });
@@ -182,6 +184,12 @@ impl PageRouter {
                     }
                     crate::settings::SettingsEvent::EditModel(edit) => {
                         this.save_model_edit(edit.clone(), cx)
+                    }
+                    crate::settings::SettingsEvent::HotkeyChanged(value) => {
+                        this.save_preference(preferences::Preference::Hotkey(value.clone()), cx)
+                    }
+                    crate::settings::SettingsEvent::ThemeChanged(value) => {
+                        this.save_preference(preferences::Preference::Theme(value.clone()), cx)
                     }
                 },
             ),
@@ -286,6 +294,9 @@ impl PageRouter {
     }
 
     fn publish_config(&mut self, config: AppConfig, cx: &mut Context<Self>) {
+        if cx.buddy_theme().appearance != config.theme.clone().into() {
+            crate::theme_system::set_appearance(config.theme.clone().into(), cx);
+        }
         self.config = config;
         self.settings
             .update(cx, |view, cx| view.set_config(self.config.clone(), cx));
@@ -522,6 +533,9 @@ impl PageRouter {
 mod config_save;
 #[path = "router_settings.rs"]
 mod settings_save;
+
+#[path = "router_preferences.rs"]
+mod preferences;
 
 impl Render for PageRouter {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

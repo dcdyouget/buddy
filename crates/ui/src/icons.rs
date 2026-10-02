@@ -52,6 +52,10 @@ icons! {
     ChevronDown => "chevron-down",
     /// 设置（lucide `settings`）
     Settings => "settings",
+    /// 浅色外观（lucide `sun`）
+    Sun => "sun",
+    /// 深色外观（lucide `moon`）
+    Moon => "moon",
     /// 模型（lucide `bot`）
     Bot => "bot",
     /// 发送（lucide `send`）

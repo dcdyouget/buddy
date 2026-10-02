@@ -53,6 +53,10 @@ pub(crate) async fn run(
         println!("FAIL S06-03 T42 context focus missing");
         return false;
     };
+    // S06-05/06 在模型前新增两个外观按钮和录制入口。
+    for _ in 0..3 {
+        input::press(handle, "tab", cx).await;
+    }
     input::press(handle, "tab", cx).await;
     check(
         &mut ok,

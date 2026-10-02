@@ -38,8 +38,8 @@
 | 设计文档 | 退役于 spec | why 迁移要求 |
 |---------|------------|-------------|
 | `docs/design/rust-architecture.md` | S02-*, S07-01 | 模块职责边界的理由需迁移到 crate 级文档注释 |
-| `docs/design/pages-and-states.md`（已部分退役，剩余：SettingsPage S06-*、Global Interactions S07-*） | S06-*, S07-*, S10-03 | 剩余段落随各 spec 实现后删除 |
-| `docs/design/component-mapping.md`（已部分退役，剩余：设置 S06-*、窗口容器 S07-*） | S06-*, S07-* | 剩余段落随实现删除 |
+| `docs/design/pages-and-states.md`（已部分退役，剩余：系统菜单栏设置入口与 Global Interactions S07-*） | S07-*, S10-03 | 剩余段落随各 spec 实现后删除 |
+| `docs/design/component-mapping.md`（已部分退役，剩余：窗口容器 S07-*） | S07-* | 剩余段落随实现删除 |
 | `docs/design/overview.md` | 最后 | 架构约束需先迁移到 `AGENTS.md` 后再删 |
 
 > 上表中不存在的路径已被移除（原列有 `docs/design/colors_and_type.css` 与 `docs/design/prototypes/`）。
@@ -62,6 +62,7 @@
 
 | 日期 | 文件 / 段落 | 由哪些 spec 替代 | why 迁移去向 |
 |------|------------|-----------------|-------------|
+| 2026-10-02 | `docs/design/component-mapping.md`（**部分**：Settings Composition、ThemeSetting / HotkeySetting / HotkeyRecorder / KbdRow 角色与文件映射）；`docs/design/pages-and-states.md`（**部分**：剩余设置子项、config store 保存说明与 `html.dark` 主题切换；保留系统菜单栏入口与窗口交互） | S06-05（`crates/ui/src/settings/hotkey.rs` / `hotkey_state.rs`）、S06-06（`crates/ui/src/settings/theme_control.rs`、`crates/ui/src/chat/router_preferences.rs`） | 热键平台展示、KeyUp 提交、修饰键快照及 Phase 07 注册边界 → S06-05 决策记录；仅浅 / 深、先写盘后发布与新 Router 从配置恢复 → S06-06 决策记录；共享配置队列在前项结束后读成功基底 → `router_preferences.rs` 注释。原生控件保存禁用 / 就地错误 / 聚焦提示差异 → 对应 spec 决策记录 |
 | 2026-09-29 | `docs/design/pages-and-states.md`（**部分**：State vs Component、EmptyPage、NoApiKeyPage、State Flow、Known Implementation Notes、模型下拉、ChatPage 审批 / 提问；保留 SettingsPage、Global Interactions） | S05-13（提问与审批 `ask_card.rs` / `approval_panel.rs`）、S05-15（模型下拉 `model_menu.rs`）、S05-16（空态 / 无 Key 页）、S05-18（状态机 `crates/ui/src/chat/page_state.rs`、路由器 `router.rs`） | 设置叠加层不卸载底层页、添加 Provider 中间态不得打断设置流程、窗口仅在离开紧凑页时展开一次（硬约束 6 的准确含义）→ `page_state.rs` 模块文档与 `expands_window`；模型菜单独立于窗口绘制、紧凑窗口不扩高 → `model_menu.rs` 模块文档；审批的 Esc 拒绝 / 无论结果都关闭浮层 / 「本次都允许」语义 → `approval_panel.rs` 模块文档，提问的配对与回答载荷 → `ask_card.rs` 模块文档；启动总是空态 → 同文件与 spec 决策记录；`add-provider` 遗留类型值不迁移。**文档与代码不符**：EmptyPage 段写的紧凑窗口 460×78 已过时（v1 实为 560×60，`tauri.conf.json` / `geometry.rs`）；「`setPage` 会在 compact → content 时主动 resize，与硬约束冲突」实为硬约束的准确含义，非冲突 |
 
 | 2026-10-01 | `docs/design/component-mapping.md`（**部分**：聊天 / 空态 / 无 Key 页面组合、聊天组件角色与文件树；保留设置与窗口外壳） | S05-01 至 S05-18；S05-08 声明的 Phase 05 部分退役 | 虚拟列表与行拆分 → `transcript.rs` / `rows.rs` 模块文档；共用输入草稿 → S05-07 决策记录；生图 / 搜索专用分派 → S05-11 / S05-12 决策记录；审批 / 提问与状态页组合 → S05-13 / S05-18 决策记录。原文「毛玻璃容器」已过时，剩余窗口容器按 `AGENTS.md` 实色决策。 |

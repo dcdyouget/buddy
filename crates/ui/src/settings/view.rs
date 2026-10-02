@@ -1,4 +1,4 @@
-//! SettingsPage 编排与布局。子项的编辑交互由对应 S06 spec 接入，未实现部分只读显示。
+//! SettingsPage 编排与布局；外观、热键、Provider 和模型由各子实体承接。
 //!
 //! 设置层始终复用同一个实体；退出绘制不再注册鼠标 / 键盘处理，避免透明层吞掉底层点击。
 
@@ -29,6 +29,10 @@ pub enum SettingsEvent {
     AddProvider(ProviderSubmission),
     /// 已保存模型的编辑交给 Router 串行保存。
     EditModel(crate::settings::model_config::ModelEdit),
+    /// 热键仅保存配置，系统注册由 Phase 07 外壳处理。
+    HotkeyChanged(String),
+    /// 保存成功后发布浅 / 深主题。
+    ThemeChanged(Theme),
 }
 
 /// 作为原页面上的全尺寸覆盖层，保留底层输入草稿和生成任务。
@@ -43,6 +47,8 @@ pub struct SettingsView {
     add_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     provider: gpui::Entity<AddProviderPanel>,
     model_list: gpui::Entity<ModelListView>,
+    hotkey: gpui::Entity<super::hotkey::HotkeyRecorder>,
+    theme: gpui::Entity<super::theme_control::ThemeControl>,
     provider_motion: SlideMotion,
     _subscriptions: Vec<Subscription>,
 }
@@ -60,6 +66,8 @@ impl SettingsView {
     pub fn new(config: AppConfig, engine: Arc<ChatEngine>, cx: &mut Context<Self>) -> Self {
         let provider = cx.new(|cx| AddProviderPanel::new(engine, cx));
         let model_list = cx.new(|cx| ModelListView::new(config.clone(), cx));
+        let hotkey = cx.new(|cx| super::hotkey::HotkeyRecorder::new(config.hotkey.clone(), cx));
+        let theme = cx.new(|cx| super::theme_control::ThemeControl::new(config.theme.clone(), cx));
         let subscriptions = vec![
             cx.subscribe(
                 &provider,
@@ -81,6 +89,22 @@ impl SettingsView {
                     }
                 },
             ),
+            cx.subscribe(
+                &hotkey,
+                |this, _, event: &super::hotkey::HotkeyChanged, cx| {
+                    if this.active && !this.provider_motion.interactive() {
+                        cx.emit(SettingsEvent::HotkeyChanged(event.0.clone()));
+                    }
+                },
+            ),
+            cx.subscribe(
+                &theme,
+                |this, _, event: &super::theme_control::ThemeChanged, cx| {
+                    if this.active && !this.provider_motion.interactive() {
+                        cx.emit(SettingsEvent::ThemeChanged(event.0.clone()));
+                    }
+                },
+            ),
         ];
         Self {
             config,
@@ -93,6 +117,8 @@ impl SettingsView {
             add_bounds: Rc::new(Cell::new(None)),
             provider,
             model_list,
+            hotkey,
+            theme,
             provider_motion: SlideMotion::default(),
             _subscriptions: subscriptions,
         }
@@ -103,6 +129,7 @@ impl SettingsView {
         self.config = config;
         self.model_list
             .update(cx, |models, cx| models.set_config(self.config.clone(), cx));
+        self.sync_preferences(cx);
         cx.notify();
     }
 
@@ -115,6 +142,7 @@ impl SettingsView {
         }
         self.model_list
             .update(cx, |models, cx| models.set_active(active, cx));
+        self.sync_preference_active(cx);
         cx.notify();
     }
 
@@ -169,6 +197,7 @@ impl SettingsView {
         self.model_list
             .update(cx, |models, cx| models.set_active(false, cx));
         self.provider_motion.set_shown(true);
+        self.sync_preference_active(cx);
         cx.notify();
     }
 
@@ -179,6 +208,7 @@ impl SettingsView {
         self.model_list
             .update(cx, |models, cx| models.set_active(self.active, cx));
         self.focus_pending = self.active;
+        self.sync_preference_active(cx);
         cx.notify();
     }
 
@@ -201,6 +231,10 @@ impl SettingsView {
     pub(super) fn scroll_to_model_control(&self, id: &str, cx: &App) {
         let target = if id == "add" {
             self.add_bounds.get()
+        } else if id == "hotkey" {
+            self.hotkey.read(cx).button_bounds_for_test()
+        } else if id.starts_with("theme-") {
+            self.theme.read(cx).control_bounds(id)
         } else {
             self.model_list.read(cx).control_bounds(id)
         };
@@ -228,5 +262,7 @@ impl SettingsView {
 
 #[path = "view/models.rs"]
 mod models;
+#[path = "view/preferences.rs"]
+mod preferences;
 #[path = "view/render.rs"]
 mod render;

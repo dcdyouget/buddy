@@ -7,10 +7,6 @@ impl Render for SettingsView {
         }
         let c = cx.buddy_theme().colors;
         let interactive = self.active && !self.provider_motion.interactive();
-        let theme_name = match self.config.theme {
-            Theme::Light => "浅色",
-            Theme::Dark => "深色",
-        };
         let header = div()
             .flex_none()
             .h(px(m::SPACE_12 + m::SPACE_2))
@@ -66,19 +62,13 @@ impl Render for SettingsView {
                     .child(crate::settings::controls::section(
                         "外观",
                         "选择窗口的显示模式",
-                        div()
-                            .text_color(c.text_muted)
-                            .text_size(px(m::FONT_SIZE_XS))
-                            .child(theme_name),
+                        self.theme.clone(),
                         cx,
                     ))
                     .child(crate::settings::controls::section(
                         "呼出快捷键",
                         "在任意应用中快速打开 Buddy",
-                        div()
-                            .text_color(c.text_muted)
-                            .text_size(px(m::FONT_SIZE_XS))
-                            .child(self.config.hotkey.clone()),
+                        self.hotkey.clone(),
                         cx,
                     ))
                     .child(models),
@@ -119,10 +109,17 @@ impl Render for SettingsView {
             .when(interactive, |d| {
                 d.occlude().capture_key_down(cx.listener(
                     |this, event: &KeyDownEvent, window, cx| {
+                        if this.hotkey.read(cx).recording() {
+                            return;
+                        }
                         match event.keystroke.key.as_str() {
                             "tab" => {
-                                // 与可见页面顺序一致：返回、模型控件、列表底部的添加入口。
+                                // 与可见页面顺序一致；录制期间 Tab 本身是候选主键。
                                 let mut order = vec![("back".to_string(), this.back.clone())];
+                                order.extend(this.theme.read(cx).focus_controls());
+                                if let Some(focus) = this.hotkey.read(cx).focus_control(cx) {
+                                    order.push(("hotkey".to_string(), focus));
+                                }
                                 order.extend(this.model_list.read(cx).focus_order(cx).into_iter());
                                 order.push(("add".to_string(), this.add.clone()));
                                 let current =
