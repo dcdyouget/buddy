@@ -1,6 +1,6 @@
 # S07-01 窗口创建工厂与配置
 
-> 状态: `doing`
+> 状态: `done`
 > Phase: 07
 > 依赖: S01-01
 > 阻塞: —
@@ -60,9 +60,9 @@
 
 ## 完成记录
 
-- 日期：
-- commit：
-- 设计文档处置：
+- 日期：2026-10-02
+- commit：`4a511e0`
+- 设计文档处置：删除 `component-mapping.md` 最后剩余窗口容器并登记整份退役；删除 `rust-architecture.md` 的 Window Configuration 段并登记部分删减，已同步 Document Index。
 
 ## 备注
 
