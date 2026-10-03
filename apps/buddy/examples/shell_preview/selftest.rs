@@ -1,6 +1,8 @@
 //! Phase 07 窗口壳真实输入验收模块。
 
 use super::fixture;
+#[path = "capture.rs"]
+mod capture;
 use super::{external_target, hotkey_owner};
 use super::{fullscreen_target, level_native};
 #[path = "input.rs"]

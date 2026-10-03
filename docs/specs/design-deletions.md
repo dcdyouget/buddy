@@ -74,6 +74,8 @@
 
 | 2026-10-02 | `docs/design/component-mapping.md` 的 ModelList / ModelRow / StatusDot 组合、角色和文件树；`docs/design/pages-and-states.md` 剩余模型列表句（**部分**，主题 / 快捷键 / 窗口段落保留） | S06-03 | 完整作用域 ID、默认回退、精确上下文值与协议能力限制 → `model_config.rs` 及 S06-03 决策记录；串行写入成功基底与菜单即时反馈隔离 → `router_config_save.rs` 模块文档与 S06-03 决策记录；失败回退受控下拉与焦点保持 → `model_list/`。当前 v1 无删除入口，未接入的删除 store 方法不迁移。 |
 
+| 2026-10-03 | `docs/design/rust-architecture.md` SavedWindowPositions / 定位职责；`docs/design/pages-and-states.md` 窗口定位段（部分，其余生命周期 / 托盘保留） | S07-06 | 焦点屏与鼠标屏来源、呼出按完整 frame、resize 按 work area、底边锚定及运行期 UUID key → S07-06 决策记录与 `crates/ui/src/shell/positioning.rs` / `positioning_controller.rs`。 |
+
 ## 退役记录
 
 > 每次删除后追加。**必须同时更新 `AGENTS.md` 的 Document Index 表。**

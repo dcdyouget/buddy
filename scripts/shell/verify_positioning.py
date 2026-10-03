@@ -31,7 +31,7 @@ CASES = [
     Case("save-debounce", CONTROLLER, "Duration::from_millis(160)", "Duration::from_millis(1)", GUI, FAIL),
     Case("save-observer", CONTROLLER, "|shell, window, _| save_current(shell, window)", "|_, _, _| {}", GUI, FAIL),
     Case("show-restore", "crates/ui/src/shell/runtime.rs", "positioning_controller::restore(handle, true, cx).await?;", "let _ = handle;", GUI, FAIL),
-    Case("page-geometry", "crates/ui/src/shell/mod.rs", "positioning_controller::resize(shell, target, window, cx);", "let _ = target;", GUI, FAIL),
+    Case("page-geometry", CONTROLLER, "let origin = positioning::bottom_anchored(snapshot.rect, size, &snapshot.screen);", "let origin = snapshot.rect.origin;", GUI, FAIL),
 ]
 
 
@@ -70,7 +70,7 @@ def main() -> int:
             rc, output = run(case.command, logs / f"{case.name}.log")
         finally:
             path.write_bytes(original)
-        intercepted = rc not in (0, 124) and case.fail_marker in output and "error[E" not in output and "could not compile" not in output and not any(marker in output for marker in ("权限预检未通过", "会话已锁定", "未获得 CGEventPost 权限"))
+        intercepted = (case.command != GUI or "T51：" in output) and rc not in (0, 124) and case.fail_marker in output and "error[E" not in output and "could not compile" not in output and not any(marker in output for marker in ("权限预检未通过", "会话已锁定", "未获得 CGEventPost 权限"))
         results.append(intercepted)
         print(f"{'PASS' if intercepted else 'FAIL'} {case.name}: rc={rc}; 源码已还原", flush=True)
         if not intercepted:

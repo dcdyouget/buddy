@@ -167,6 +167,9 @@ pub(crate) async fn run(cx: &mut AsyncApp) -> bool {
     let Some(before) = probe(handle, cx) else {
         return false;
     };
+    input::draw(handle, cx).await;
+    let compact_capture =
+        super::capture::checkpoint("BUDDY_SHELL_T51_CAPTURE_DIR", "compact-restored", cx).await;
     router.update(cx, |router, cx| router.open_settings(cx));
     let expanded = wait_size(
         handle,
@@ -177,6 +180,9 @@ pub(crate) async fn run(cx: &mut AsyncApp) -> bool {
         cx,
     )
     .await;
+    input::draw(handle, cx).await;
+    let expanded_capture =
+        super::capture::checkpoint("BUDDY_SHELL_T51_CAPTURE_DIR", "expanded", cx).await;
     let after = probe(handle, cx);
     let anchored = after.as_ref().is_some_and(|s| {
         close(
@@ -235,7 +241,9 @@ pub(crate) async fn run(cx: &mut AsyncApp) -> bool {
     let same_router = handle
         .read_with(cx, |shell, _| shell.router() == router)
         .unwrap_or(false);
-    let ok = compact
+    let ok = compact_capture
+        && expanded_capture
+        && compact
         && moved
         && first_saved
         && first_move

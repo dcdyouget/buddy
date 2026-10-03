@@ -1,7 +1,7 @@
 # Rust Backend Architecture
 
 > 实现入口：`src-tauri/src/lib.rs`
-> 已实现并退役：S07-01 主窗口配置、S07-03 热键与 S07-04 隐藏（理由见对应 spec）；未实现：下列原生生命周期、托盘与定位职责，由 Phase 07 后续项承接。
+> 已实现并退役：S07-01 主窗口配置、S07-03 热键、S07-04 隐藏与 S07-06 定位（理由见对应 spec）；未实现：下列原生生命周期、托盘职责，由 Phase 07 后续项承接。
 
 ## Module Map
 
@@ -32,8 +32,7 @@ lib.rs
 ├── storage.rs
 ├── tray.rs
 ├── window/
-│   ├── events.rs
-│   └── positioning.rs
+│   └── events.rs
 └── platform/
     ├── macos.rs
     └── windows.rs
@@ -48,7 +47,7 @@ lib.rs
 - `tools/`：工具定义、注册、执行策略；内置 `websearch` 聚合 Bing 中国与 DuckDuckGo 并读取排名靠前的网页；`generate_image` 仅为已开启生图能力的 OpenAI-compatible 模型注册，通用 Provider 使用 `/images/generations`，MiniMax 使用原生 `/image_generation` 与 `image-01`。工具图片与回传模型的文本结果分离。
 - `mcp/`：MCP 客户端相关模块；配置结构已经接入 `AppConfig`，但对话注册表尚未注入 MCP tools。
 - `storage.rs`：配置文件与每 100 条一个分块的消息存储；追加写使用进程内互斥锁。
-- `tray.rs`、`window/`、`platform/`：托盘菜单、按光标所在屏幕定位、平台窗口效果。托盘“设置…”通过事件打开前端设置页，“开机自启”调用 autostart 插件并同步配置，“退出”结束应用。
+- `tray.rs`、`window/`、`platform/`：托盘菜单与平台窗口效果。托盘“设置…”通过事件打开前端设置页，“开机自启”调用 autostart 插件并同步配置，“退出”结束应用。
 
 ## Managed State
 
@@ -57,7 +56,6 @@ lib.rs
 | `CancelState` | 当前生成的 `watch::Sender<bool>` |
 | `ApprovalState` | 待审批 write tool + 本轮全部允许标记 |
 | `QuestionState` | `ask_user` 等待回答的 oneshot |
-| `SavedWindowPositions` | 窗口位置记录 |
 
 ## Registered Commands
 
