@@ -3,7 +3,11 @@ use super::{input, os_input, os_pointer};
 use buddy_engine::models::MessageRole;
 use buddy_ui::chat::state::{ChatState, user_message};
 use buddy_ui::gpui::{AppContext, AsyncApp, WindowHandle};
-use buddy_ui::shell::{self, AppShell, positioning::Rect, positioning_native};
+use buddy_ui::shell::{
+    self, AppShell,
+    positioning::{Point, Rect},
+    positioning_native,
+};
 
 #[path = "t52_native.rs"]
 mod native;
@@ -25,6 +29,24 @@ fn same(a: Rect, b: Rect) -> bool {
         && (a.origin.y - b.origin.y).abs() < 1.0
         && (a.size.width - b.size.width).abs() < 1.0
         && (a.size.height - b.size.height).abs() < 1.0
+}
+
+// Keep each OS-input fixture clear of desktop-center system prompts, regardless
+// of the dimensions left by an earlier test. Product positioning is unchanged.
+fn place_for_os_input(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> bool {
+    let prepared = cx
+        .update_window(handle.into(), |_, window, _| {
+            positioning_native::prepare(window)
+        })
+        .ok()
+        .and_then(Result::ok);
+    let placed = prepared
+        .and_then(|position| position.move_to(Point { x: 40.0, y: 100.0 }).ok())
+        .is_some();
+    if !placed {
+        println!("FAIL T52：无法将测试主窗移至受控输入区域");
+    }
+    placed
 }
 
 async fn drag(
@@ -99,6 +121,9 @@ async fn run_inner(cx: &mut AsyncApp) -> bool {
         return false;
     }
     if !native::wait_native_input_ready("初始 OS 输入", handle, cx).await {
+        return false;
+    }
+    if !place_for_os_input(handle, cx) {
         return false;
     }
     router.update(cx, |r, cx| r.open_settings(cx));
@@ -203,7 +228,6 @@ async fn run_inner(cx: &mut AsyncApp) -> bool {
     transcript.update(cx, |t, cx| t.scroll_to_bottom(cx));
     input::settle(handle, cx).await;
     let scroll_before = transcript.read_with(cx, |t, _| t.list_state().logical_scroll_top());
-    native::log_native_input_state("scroll 注入前", handle, cx);
     let scroll_rect = rect(handle, cx).unwrap_or(current);
     let sent = cx
         .background_spawn(async move {

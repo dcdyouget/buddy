@@ -1,9 +1,9 @@
 # S07-09 tray 图标与菜单
 
-> 状态: `blocked`
+> 状态: `doing`
 > Phase: 07
 > 依赖: S00-03
-> 阻塞: macOS 会话锁定；真实菜单栏图标与 OS 点击验收待解锁
+> 阻塞: —（桌面已解锁，补真实 OS 菜单链路验收）
 > 退役设计文档: docs/design/pages-and-states.md 系统托盘入口；docs/design/rust-architecture.md tray 职责
 
 ## 目标

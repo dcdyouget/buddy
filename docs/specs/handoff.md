@@ -16,7 +16,7 @@
 ### 当前验收边界（2026-10-04）
 
 - 桌面已解锁，CGEventPost 权限 true；GUI 串行，原地变异期间仍冻结源码和其他 cargo。
-- S07-07 扩展 T52 曾全 PASS，随后滚轮与设置返回出现失败；两项修正变异未进入执行，不计通过。输入前原生 visible/key/appactive 诊断用于定位，见本项 spec。
+- S07-07 后续滚轮与返回失败已定位为 UserNotificationCenter 权限弹窗遮挡；仅移专用测试窗口后完整 T52 PASS，未操作系统权限弹窗。两项修正变异结果见本项 spec。
 - S07-08 实际帧在约 20ms 后停滞至约 500ms；焦点正常、几何读回不阻塞。144Hz/60Hz 虚拟显示链路只是待查假设，不能当根因或放宽 200ms 断言。
 - S07-12 解锁后的真实产品自检、native-shadow 1/1 有效拦截、恢复复测均已通过；当前提交验证见该项 spec。
 - S07-09 / S07-13 仍需真实托盘菜单点击；已有 tray_preview 仅打印动作，不能代替 Router / 自启链路验收。专用 LaunchAgent 必须由外部 supervisor 清理，不依赖 AppKit 退出后 main 返回。
@@ -181,7 +181,7 @@ S01-06 剩余范围（均无需屏幕权限）：页面×状态清单（供目�
 | 31 | S07-04 | Esc 优先级、真实外部点击与隐藏不断流 | 同一自测的 T48：慢流中 Esc / 点击专用 child；模型菜单、审批、添加 Provider、热键录制时按 Esc；普通设置页按 Esc。手动模式 Cmd+Q 退出 | 外点和普通 Esc 隐藏并保留 Router / 慢流到终态；菜单关闭、审批拒绝、Provider 返回、录制取消优先消费 Esc 且主窗保持可见。T48 与对应 GUI 变异已有效验证，隐藏期间完整比对 0～79 全部 token 和终态；偏离 v1：按硬约束 7 补真实外点隐藏，避免用原生失焦代替。 |
 | 32 | S07-05 | 普通层级与真实全屏 Space | 解锁后 `shell_preview --selftest-level`；再 `python3 scripts/shell/verify_levels.py`。可设 `BUDDY_SHELL_T50_CAPTURE_DIR=/tmp/buddy-t50-capture`，每个 `.ready` 对应阶段读取真实屏幕后写同名 `.continue` | T47–T49 先建立唯一 runtime，T50 child 真正满屏 / 活跃 / 当前 Space；热键后 Buddy 在该 child 前，child 再激活覆盖 Buddy；退出全屏恢复普通 Space。已通过，读取三个阶段真实截图；5/5 层级有效拦截，最终焦点分支定向复测 3/3。偏离 v1：外部应用激活时 panel 降为 level=-1，原生聚焦或唤回恢复 0，同应用菜单保持 0。 |
 | 33 | S07-06 | 单屏定位、移动防抖、底边锚定 | 解锁后 `shell_preview --selftest-positioning`；再 `python3 scripts/shell/verify_positioning.py`，最后完整 `shell_preview --selftest`。GUI 自测和变异串行，变异期间全体源码 / cargo 冻结 | T51 真实移动后 160ms 保存最后位置；隐藏后故意移走原生窗口，热键恢复；页面展开固定底边和水平中心并裁剪工作区，普通切页保留用户尺寸。191 UI 单测与纯逻辑 9/9 有效拦截已通过；4 项 GUI 有效拦截及紧凑 / 展开实际渲染已通过。完整 shell 串联也在负坐标的第二块虚拟屏通过；物理多屏、混合 DPI、拔插无独立证据。 |
-| 34 | S07-07 | 真正拖动与选择隔离 | 解锁后 `shell_preview --selftest-drag`，再 `python3 scripts/shell/verify_drag.py`；Markdown 边界用 `python3 scripts/shell/verify_markdown_drag.py`。独占源码 / cargo，GUI 串行 | T52 同一主窗口 / Router：边缘、正文行尾、空 transcript、紧凑输入和设置边缘位移 45×35；字形选区 OS 复制精确，按钮、非空输入与滚动不移动窗口。2026-10-04 扩展 T52 曾通过，随后滚轮 / 返回出现失败；输入前原生焦点诊断正在定位，不计完成。Markdown 4/4、失活设置拖动隔离 1/1 有效拦截；新增 Markdown 传播隔离块无独立自动化证据。 |
+| 34 | S07-07 | 真正拖动与选择隔离 | 解锁后 `shell_preview --selftest-drag`，再 `python3 scripts/shell/verify_drag.py`；Markdown 边界用 `python3 scripts/shell/verify_markdown_drag.py`。独占源码 / cargo，GUI 串行 | T52 同一主窗口 / Router：边缘、正文行尾、空 transcript、紧凑输入和设置边缘位移 45×35；字形选区 OS 复制精确，按钮、非空输入与滚动不移动窗口。2026-10-04 滚轮 / 返回失败已定位为系统权限弹窗遮挡；移专用测试窗后完整 T52 PASS，真实选区 / 设置截图已读取。Markdown 4/4、失活设置拖动隔离 1/1 有效拦截；新增 Markdown 传播隔离块无独立自动化证据。 |
 | 35 | S07-08 | 入场实际帧与减弱动态 | 解锁后 `shell_preview --selftest-entrance`、`python3 scripts/shell/verify_entrance.py`；最后完整 `shell_preview --selftest` | T53 同一 runtime / Router 采样真实 render 帧，紧凑唤回播放，普通切页不重播，展开页静态；原生 bounds 不动。纯逻辑 6/6 有效拦截；T53 / 两项 GUI 拦截与系统减弱动态另一个状态尚无证据。v1 的 260ms DOM 清理保护在 GPUI 为 200ms 视觉结束即 settled，单独登记。 |
 | 36 | S07-09 | 系统托盘图标、点击与中文菜单 | `tray_preview` 只打印真实动作且不改登录项；`tray_preview --selftest` 检查原生菜单状态。生产入口装配 services；解锁后验收实际左键呼出、右键菜单、设置与退出 | v1 的设置… / 开机自启 / 分隔 / 退出；左键始终呼出并按鼠标屏定位。原生状态与映射 3/3 有效拦截；浅深图标及真实 OS 菜单点击尚待解锁。自检需显式析构 tray 后返回失败码，AppKit terminate 本身固定以 0 退出。 |
 | 37 | S07-10 | LaunchAgent 注册与配置失败恢复 | `autostart_probe`；`autostart_preferences_preview --selftest`；`python3 scripts/shell/verify_services.py`。全部使用唯一专用登录项，自测后检查无 BuddyS0710*.plist 残留 | 真实注册文件开启 / 关闭、ProgramArguments 路径读回；配置写盘失败前确认 OS 已开启，再读回恢复关闭；配置与其他字段保持。5/5 有效拦截，增强原生回滚后定向 2/2；不把 plist 存在当作已经完成真实注销登录启动。 |

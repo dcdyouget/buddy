@@ -178,7 +178,7 @@
 | S07-06 | 多显示器与窗口定位 | S07-01 | `done` | `phase-07/S07-06-positioning.md` |
 | S07-07 | 窗口拖动与选择隔离 | S07-02 | `doing` | `phase-07/S07-07-drag-selection.md` |
 | S07-08 | 入场动画与减弱动效 | S07-02 | `blocked` | `phase-07/S07-08-entrance-motion.md` |
-| S07-09 | tray 图标与菜单 | S00-03 | `blocked` | `phase-07/S07-09-tray.md` |
+| S07-09 | tray 图标与菜单 | S00-03 | `doing` | `phase-07/S07-09-tray.md` |
 | S07-10 | 开机自启 | S00-03 | `done` | `phase-07/S07-10-autostart.md` |
 | S07-11 | 单实例与生命周期（无窗口存活 / 休眠唤醒） | S07-01 | `blocked` | `phase-07/S07-11-lifecycle.md` |
 | S07-12 | 窗口行为自检模式（探测静默 no-op） | S07-02 | `done` | `phase-07/S07-12-behavior-selfcheck.md` |
@@ -395,3 +395,5 @@
 | 2026-10-04 | S07-12 | `blocked` → `doing` | 桌面解锁、原生窗口诊断独立执行；与 S07-07 并行状态，所有 GUI 仍串行。S07-08 帧停滞待定位，不以其它自检替代。 |
 
 | 2026-10-04 | S07-12 | `doing` → `done` | `1b388d8`；真实产品自检 T12-01～04 PASS，原生 shadow 变异 1/1 有效、恢复复测 PASS；210 单测、8 组预览及门禁 rc=0。复用同工厂已验浅深渲染，Windows 留 Phase 09。Phase 07 7→8，合计 71→72。 |
+
+| 2026-10-04 | S07-09 | `blocked` → `doing` | S07-12 完成后恢复真实托盘菜单验收；专用 supervisor / sandbox / LaunchAgent，OS 点击串行，禁止合成回调替代或影响用户自启项。 |

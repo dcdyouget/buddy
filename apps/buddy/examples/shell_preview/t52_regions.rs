@@ -35,26 +35,37 @@ pub(super) async fn run(
     let filled_input = input_sent && rect(handle, cx).is_some_and(|r| same(before, r));
     router.update(cx, |r, cx| r.open_settings(cx));
     input::settle(handle, cx).await;
+    if !super::place_for_os_input(handle, cx) {
+        return false;
+    }
+    input::settle(handle, cx).await;
     let settings_top = moved(handle, (300.0, 5.0), cx).await;
     let Some(bounds) = rect(handle, cx) else {
         return false;
     };
     let settings_right = moved(handle, (bounds.size.width - 5.0, 100.0), cx).await;
     // Back is an actual clickable control, so press/release without dragging.
-    native::log_native_input_state("back 注入前", handle, cx);
     if !native::wait_native_input_ready("back", handle, cx).await {
         return false;
     }
     let Some(before) = rect(handle, cx) else {
         return false;
     };
+    let settings_capture =
+        super::super::capture::checkpoint("BUDDY_SHELL_T52_CAPTURE_DIR", "settings", cx).await;
     let clicked = super::os_input::click_screen(before.origin.x + 28.0, before.origin.y + 28.0);
     input::settle(handle, cx).await;
     let back = clicked && !router.read_with(cx, |r, _| r.settings_present());
     native::log_native_input_state("back 点击后", handle, cx);
-    let ok = compact_edge && empty_input && filled_input && settings_top && settings_right && back;
+    let ok = compact_edge
+        && empty_input
+        && filled_input
+        && settings_top
+        && settings_right
+        && settings_capture
+        && back;
     println!(
-        "T52 regions compact_edge={compact_edge} empty_input={empty_input} filled_input={filled_input} settings_top={settings_top} settings_right={settings_right} back={back}"
+        "T52 regions compact_edge={compact_edge} empty_input={empty_input} filled_input={filled_input} settings_top={settings_top} settings_right={settings_right} settings_capture={settings_capture} back={back}"
     );
     ok
 }

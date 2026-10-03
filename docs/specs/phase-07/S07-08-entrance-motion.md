@@ -39,6 +39,8 @@
 
 - 真实平台帧栅栏重测仍失败（`/tmp/entrance-native-1004.log`）：visible/key/app_active/on_active_space 全 true，几何采样 27–57µs，但仅 6/15ms 与约 503ms 收到样本，第三次仍是早期 underlay，settled=false。强制 callback refresh 诊断亦失败（`/tmp/entrance-refresh-1004.log`），已移除临时诊断，不修改 200ms 时长与 >=3 帧断言。环境为 144Hz/60Hz 两块虚拟显示器，主屏截图超时；显示链路仅为待查假设，不宣称根因已证实。
 
+- 最新完整串联 `/tmp/shell-full-clear-1004.log` 中 T45–T52 全 PASS，T53 仍约 502ms 停帧 / settled=false。系统截图命令虽超时，但初始化 NSApplication 后的 ScreenCaptureKit CLI 已能读取真实窗口图；因此不能据截图命令超时认定显示链路故障。另发现固定 16 帧上限在 144Hz 下不足 200ms，待修正采样窗口并继续定位，不减少 >=3 帧与终态要求。
+
 ## 决策记录
 
 | 决策 | 选择 | 理由 |

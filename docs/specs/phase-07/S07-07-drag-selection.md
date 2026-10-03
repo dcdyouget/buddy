@@ -42,6 +42,14 @@
 
 - `/tmp/drag-focused-1004.log` rc=1：scroll / Back 前原生 visible/key/app_active 全 true；滚轮仍不改变 offset，Back 点击后窗口被隐藏。单纯异步焦点假设已被证伪，尚未定位事件命中 / 平台呈现问题；没有重试事件或放宽断言。
 
+- 遮挡定位：`/tmp/drag-realcap-1004.log` 的原生命中诊断显示主窗 visible/key/app_active / view alpha / hitTest 均正常，但 `(1020,437)` 滚轮与 `(923,315)` Back 点上方有系统窗口 `51898`，level=8、bounds=(920,272,260,219)。ScreenCaptureKit 实际截图确认是「Zeron 想访问其他 App 的数据」权限弹窗，解释滚轮被截获、Back 被外点监听隐藏；未操作该权限弹窗。
+- T52 仅将专用测试主窗移到 `(40,100)` 后开始动作，不修改产品定位、鼠标序列或断言；`/tmp/drag-unobstructed-1004.log` rc=0，全部拖动、选择、控件、滚轮与返回断言 PASS。临时 AppKit / CGWindow 命中 FFI 已移除，保留原生焦点前置和实际渲染检查点。
+- 已读取真实 ScreenCaptureKit 窗口图：`/tmp/buddy-shell-sck-1004.png` 紧凑页、`/tmp/buddy-t52-selected-1004.png` 字形选区、`/tmp/buddy-t52-settings-1004.png` 设置页。实色面板、圆角、中文输入 / 控件和高亮选区正常；图片未入库，未更改 Cargo / lock 或引入 render_to_image 特性。
+
+- 修正锚点 / 滚轮变异后，`verify_drag.py --case body-blank --case scroll-preserved` rc=0、2/2 有效（`/tmp/drag-two-unobstructed-1004.log`）；与首轮 inactive-settings / native-drag / glyph-selection 的 3 项合计 5/5。前者仅 blank=false，后者确实 scroll=false，均 rc=1 后 finally 恢复源码；此前锚点未执行、基线失败和漏检保留原记录，不算有效拦截。
+
+- 完整 `shell_preview --selftest` 首轮受 T51 留下的 800×600 尺寸影响，设置右侧点再次与系统弹窗重叠。设置区域也在动作前单独定位到 `(40,100)` 后，`/tmp/shell-full-clear-1004.log` 中 T45–T52 全部 PASS，T52 恢复后滚轮 / 返回 / 各拖动断言全真；整组 rc=1 是 S07-08 T53 约 502ms 停帧，未宣称全链路通过，也未削弱断言。
+
 ## 决策记录
 
 | 决策 | 选择 | 理由 |
