@@ -9,7 +9,7 @@ use buddy_engine::chat::ChatEngine;
 use gpui::{AppContext, AsyncApp, WindowHandle};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 static NEXT_SANDBOX: AtomicU64 = AtomicU64::new(0);
 
@@ -112,11 +112,18 @@ async fn run_native_checks(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) ->
 
     let visibility = check_visibility(handle, cx).await;
     println!(
-        "T12-04 原生隐藏 / 显示：{}",
-        if visibility { "PASS" } else { "FAIL" }
+        "T12-04 原生隐藏 / 显示：visible_before={} hidden={} hidden_after={} show_requested={} final_visible={} final_key={} final_active={}；{}",
+        visibility.visible_before,
+        visibility.hidden,
+        visibility.hidden_after,
+        visibility.show_requested,
+        visibility.final_visible,
+        visibility.final_key,
+        visibility.final_active,
+        if visibility.passed() { "PASS" } else { "FAIL" },
     );
 
-    let ok = native_ok && workspace_ok && moved && visibility;
+    let ok = native_ok && workspace_ok && moved && visibility.passed();
     println!("{} S07-12 窗口行为自检", if ok { "PASS" } else { "FAIL" });
     ok
 }
@@ -217,7 +224,31 @@ fn probe_position(
 }
 
 #[cfg(target_os = "macos")]
-async fn check_visibility(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> bool {
+struct VisibilityCheck {
+    visible_before: bool,
+    hidden: bool,
+    hidden_after: bool,
+    show_requested: bool,
+    final_visible: bool,
+    final_key: bool,
+    final_active: bool,
+}
+
+#[cfg(target_os = "macos")]
+impl VisibilityCheck {
+    fn passed(&self) -> bool {
+        self.visible_before
+            && self.hidden
+            && self.hidden_after
+            && self.show_requested
+            && self.final_visible
+            && self.final_key
+            && self.final_active
+    }
+}
+
+#[cfg(target_os = "macos")]
+async fn check_visibility(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> VisibilityCheck {
     let prepared = cx
         .update_window(handle.into(), |_, window, _| {
             crate::shell::visibility::prepare(window)
@@ -225,22 +256,49 @@ async fn check_visibility(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> 
         .ok()
         .and_then(Result::ok);
     let Some(native) = prepared else {
-        return false;
+        return VisibilityCheck {
+            visible_before: false,
+            hidden: false,
+            hidden_after: false,
+            show_requested: false,
+            final_visible: false,
+            final_key: false,
+            final_active: false,
+        };
     };
     let visible_before = native.probe().is_ok_and(|snapshot| snapshot.is_visible);
     let hidden = native.hide().is_ok_and(|snapshot| !snapshot.is_visible);
-    cx.background_executor()
-        .timer(Duration::from_millis(80))
-        .await;
     let hidden_after = native.probe().is_ok_and(|snapshot| !snapshot.is_visible);
-    let shown = native
-        .show_and_focus()
-        .is_ok_and(|snapshot| snapshot.is_visible && snapshot.is_key && snapshot.app_is_active);
-    cx.background_executor()
-        .timer(Duration::from_millis(80))
-        .await;
-    let visible_after = native.probe().is_ok_and(|snapshot| snapshot.is_visible);
-    visible_before && hidden && hidden_after && shown && visible_after
+    let show_requested = native.show_and_focus().is_ok();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut final_visible = false;
+    let mut final_key = false;
+    let mut final_active = false;
+    loop {
+        if let Ok(snapshot) = native.probe() {
+            final_visible = snapshot.is_visible;
+            final_key = snapshot.is_key;
+            final_active = snapshot.app_is_active;
+            if final_visible && final_key && final_active {
+                break;
+            }
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        cx.background_executor()
+            .timer(Duration::from_millis(20))
+            .await;
+    }
+    VisibilityCheck {
+        visible_before,
+        hidden,
+        hidden_after,
+        show_requested,
+        final_visible,
+        final_key,
+        final_active,
+    }
 }
 
 #[cfg(target_os = "macos")]

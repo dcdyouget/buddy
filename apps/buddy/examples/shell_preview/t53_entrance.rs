@@ -4,7 +4,12 @@ use buddy_ui::gpui::{AppContext, AsyncApp, WindowHandle};
 use buddy_ui::shell::{
     self, AppShell, entrance::EntrancePhase, positioning::Rect, positioning_native,
 };
+use std::cell::Cell;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
+
+const FRAME_SAMPLE_DEADLINE: Duration = Duration::from_millis(350);
+const FRAME_POLL: Duration = Duration::from_millis(5);
 
 fn rect(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Option<Rect> {
     cx.update_window(handle.into(), |_, w, _| {
@@ -23,6 +28,26 @@ fn same(a: Rect, b: Rect) -> bool {
 }
 fn phase(handle: WindowHandle<AppShell>, cx: &AsyncApp) -> Option<EntrancePhase> {
     handle.read_with(cx, |s, _| s.entrance_phase()).ok()
+}
+
+/// Wait for a real platform frame. `Window::on_next_frame` callbacks run before
+/// that frame's draw, so the task observes the rendered state on the next
+/// foreground turn instead of sampling an arbitrary 20 ms timer boundary.
+async fn next_frame(handle: WindowHandle<AppShell>, cx: &mut AsyncApp, deadline: Instant) -> bool {
+    let painted = Rc::new(Cell::new(false));
+    let painted_by_frame = painted.clone();
+    if cx
+        .update_window(handle.into(), |_, window, _| {
+            window.on_next_frame(move |_, _| painted_by_frame.set(true));
+        })
+        .is_err()
+    {
+        return false;
+    }
+    while !painted.get() && Instant::now() < deadline {
+        cx.background_executor().timer(FRAME_POLL).await;
+    }
+    painted.get()
 }
 
 pub(crate) async fn run(cx: &mut AsyncApp) -> bool {
@@ -50,10 +75,13 @@ pub(crate) async fn run(cx: &mut AsyncApp) -> bool {
         return false;
     };
     let started = Instant::now();
+    let deadline = started + FRAME_SAMPLE_DEADLINE;
     let mut samples = Vec::new();
     let mut fixed_bounds = true;
     for _ in 0..16 {
-        input::draw(handle, cx).await;
+        if !next_frame(handle, cx, deadline).await {
+            break;
+        }
         if let Ok(sample) = handle.read_with(cx, |s, _| {
             (
                 s.entrance_elapsed_ms(),
@@ -64,9 +92,6 @@ pub(crate) async fn run(cx: &mut AsyncApp) -> bool {
             samples.push(sample);
         }
         fixed_bounds &= rect(handle, cx).is_some_and(|r| same(before, r));
-        cx.background_executor()
-            .timer(Duration::from_millis(20))
-            .await;
     }
     let finished = phase(handle, cx) == Some(EntrancePhase::Settled);
     let painted: Vec<_> = samples
@@ -74,7 +99,8 @@ pub(crate) async fn run(cx: &mut AsyncApp) -> bool {
         .filter_map(|(time, _, frame)| frame.map(|f| (*time, f)))
         .collect();
     let frame_timing = if reduced {
-        painted.is_empty()
+        !samples.is_empty()
+            && painted.is_empty()
             && samples
                 .iter()
                 .all(|(_, phase, _)| *phase == EntrancePhase::Settled)

@@ -176,12 +176,12 @@
 | S07-04 | Esc / 点击外部关闭（不断流） | S07-02 | `done` | `phase-07/S07-04-dismiss.md` |
 | S07-05 | 置顶与全工作区可见 | S07-02 | `done` | `phase-07/S07-05-window-level.md` |
 | S07-06 | 多显示器与窗口定位 | S07-01 | `done` | `phase-07/S07-06-positioning.md` |
-| S07-07 | 窗口拖动与选择隔离 | S07-02 | `blocked` | `phase-07/S07-07-drag-selection.md` |
+| S07-07 | 窗口拖动与选择隔离 | S07-02 | `doing` | `phase-07/S07-07-drag-selection.md` |
 | S07-08 | 入场动画与减弱动效 | S07-02 | `blocked` | `phase-07/S07-08-entrance-motion.md` |
 | S07-09 | tray 图标与菜单 | S00-03 | `blocked` | `phase-07/S07-09-tray.md` |
 | S07-10 | 开机自启 | S00-03 | `done` | `phase-07/S07-10-autostart.md` |
 | S07-11 | 单实例与生命周期（无窗口存活 / 休眠唤醒） | S07-01 | `blocked` | `phase-07/S07-11-lifecycle.md` |
-| S07-12 | 窗口行为自检模式（探测静默 no-op） | S07-02 | `blocked` | `phase-07/S07-12-behavior-selfcheck.md` |
+| S07-12 | 窗口行为自检模式（探测静默 no-op） | S07-02 | `doing` | `phase-07/S07-12-behavior-selfcheck.md` |
 | S07-13 | 自启与数据目录设置 UI | S07-01, S07-10 | `blocked` | `phase-07/S07-13-shell-settings.md` |
 
 ---
@@ -387,3 +387,9 @@
 | 2026-10-03 | S07-11 | `blocked` → `doing` | 退出审查发现 GPUI 原生 terminate 仅等 200ms 且不调度前台配置队列；继续补退出前协调和实际落盘探针，此工作不依赖桌面解锁。 |
 
 | 2026-10-03 | S07-11 | `doing` → `blocked` | 补原生退出 Cancel/排空队列/批准重试，真实主题落盘探针通过；700ms 延迟保存后退出通过，跳过等待有效 FAIL（1/1）。独立代码缺口已收尾，剩真实休眠 / OS 输入 / 激活与实际渲染待解锁；计数不变。 |
+
+| 2026-10-04 | S07-07 / S07-08 | `blocked` → `doing` | HEAD 62c023d、工作区干净；只读预检 locked=false、CGEventPost=true，恢复扩展 T52 / T53、真实渲染与 OS 有效拦截。GUI 串行，变异期间源码与其他 cargo 冻结。 |
+
+| 2026-10-04 | S07-08 | `doing` → `blocked` | T53 实际平台帧在约20ms后停滞至500ms，>=3有效帧/200ms终态未通过；native可见聚焦正常、几何读回无阻塞，强制刷新诊断亦失败。保留断言与日志，未确认是产品还是虚拟显示链路原因；继续独立验收项，计数不变。 |
+
+| 2026-10-04 | S07-12 | `blocked` → `doing` | 桌面解锁、原生窗口诊断独立执行；与 S07-07 并行状态，所有 GUI 仍串行。S07-08 帧停滞待定位，不以其它自检替代。 |

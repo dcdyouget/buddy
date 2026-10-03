@@ -5,6 +5,8 @@ use buddy_ui::chat::state::{ChatState, user_message};
 use buddy_ui::gpui::{AppContext, AsyncApp, WindowHandle};
 use buddy_ui::shell::{self, AppShell, positioning::Rect, positioning_native};
 
+#[path = "t52_native.rs"]
+mod native;
 #[path = "t52_regions.rs"]
 mod regions;
 
@@ -24,6 +26,7 @@ fn same(a: Rect, b: Rect) -> bool {
         && (a.size.width - b.size.width).abs() < 1.0
         && (a.size.height - b.size.height).abs() < 1.0
 }
+
 async fn drag(
     handle: WindowHandle<AppShell>,
     from: (f64, f64),
@@ -45,6 +48,14 @@ async fn moved(handle: WindowHandle<AppShell>, point: (f64, f64), cx: &mut Async
     let Some(before) = rect(handle, cx) else {
         return false;
     };
+    let state = cx
+        .update_window(handle.into(), |_, w, _| {
+            (
+                shell::native::probe_main_window(w).ok(),
+                shell::workspaces::probe(w).ok(),
+            )
+        })
+        .ok();
     let sent = drag(handle, point, (45.0, 35.0), cx).await;
     let after = rect(handle, cx);
     let ok = sent
@@ -53,6 +64,9 @@ async fn moved(handle: WindowHandle<AppShell>, point: (f64, f64), cx: &mut Async
                 && (a.origin.y - before.origin.y - 35.0).abs() < 2.0
                 && a.size == before.size
         });
+    if !ok {
+        println!("T52 failed drag initial_native={state:?}");
+    }
     println!("T52 native drag point={point:?} before={before:?} after={after:?} moved={ok}");
     ok
 }
@@ -80,7 +94,11 @@ async fn run_inner(cx: &mut AsyncApp) -> bool {
     let Ok(router) = handle.read_with(cx, |s, _| s.router()) else {
         return false;
     };
-    if shell::runtime::show(handle, cx).await.is_err() {
+    if let Err(error) = shell::runtime::show(handle, cx).await {
+        println!("FAIL T52：初始显示主窗口失败：{error}");
+        return false;
+    }
+    if !native::wait_native_input_ready("初始 OS 输入", handle, cx).await {
         return false;
     }
     router.update(cx, |r, cx| r.open_settings(cx));
@@ -164,7 +182,13 @@ async fn run_inner(cx: &mut AsyncApp) -> bool {
             );
         });
     }
-    let _ = shell::runtime::show(handle, cx).await;
+    if let Err(error) = shell::runtime::show(handle, cx).await {
+        println!("FAIL T52：滚动前重新显示主窗口失败：{error}");
+        return false;
+    }
+    if !native::wait_native_input_ready("滚动", handle, cx).await {
+        return false;
+    }
     conversation.update(cx, |c, cx| {
         let revision = c.state.revision + 1;
         c.state = ChatState::from_history(
@@ -179,6 +203,7 @@ async fn run_inner(cx: &mut AsyncApp) -> bool {
     transcript.update(cx, |t, cx| t.scroll_to_bottom(cx));
     input::settle(handle, cx).await;
     let scroll_before = transcript.read_with(cx, |t, _| t.list_state().logical_scroll_top());
+    native::log_native_input_state("scroll 注入前", handle, cx);
     let scroll_rect = rect(handle, cx).unwrap_or(current);
     let sent = cx
         .background_spawn(async move {

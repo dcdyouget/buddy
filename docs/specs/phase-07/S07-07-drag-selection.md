@@ -1,9 +1,9 @@
 # S07-07 窗口拖动与选择隔离
 
-> 状态: `blocked`
+> 状态: `doing`
 > Phase: 07
 > 依赖: S07-02
-> 阻塞: macOS 会话再次锁定；待解锁后完成扩展 T52、真实渲染及 OS 变异
+> 阻塞: —（2026-10-04 桌面已解锁，恢复系统验收）
 > 退役设计文档: —
 
 ## 目标
@@ -35,6 +35,12 @@
 - Markdown T08 使用真实绘制 bounds 验证空白、字形、链接、解码后的图片、代码复制按钮与只读任务符号隔离；`/tmp/markdown-drag-final.log` rc=0。`verify_markdown_drag.py` 4/4 有效拦截，`/tmp/markdown-drag-interception.log` rc=0；属于 GPUI 事件证据，OS 拖动与选区由 T52 承担。新增传播隔离块无独立自动化证据。
 - pages / app 回归 rc=0（`/tmp/pages_preview-drag-fixed.log`、`/tmp/app-drag-inactive-fixed.log`）；T25 保留原时序验证退出设置后立即展开，T30 使用实际字形位置验证不拖动。`verify_drag.py --case inactive-settings` 1/1 有效拦截（`/tmp/drag-inactive-interception.log` rc=0）。vendor patch 从 zed 290cbcb 重建后逐文件一致。
 - 待完成扩展 T52、4 项 OS 变异、实际渲染与最终完整 shell。2026-10-03 再测 `CGSSessionScreenIsLocked=1`、CGEventPost 权限为 true；锁屏失败不计有效拦截，也不视作产品失败。
+
+- 2026-10-04 解锁后扩展 T52 rc=0（`/tmp/drag-1004.log`），空 transcript、边缘、正文空白、紧凑边缘、空输入、设置上/右边缘均真实位移 45×35；非空输入、字形选择、按钮与滚动隔离通过。首轮变异 3/5 有效（`/tmp/drag-interception-1004.log` rc=1）：body-blank 锚点重复未执行，scroll-preserved 删除辅助 wheel 回调仍由 ListState 自身滚动而漏检；两项待修正后重测，不计 PASS。
+
+- 随后 `/tmp/drag-stack-1004.log` 及 `/tmp/drag-two-final-1004.log` 的当前基线 rc=1：各拖动及选区 / 模型按钮成功，但滚动 offset 未改变、设置返回失败。后者未进入变异，不计有效拦截；当前不把首轮 PASS 扩大为稳定完成，已增加输入前原生焦点诊断。
+
+- `/tmp/drag-focused-1004.log` rc=1：scroll / Back 前原生 visible/key/app_active 全 true；滚轮仍不改变 offset，Back 点击后窗口被隐藏。单纯异步焦点假设已被证伪，尚未定位事件命中 / 平台呈现问题；没有重试事件或放宽断言。
 
 ## 决策记录
 

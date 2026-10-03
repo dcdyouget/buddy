@@ -1,5 +1,5 @@
 //! T52 的紧凑页 / 输入框 / 设置边界，使用同一个主窗口。
-use super::{drag, input, moved, rect, same};
+use super::{drag, input, moved, native, rect, same};
 use buddy_ui::chat::router::PageRouter;
 use buddy_ui::gpui::{AsyncApp, Entity, WindowHandle};
 use buddy_ui::shell::AppShell;
@@ -41,12 +41,17 @@ pub(super) async fn run(
     };
     let settings_right = moved(handle, (bounds.size.width - 5.0, 100.0), cx).await;
     // Back is an actual clickable control, so press/release without dragging.
+    native::log_native_input_state("back 注入前", handle, cx);
+    if !native::wait_native_input_ready("back", handle, cx).await {
+        return false;
+    }
     let Some(before) = rect(handle, cx) else {
         return false;
     };
     let clicked = super::os_input::click_screen(before.origin.x + 28.0, before.origin.y + 28.0);
     input::settle(handle, cx).await;
     let back = clicked && !router.read_with(cx, |r, _| r.settings_present());
+    native::log_native_input_state("back 点击后", handle, cx);
     let ok = compact_edge && empty_input && filled_input && settings_top && settings_right && back;
     println!(
         "T52 regions compact_edge={compact_edge} empty_input={empty_input} filled_input={filled_input} settings_top={settings_top} settings_right={settings_right} back={back}"
