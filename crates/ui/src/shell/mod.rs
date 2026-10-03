@@ -4,6 +4,7 @@
 //! 原生外观在首个可见帧之前应用；页面展开固定底边并裁剪到当前屏幕工作区。
 
 pub mod config;
+pub mod autostart;
 pub mod entrance;
 mod focus_order;
 pub mod hotkey;
@@ -14,6 +15,8 @@ pub mod positioning_native;
 pub mod runtime;
 pub mod selection;
 pub mod sizing;
+pub mod tray;
+pub mod services;
 mod visibility;
 pub mod workspaces;
 

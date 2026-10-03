@@ -37,6 +37,9 @@ unicode-segmentation.workspace = true
 chrono.workspace = true
 # 全局热键的原生注册与事件，由 shell 维持生存期
 global-hotkey.workspace = true
+tray-icon.workspace = true
+auto-launch.workspace = true
+image.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc.workspace = true

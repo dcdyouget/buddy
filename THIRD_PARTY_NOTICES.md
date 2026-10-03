@@ -228,3 +228,10 @@ PY
 | S04-03 收敛：zed `util` 换为本地替身 `crates/markdown/util-shim`（Apache-2.0，内容取自 zed `util` / `gpui_util`）；10 个语法包（bash / toml-ng / c-sharp / java / ruby / php / lua / nix / make / containerfile）改为可选 feature `extra-languages`，默认构建不含 | −21（818 → 797）；默认产物中另少 10 个语法包 | 替身为 Apache-2.0；其余不变 |
 
 | S04-07 起图标：`crates/ui/assets/icons/*.svg`（`streaming-star.svg` 除外，为 Buddy 自绘）取自 Lucide —— 由 `scripts/icons/lucide_svg.py` 从 v1 所用 `lucide-react` 1.28.0 的图形数据逐字生成（清单见 `crates/ui/src/icons.rs` 的 `icons!` 声明） | 0（资源文件，非 crate） | **ISC**（Copyright (c) 2026 Lucide Icons and Contributors；许可证全文见 `node_modules/lucide-react/LICENSE` / https://lucide.dev/license）；未修改图形 |
+
+## 附：Phase 07 托盘与登录项依赖（2026-10-03）
+
+- `tray-icon` 0.24.2（MIT OR Apache-2.0）及 `muda` 0.19.3（Apache-2.0 OR MIT）：原生托盘与菜单；关闭默认 GTK / libxdo features，当前范围为 macOS，Windows 另验。
+- `auto-launch` 0.6.0（MIT）：使用 LaunchAgent 模式；其 macOS 依赖 `smappservice-rs` 0.1.3（MIT）虽参与编译，本产品不调用 SMAppService 注册模式。
+- PNG 解码复用闭包已有 `image` 0.25.10，不引入第二套图像库。上述依赖均位于 UI 层，engine 未新增依赖。
+- 版本以 `Cargo.lock` 为准；许可证取本地 registry 中对应版本的 Cargo.toml，原许可证随上游 crate 分发。

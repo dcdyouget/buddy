@@ -178,9 +178,9 @@
 | S07-06 | 多显示器与窗口定位 | S07-01 | `done` | `phase-07/S07-06-positioning.md` |
 | S07-07 | 窗口拖动与选择隔离 | S07-02 | `blocked` | `phase-07/S07-07-drag-selection.md` |
 | S07-08 | 入场动画与减弱动效 | S07-02 | `blocked` | `phase-07/S07-08-entrance-motion.md` |
-| S07-09 | tray 图标与菜单 | S00-03 | `todo` | `phase-07/S07-09-tray.md` |
-| S07-10 | 开机自启 | S00-03 | `todo` | `phase-07/S07-10-autostart.md` |
-| S07-11 | 单实例与生命周期（无窗口存活 / 休眠唤醒） | S07-01 | `todo` | `phase-07/S07-11-lifecycle.md` |
+| S07-09 | tray 图标与菜单 | S00-03 | `blocked` | `phase-07/S07-09-tray.md` |
+| S07-10 | 开机自启 | S00-03 | `doing` | `phase-07/S07-10-autostart.md` |
+| S07-11 | 单实例与生命周期（无窗口存活 / 休眠唤醒） | S07-01 | `doing` | `phase-07/S07-11-lifecycle.md` |
 | S07-12 | 窗口行为自检模式（探测静默 no-op） | S07-02 | `todo` | `phase-07/S07-12-behavior-selfcheck.md` |
 | S07-13 | 自启与数据目录设置 UI | S07-01, S07-10 | `todo` | `phase-07/S07-13-shell-settings.md` |
 
@@ -373,3 +373,6 @@
 
 | 2026-10-03 | S07-08 | `todo` → `doing` | S07-05 完成后，与 S07-07 按文件归属并行；移植当前 v1 紧凑 underlay 入场及减弱动效，主 agent 串行系统验证。此项属于 Phase 07，不涉及用户保留重设计的 Phase 08。 |
 | 2026-10-03 | S07-07 / S07-08 | `doing` → `blocked` | 实现与事件 / 纯时间测试已落地；macOS 再次锁屏（locked=1、CGEventPost=true），扩展 T52 / T53 和 OS 变异待解锁。Markdown 4/4、设置失活 1/1、动效纯逻辑 6/6 有效拦截；不把锁屏失败计入产品失败或完成。 |
+| 2026-10-03 | S07-09 / S07-10 | `todo` → `doing` | 07 / 08 实现提交 5fd70d5，197 UI 单测、8 组预览回归及门禁 rc=0，真实 OS 验收待解锁；继续同 Phase 独立依赖已满足的托盘与自启，主 agent 整合配置队列和生产入口。 |
+| 2026-10-03 | S07-09 | `doing` → `blocked` | 原生菜单状态通过，回调映射与状态变异有效；真实菜单栏浅深外观和逐项 OS 点击待桌面解锁，不能用合成事件代替。 |
+| 2026-10-03 | S07-11 | `todo` → `doing` | 推进依赖已满足的跨进程单实例与生命周期；IPC 在 engine / 窗口初始化前获取所有权，真实休眠唤醒单独记录证据边界。 |

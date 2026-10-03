@@ -26,6 +26,9 @@ fn main() {
                         if let Err(error) = shell::runtime::install(handle, cx).await {
                             log::error!("安装主窗口事件失败：{error}");
                         }
+                        if let Err(error) = shell::services::install(cx) {
+                            log::error!("安装系统托盘失败：{error}");
+                        }
                     }
                     Err(error) => {
                         log::error!("创建主窗口失败：{error}");

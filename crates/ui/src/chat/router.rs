@@ -584,6 +584,8 @@ mod settings_save;
 
 #[path = "router_preferences.rs"]
 mod preferences;
+#[path = "router_autostart.rs"]
+mod autostart_save;
 
 impl Render for PageRouter {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

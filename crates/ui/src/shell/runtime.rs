@@ -118,16 +118,7 @@ pub async fn toggle(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Result
         } else {
             None
         };
-        let idle = cx.update(|cx| {
-            if !cx.has_global::<Runtime>() {
-                return false;
-            }
-            let runtime = cx.global_mut::<Runtime>();
-            let now = Instant::now();
-            let idle = requires_compact(now.duration_since(runtime.last_invoked));
-            runtime.last_invoked = now;
-            idle
-        });
+        let idle = record_invocation(cx);
         if idle {
             handle
                 .update(cx, |shell, _, cx| {
@@ -184,7 +175,34 @@ pub async fn hide(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Result<(
 
 /// 唤回当前主窗口；原生调用在 GPUI App 借用已结束后同步执行。
 pub async fn show(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Result<(), String> {
-    positioning_controller::restore(handle, true, cx).await?;
+    show_on_screen(handle, true, cx).await
+}
+
+/// 托盘左键始终呼出；按鼠标所在屏定位，不捕获外部选区。
+pub async fn show_from_tray(
+    handle: WindowHandle<AppShell>,
+    allow_idle_compact: bool,
+    cx: &mut AsyncApp,
+) -> Result<(), String> {
+    let idle = record_invocation(cx);
+    if allow_idle_compact && idle {
+        handle
+            .update(cx, |shell, _, cx| {
+                shell
+                    .router()
+                    .update(cx, |router, cx| router.invoked_after_idle(cx))
+            })
+            .map_err(|error| error.to_string())?;
+    }
+    show_on_screen(handle, false, cx).await
+}
+
+async fn show_on_screen(
+    handle: WindowHandle<AppShell>,
+    focused_screen: bool,
+    cx: &mut AsyncApp,
+) -> Result<(), String> {
+    positioning_controller::restore(handle, focused_screen, cx).await?;
     let prepared = prepare(handle, cx)?;
     prepared.show_and_focus().map_err(|e| e.to_string())?;
     handle
@@ -196,6 +214,19 @@ pub async fn show(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Result<(
             window.refresh();
         })
         .map_err(|e| e.to_string())
+}
+
+fn record_invocation(cx: &mut AsyncApp) -> bool {
+    cx.update(|cx| {
+        if !cx.has_global::<Runtime>() {
+            return false;
+        }
+        let runtime = cx.global_mut::<Runtime>();
+        let now = Instant::now();
+        let idle = requires_compact(now.duration_since(runtime.last_invoked));
+        runtime.last_invoked = now;
+        idle
+    })
 }
 
 fn prepare(

@@ -1,6 +1,6 @@
 # S07-10 开机自启
 
-> 状态: `todo`
+> 状态: `doing`
 > Phase: 07
 > 依赖: S00-03
 > 阻塞: —
@@ -30,13 +30,20 @@
 
 ## 证据
 
-待实施后填写可复现命令、观察值、拦截结果与证据边界。
+- `SystemAutostart` 使用 auto-launch 0.6 LaunchAgent 模式与绝对 current_exe；`router_autostart.rs` 复用配置队列，前项完成后取基底，OS 切换并读回后保存 auto_start，写盘失败恢复原 OS 状态，不发布失败配置。
+- `cargo run -q -p buddy-app --example autostart_probe` rc=0（`/tmp/autostart-os.log`）：专用 `BuddyS0710Probe-44886` 初始关闭，开启后读回 true，plutil 解析 ProgramArguments 得到真实 probe 路径，关闭后读回 false 且 plist 删除，最终清理通过。未触碰真实 Buddy 登录项。
+- `cargo test -q -p buddy-ui --lib` 205/205，rc=0（`/tmp/s070910-ui.log`），含 OS 操作 / 读回 / 回滚失败分支。
+- `autostart_preferences_preview --selftest`：两次自启 toggle 中插入真实主题保存事件，最终主题和其他字段保留；fake OS 失败不写盘。额外使用专用真实 LaunchAgent，确认开启读回 true 后，故意把沙盒 config.json 换成目录导致写盘失败，OS 恢复 false，内存 / 磁盘 / 原始字节保持旧值，专用 plist 与故障沙盒清理。
+- `verify_services.py` 的 os-readback / os-rollback / native-registration / config-rollback / config-field 共 5/5 有效拦截。增强真实 OS 回滚后又定向复测 config-rollback / config-field，rc=0、2/2（`/tmp/services-native-config-interception.log`，对应临时目录含基线与故意失败日志）。编译失败不计拦截。
+- 证据边界：auto-launch 的 LaunchAgent 查询检查注册 plist，不证明已经实际注销再登录启动。开发路径为 target/debug 下可执行文件；正式包应为 Buddy.app/Contents/MacOS 下实际 current_exe，本轮未构建正式 bundle。托盘真实点击归 S07-09。
 
 ## 决策记录
 
 | 决策 | 选择 | 理由 |
 |------|------|------|
 | 行为依据 | 当前 v1 源码 | 旧素材尺寸 / 毛玻璃 / 置顶描述不覆盖当前源码与已接受决定。 |
+| 写盘失败恢复 | 回滚 OS 状态并读回，不发布新配置 | v1 保存失败仅记日志，会留下系统与配置分离；此偏离单独登记。 |
+| 同一注册名称 | 产品沿用 Buddy，探针使用唯一专用名称 | 开发产品与正式包的 Buddy.plist 共用名称；只在用户操作时切换，不在启动时静默覆盖旧注册。自测不操作正式名称。 |
 | 视觉验收 | agent 本地读取真实渲染 | 用户已授权自行验收，不再等待用户目检。 |
 
 ## 完成记录
