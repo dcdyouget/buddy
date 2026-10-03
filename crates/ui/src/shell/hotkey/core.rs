@@ -13,6 +13,8 @@ pub(crate) struct HotkeyCore<B> {
     current: Option<HotKey>,
     registered: Vec<HotKey>,
     pressed: HashSet<u32>,
+    /// 在 rearm 已成功注销但重新注册失败时保留待重试的键；不代表 OS 当前有效。
+    rearm_pending: Option<HotKey>,
 }
 
 impl<B: Backend> HotkeyCore<B> {
@@ -22,6 +24,7 @@ impl<B: Backend> HotkeyCore<B> {
             current: None,
             registered: Vec::new(),
             pressed: HashSet::new(),
+            rearm_pending: None,
         }
     }
 
@@ -29,6 +32,9 @@ impl<B: Backend> HotkeyCore<B> {
         if self.current == Some(hotkey) {
             return Ok(());
         }
+        // 新配置取代此前 rearm 失败留下的待重试键；只有真正注册成功后才会
+        // 再写入 current，不能用这个待重试值冒充系统已生效。
+        self.rearm_pending = None;
 
         if let Some(old) = self.current {
             // 清理旧 current 之外的遗留注册；失败时尚未触碰新键，旧配置仍有效。
@@ -101,6 +107,49 @@ impl<B: Backend> HotkeyCore<B> {
         self.current
     }
 
+    pub(crate) fn rearm(&mut self) -> Result<(), HotkeyError> {
+        let Some(old) = self.current.or(self.rearm_pending) else {
+            self.pressed.clear();
+            return Ok(());
+        };
+        self.cleanup_except(old)?;
+
+        // 注销失败时保留 current、registered 和 pressed，调用方仍可如实认为
+        // 旧注册尚未被本进程改变；这里不尝试用内存状态伪造恢复成功。
+        if self.current.is_some() {
+            if let Err(reason) = self.backend.unregister(old) {
+                return Err(HotkeyError::UnregisterOld {
+                    hotkey: old.to_string(),
+                    reason,
+                });
+            }
+
+            // 注销已成功，旧键不能继续作为 current；即使后续注册失败也必须保留
+            // current = None，避免后续事件路径误认为旧键仍然有效。
+            self.remove_registered(old);
+            self.current = None;
+            self.pressed.clear();
+        }
+
+        match self.backend.register(old) {
+            Ok(()) => {
+                self.registered.push(old);
+                self.current = Some(old);
+                self.rearm_pending = None;
+                self.pressed.clear();
+                Ok(())
+            }
+            Err(reason) => {
+                self.current = None;
+                self.rearm_pending = Some(old);
+                Err(HotkeyError::Register {
+                    hotkey: old.to_string(),
+                    reason,
+                })
+            }
+        }
+    }
+
     pub(crate) fn shutdown(&mut self) -> Result<(), HotkeyError> {
         let registered = self.registered.clone();
         let mut errors = Vec::new();
@@ -112,6 +161,7 @@ impl<B: Backend> HotkeyCore<B> {
             }
         }
         self.current = None;
+        self.rearm_pending = None;
         self.pressed.clear();
         if errors.is_empty() {
             Ok(())

@@ -178,9 +178,22 @@ impl GlobalHotkey {
         self.core.current()
     }
 
+    /// 注销并重新注册当前热键，用于系统从睡眠 / 锁屏恢复后的真实唤醒。
+    ///
+    /// 该操作即使配置没有变化也会执行真实的注销和注册；任何注册失败都会
+    /// 保留 `current = None`，不以旧配置推断系统仍然有效。
+    pub fn rearm(&mut self) -> Result<(), HotkeyError> {
+        self.core.rearm()
+    }
+
+    /// 注销当前及所有已知遗留热键，但保留管理器以便调用方完成退出清理。
+    pub fn unregister_all(&mut self) -> Result<(), HotkeyError> {
+        self.core.shutdown()
+    }
+
     /// 注销当前及恢复列表中的所有热键。
     pub fn shutdown(mut self) -> Result<(), HotkeyError> {
-        self.core.shutdown()
+        self.unregister_all()
     }
 }
 

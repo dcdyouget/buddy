@@ -252,6 +252,63 @@ fn requires_compact(idle: Duration) -> bool {
     idle >= Duration::from_secs(600)
 }
 
+/// 真正系统唤醒后重装注册并按当前屏幕裁剪位置；不改变原显隐状态或重播入场。
+pub async fn resume_after_wake(
+    handle: WindowHandle<AppShell>,
+    cx: &mut AsyncApp,
+) -> Result<(), String> {
+    let registration = cx.update(|cx| {
+        let runtime = cx
+            .try_global::<Runtime>()
+            .ok_or_else(|| "主窗口运行时尚未安装".to_string())?;
+        runtime
+            .hotkey
+            .borrow_mut()
+            .rearm()
+            .map_err(|e| e.to_string())
+    });
+    if let Err(error) = &registration {
+        let _ = handle.update(cx, |shell, _, cx| {
+            let settings = shell.router().read(cx).settings_view().clone();
+            settings.update(cx, |view, cx| {
+                view.preference_failed(true, error.clone(), cx)
+            });
+        });
+    }
+    let native = cx
+        .update_window(handle.into(), |_, window, _| {
+            super::positioning_native::prepare(window)
+        })
+        .map_err(|error| error.to_string())??;
+    let snapshot = native.snapshot()?;
+    let target = super::positioning::clamp_to_work_area(
+        snapshot.rect.origin,
+        snapshot.rect.size,
+        snapshot.screen.work_area,
+        super::positioning::WINDOW_MARGIN,
+    );
+    if target != snapshot.rect.origin {
+        native.move_to(target)?;
+    }
+    registration
+}
+
+/// 退出前注销系统键并释放外部鼠标监听；不依赖进程退出自动回收。
+/// 唯一事件桥不可再次安装，此入口仅用于终止产品运行时或独立诊断进程。
+pub fn shutdown(cx: &mut App) -> Result<(), String> {
+    if cx.has_global::<Runtime>() {
+        let runtime = cx.remove_global::<Runtime>();
+        let result = runtime
+            .hotkey
+            .borrow_mut()
+            .unregister_all()
+            .map_err(|error| error.to_string());
+        drop(runtime);
+        return result;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

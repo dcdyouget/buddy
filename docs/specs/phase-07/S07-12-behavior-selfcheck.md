@@ -1,9 +1,9 @@
 # S07-12 窗口行为自检模式（探测静默 no-op）
 
-> 状态: `todo`
+> 状态: `blocked`
 > Phase: 07
 > 依赖: S07-02
-> 阻塞: —
+> 阻塞: 真实 macOS 自检预检发现会话锁定；完整字段与原生补丁变异待解锁
 > 退役设计文档: —
 
 ## 目标
@@ -29,7 +29,12 @@
 
 ## 证据
 
-待实施后填写可复现命令、观察值、拦截结果与证据边界。
+- `cargo run -q -p buddy-app --bin buddy -- --selfcheck-window`：在单实例 / engine / 产品窗口初始化前分流到专用诊断沙盒，不接热键、托盘或真实数据。锁屏预检输出 `BLOCKED S07-12`，rc=1（`/tmp/product-selfcheck.log`）；不是有效失败拦截。
+- 诊断读取真实 style / shadow / opaque / collection / layer / radius / 首击 / workspace，并实际移动、恢复、隐藏和显示后读回；原生操作在退出 GPUI App 借用后执行，窗口与沙盒清理纳入结果。
+- 判定函数 fixture 对各个错误字段逐一拒绝，`verify_lifecycle.py --case diagnostic-shadow` 已有效拦截（包含在 `/tmp/lifecycle-interception.log` 的 6/6 中）。此为判定层证据，native-shadow 移除原生补丁的完整 OS 路径尚待桌面解锁。
+- Windows 明确输出未支持 / 待测并非零退出，留 Phase 09；没有把平台占位当作通过。
+
+- 最终回归：`/tmp/s071112-final-summary.log` rc=0，210 UI 单测、chat / pages / app / markdown / streaming / settings、settings preferences、shell window 共 8 组预览全部 rc=0 且 PASS。完整 OS 验收不包含在该结果中。
 
 ## 决策记录
 

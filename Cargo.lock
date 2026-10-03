@@ -876,6 +876,7 @@ dependencies = [
  "gpui_platform",
  "gpui_tokio",
  "image",
+ "libc",
  "log",
  "objc",
  "pulldown-cmark",

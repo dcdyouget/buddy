@@ -119,6 +119,91 @@ fn same_key_update_is_a_no_op() {
 }
 
 #[test]
+fn rearm_unregisters_and_registers_same_key_and_resets_pressed_state() {
+    let first = key(Code::KeyJ);
+    let mut core = with_initial(FakeBackend::default(), first);
+
+    assert!(core.accept(event(first, HotKeyState::Pressed)));
+    assert!(core.rearm().is_ok());
+    assert_eq!(
+        core.backend.calls,
+        vec![
+            format!("register {first}"),
+            format!("unregister {first}"),
+            format!("register {first}"),
+        ]
+    );
+    assert_eq!(core.current(), Some(first));
+    assert_eq!(core.backend.registered, HashSet::from([first]));
+    assert!(core.accept(event(first, HotKeyState::Pressed)));
+    assert!(!core.accept(event(first, HotKeyState::Pressed)));
+}
+
+#[test]
+fn rearm_unregister_failure_keeps_old_registration_and_pressed_state() {
+    let first = key(Code::KeyJ);
+    let mut backend = FakeBackend::default();
+    backend.fail_unregister.insert(first);
+    let mut core = with_initial(backend, first);
+
+    assert!(core.accept(event(first, HotKeyState::Pressed)));
+    assert!(matches!(
+        core.rearm(),
+        Err(HotkeyError::UnregisterOld { .. })
+    ));
+    assert_eq!(core.current(), Some(first));
+    assert_eq!(core.backend.registered, HashSet::from([first]));
+    assert_eq!(
+        core.backend.calls,
+        vec![format!("register {first}"), format!("unregister {first}")]
+    );
+    assert!(!core.accept(event(first, HotKeyState::Pressed)));
+}
+
+#[test]
+fn rearm_register_failure_clears_current_after_successful_unregister() {
+    let first = key(Code::KeyJ);
+    let mut core = with_initial(FakeBackend::default(), first);
+    core.backend.fail_register.insert(first);
+
+    assert!(matches!(core.rearm(), Err(HotkeyError::Register { .. })));
+    assert_eq!(core.current(), None);
+    assert!(core.backend.registered.is_empty());
+    assert_eq!(
+        core.backend.calls,
+        vec![
+            format!("register {first}"),
+            format!("unregister {first}"),
+            format!("register {first}"),
+        ]
+    );
+    assert!(!core.accept(event(first, HotKeyState::Pressed)));
+}
+
+#[test]
+fn rearm_can_retry_pending_key_but_reports_failure_until_os_registers_it() {
+    let first = key(Code::KeyJ);
+    let mut core = with_initial(FakeBackend::default(), first);
+    core.backend.fail_register.insert(first);
+
+    assert!(core.rearm().is_err());
+    assert_eq!(core.current(), None);
+    core.backend.fail_register.remove(&first);
+    assert!(core.rearm().is_ok());
+    assert_eq!(core.current(), Some(first));
+    assert_eq!(core.backend.registered, HashSet::from([first]));
+    assert_eq!(
+        core.backend.calls,
+        vec![
+            format!("register {first}"),
+            format!("unregister {first}"),
+            format!("register {first}"),
+            format!("register {first}"),
+        ]
+    );
+}
+
+#[test]
 fn failed_old_unregistration_rolls_back_new_key() {
     let first = key(Code::KeyJ);
     let second = key(Code::KeyK);

@@ -6,11 +6,42 @@ use buddy_ui::shell::{self, config::ShellConfig};
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+    if std::env::args().any(|argument| argument == "--selfcheck-window") {
+        // 诊断隔离于真实用户数据和唯一产品实例；内部关闭临时窗口并清理后返回。
+        application()
+            .with_assets(buddy_ui::icons::Assets)
+            .run(|cx: &mut App| {
+                shell::init(cx);
+                cx.spawn(async move |cx: &mut AsyncApp| {
+                    let passed = shell::selfcheck::run(cx).await;
+                    std::process::exit(if passed { 0 } else { 1 });
+                })
+                .detach();
+            });
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    let instance = {
+        use shell::lifecycle::instance::{Acquire, acquire};
+        match acquire(shell::lifecycle::socket_path()) {
+            Ok(Acquire::Owner { guard, receiver }) => (guard, receiver),
+            Ok(Acquire::Forwarded) => {
+                println!("已向运行中的 Buddy 发送唤起请求");
+                return;
+            }
+            Err(error) => {
+                log::error!("单实例启动失败：{error}");
+                std::process::exit(1);
+            }
+        }
+    };
     // 与 v1 相同的应用数据目录；不进行历史迁移。
     let data_dir = match storage::default_data_dir() {
         Ok(path) => path,
         Err(error) => {
             log::error!("无法定位应用数据目录：{error}");
+            #[cfg(target_os = "macos")]
+            drop(instance);
             std::process::exit(1);
         }
     };
@@ -29,9 +60,24 @@ fn main() {
                         if let Err(error) = shell::services::install(cx) {
                             log::error!("安装系统托盘失败：{error}");
                         }
+                        #[cfg(target_os = "macos")]
+                        if let Err(error) =
+                            shell::lifecycle::install(handle, instance.0, instance.1, cx)
+                        {
+                            log::error!("安装生命周期事件失败：{error}");
+                            cx.update(|cx| {
+                                shell::services::shutdown(cx);
+                                if let Err(error) = shell::runtime::shutdown(cx) {
+                                    log::error!("清理启动失败的运行时：{error}");
+                                }
+                                cx.quit();
+                            });
+                        }
                     }
                     Err(error) => {
                         log::error!("创建主窗口失败：{error}");
+                        #[cfg(target_os = "macos")]
+                        drop(instance);
                         cx.update(|cx| cx.quit());
                     }
                 }

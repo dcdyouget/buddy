@@ -92,6 +92,7 @@ auto-launch = "0.6"
 image = { version = "0.25", default-features = false, features = ["png"] }
 # macOS 外部鼠标事件监听（S07-04）；GPUI 闭包已有 0.1.6
 block = "0.1"
+libc = "0.2"
 # 文本输入的字形 / 词边界（S05-06）；与 gpui 闭包中同一版本，不新增包
 unicode-segmentation = "1"
 

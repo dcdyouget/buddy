@@ -13,6 +13,12 @@
 
 当前 spec 状态、Phase 计数与状态变更记录以 [`README.md`](./README.md) 为准；本文只保留交接边界与验收操作。
 
+### 当前在飞状态快照（2026-10-03）
+
+- S07-10 已 `done`；S07-11 已转 `blocked`，仍待系统验收。
+- S07-07 / S07-08 / S07-09 / S07-12 / S07-13 的真实 OS 验收当前 `blocked`；S07-12 的产品自检已具备锁屏 `BLOCKED` 分支，S07-13 已确认 v1 没有数据目录 UI。
+- 生命周期/诊断 9/9、退出等待 1/1 有效拦截，详见对应 spec；本快照不替代注册表。
+
 ---
 
 ## 2. 必读顺序（新 agent 从这开始）
@@ -176,6 +182,9 @@ S01-06 剩余范围（均无需屏幕权限）：页面×状态清单（供目�
 | 35 | S07-08 | 入场实际帧与减弱动态 | 解锁后 `shell_preview --selftest-entrance`、`python3 scripts/shell/verify_entrance.py`；最后完整 `shell_preview --selftest` | T53 同一 runtime / Router 采样真实 render 帧，紧凑唤回播放，普通切页不重播，展开页静态；原生 bounds 不动。纯逻辑 6/6 有效拦截；T53 / 两项 GUI 拦截与系统减弱动态另一个状态尚无证据。v1 的 260ms DOM 清理保护在 GPUI 为 200ms 视觉结束即 settled，单独登记。 |
 | 36 | S07-09 | 系统托盘图标、点击与中文菜单 | `tray_preview` 只打印真实动作且不改登录项；`tray_preview --selftest` 检查原生菜单状态。生产入口装配 services；解锁后验收实际左键呼出、右键菜单、设置与退出 | v1 的设置… / 开机自启 / 分隔 / 退出；左键始终呼出并按鼠标屏定位。原生状态与映射 3/3 有效拦截；浅深图标及真实 OS 菜单点击尚待解锁。自检需显式析构 tray 后返回失败码，AppKit terminate 本身固定以 0 退出。 |
 | 37 | S07-10 | LaunchAgent 注册与配置失败恢复 | `autostart_probe`；`autostart_preferences_preview --selftest`；`python3 scripts/shell/verify_services.py`。全部使用唯一专用登录项，自测后检查无 BuddyS0710*.plist 残留 | 真实注册文件开启 / 关闭、ProgramArguments 路径读回；配置写盘失败前确认 OS 已开启，再读回恢复关闭；配置与其他字段保持。5/5 有效拦截，增强原生回滚后定向 2/2；不把 plist 存在当作已经完成真实注销登录启动。 |
+| 38 | S07-11 | 单实例、退出清理与休眠唤醒 | `lifecycle_probe`；`python3 scripts/shell/verify_lifecycle.py`；解锁后补真实隐藏唤醒与 OS 热键读回。双进程 ACK、stale socket、锁文件和注销回收已有专用探针；真实 GPUI quit 的再次异步 App 借用已改为同步资源清理 | 双进程只保留 owner；隐藏窗口继续流式；退出释放热键、外点监听、tray、IPC；模拟 `on_system_wake` 只能证明重臂逻辑，不能替代真实睡眠 / 唤醒。真实睡眠唤醒、锁屏下激活 / 热键和已有实例重新聚焦仍缺证据；生命周期/诊断 9/9，另有 700ms 延迟真实保存退出 1/1 有效拦截；原生完整诊断尚未运行。 |
+| 39 | S07-12 | 产品窗口行为自检 | `cargo run -p buddy-app --bin buddy -- --selfcheck-window`；解锁桌面后读取真实原生窗口属性、工作区、移动恢复、隐藏 / 显示激活。锁屏或 CGEvent 权限不足必须输出 `BLOCKED` 并返回非零 | `selfcheck.rs` 的纯判定 fixture 逐字段坏值拦截有效，但只证明判定逻辑；不能替代真实 OS 读回。锁屏时产品自检明确阻塞，不将焦点失败伪装为 PASS；真实解锁执行结果待主线程回填。 |
+| 40 | S07-13 | 自启与数据目录设置 UI | 按当前 v1 核对 `SettingsPage`、tray 与 engine 数据路径；真实 tray 菜单点击需在解锁桌面验收 | v1 SettingsPage 没有自启或数据目录控件，tray 只有“设置… / 开机自启 / 分隔 / 退出”，也没有打开数据目录命令；v2 沿用 `dirs::data_dir()/com.buddy.chat` 兼容路径，不应凭旧素材虚构数据目录 UI。自启复用 S07-10 的 OS 查询 / 保存失败回滚；真实 tray OS 验收仍因锁屏 `blocked`。 |
 
 
 | # | 来源 | 看什么 | 怎么操作 | 预期 |

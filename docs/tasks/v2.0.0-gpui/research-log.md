@@ -1288,3 +1288,12 @@ provider 事件流以 `TurnEnd` 结束；`Done` / `Error` 由编排层（v1 `com
 
 > **2026-09-28 用户目检**：v1 联网搜索在实际使用中正常。上述失败只出现在本机自动化测试的网络环境下，不是 v1 缺陷，不另开修复。
 
+
+## 20. macOS 退出与单实例实测（2026-10-03，S07-11）
+
+- GPUI `App::shutdown` 在 App 借用期间执行 quit observers 并等待返回 futures；在返回 future 内再次 `AsyncApp::update` 会触发 `RefCell already borrowed`，经 AppKit FFI 演变为 SIGABRT。真实 `lifecycle_app_probe` 复现后将原生资源清理移到 hook 同步阶段，`cx.quit()` 子进程正常退出；绕过 IPC 清理的变异有效 FAIL。
+- macOS AppKit terminate 不保证返回 Rust main；不能依赖 main 后的 Drop 完成退出清理，也不能依赖 Application::run 后的失败码。探针成功路径走真实 terminate，父进程检查退出码和端点；判定类预览显式清理后返回测试码。
+- Unix socket 路径有 SUN_LEN 限制；macOS 用户临时目录前缀较长，独立探针采用短目录名。专属 0700 目录中的 flock 锁文件不得 unlink，退出先清 socket、保留 flock fd 到内核结束进程，避免新旧 owner 重叠。
+- 直接调用唤醒恢复只证明回调逻辑，不证明系统睡眠事件或实际 OS 热键重新送达；锁屏时继续保留真实系统验收缺口。
+
+- 追加退出协调实测：GPUI native shutdown 只等 200ms，主线程配置队列不能依靠 quit future 排空。NSTerminateLater 的 AppKit 模式也使本探针调度停滞（超时不计有效拦截）；采用 NSTerminateCancel 维持正常事件循环，等待配置完成后一次性批准重新 terminate。新增探针读回真实主题落盘，延迟配置的独立拦截见 S07-11。

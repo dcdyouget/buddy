@@ -4,7 +4,7 @@ use super::{
     runtime,
     tray::{MenuAction, TrayService},
 };
-use gpui::{AsyncApp, Global, Task};
+use gpui::{App, AsyncApp, Global, Task};
 use std::rc::Rc;
 
 struct Services {
@@ -12,6 +12,13 @@ struct Services {
     _events: Task<()>,
 }
 impl Global for Services {}
+
+/// AppKit 退出前显式销毁托盘和事件任务。
+pub fn shutdown(cx: &mut App) {
+    if cx.has_global::<Services>() {
+        drop(cx.remove_global::<Services>());
+    }
+}
 
 /// 为已经安装的唯一主窗口创建托盘，保持原生对象直到进程退出。
 pub fn install(cx: &mut AsyncApp) -> Result<(), String> {
