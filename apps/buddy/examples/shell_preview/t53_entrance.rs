@@ -30,24 +30,41 @@ fn phase(handle: WindowHandle<AppShell>, cx: &AsyncApp) -> Option<EntrancePhase>
     handle.read_with(cx, |s, _| s.entrance_phase()).ok()
 }
 
+#[derive(Clone, Copy, Debug)]
+struct FrameTiming {
+    callback_ms: u128,
+    resumed_ms: u128,
+    resumed_before_deadline: bool,
+}
+
 /// Wait for a real platform frame. `Window::on_next_frame` callbacks run before
 /// that frame's draw, so the task observes the rendered state on the next
 /// foreground turn instead of sampling an arbitrary 20 ms timer boundary.
-async fn next_frame(handle: WindowHandle<AppShell>, cx: &mut AsyncApp, deadline: Instant) -> bool {
-    let painted = Rc::new(Cell::new(false));
-    let painted_by_frame = painted.clone();
+async fn next_frame(
+    handle: WindowHandle<AppShell>,
+    cx: &mut AsyncApp,
+    started: Instant,
+    deadline: Instant,
+) -> Option<FrameTiming> {
+    let callback_at = Rc::new(Cell::new(None));
+    let callback_at_by_frame = callback_at.clone();
     if cx
         .update_window(handle.into(), |_, window, _| {
-            window.on_next_frame(move |_, _| painted_by_frame.set(true));
+            window.on_next_frame(move |_, _| callback_at_by_frame.set(Some(Instant::now())));
         })
         .is_err()
     {
-        return false;
+        return None;
     }
-    while !painted.get() && Instant::now() < deadline {
+    while callback_at.get().is_none() && Instant::now() < deadline {
         cx.background_executor().timer(FRAME_POLL).await;
     }
-    painted.get()
+    let resumed_at = Instant::now();
+    callback_at.get().map(|callback_at| FrameTiming {
+        callback_ms: callback_at.saturating_duration_since(started).as_millis(),
+        resumed_ms: resumed_at.saturating_duration_since(started).as_millis(),
+        resumed_before_deadline: resumed_at <= deadline,
+    })
 }
 
 pub(crate) async fn run(cx: &mut AsyncApp) -> bool {
@@ -76,10 +93,19 @@ pub(crate) async fn run(cx: &mut AsyncApp) -> bool {
     };
     let started = Instant::now();
     let deadline = started + FRAME_SAMPLE_DEADLINE;
+    println!(
+        "T53 sampling_started deadline={}ms reduced={reduced}",
+        FRAME_SAMPLE_DEADLINE.as_millis()
+    );
     let mut samples = Vec::new();
+    let mut frame_timings = Vec::new();
     let mut fixed_bounds = true;
-    for _ in 0..16 {
-        if !next_frame(handle, cx, deadline).await {
+    while Instant::now() < deadline {
+        let Some(timing) = next_frame(handle, cx, started, deadline).await else {
+            break;
+        };
+        frame_timings.push(timing);
+        if !timing.resumed_before_deadline {
             break;
         }
         if let Ok(sample) = handle.read_with(cx, |s, _| {
@@ -92,6 +118,11 @@ pub(crate) async fn run(cx: &mut AsyncApp) -> bool {
             samples.push(sample);
         }
         fixed_bounds &= rect(handle, cx).is_some_and(|r| same(before, r));
+        if samples.last().is_some_and(|(time, phase, frame)| {
+            *time == 200 && *phase == EntrancePhase::Settled && frame.is_none()
+        }) {
+            break;
+        }
     }
     let finished = phase(handle, cx) == Some(EntrancePhase::Settled);
     let painted: Vec<_> = samples
@@ -116,9 +147,13 @@ pub(crate) async fn run(cx: &mut AsyncApp) -> bool {
                 *time == 200 && *phase == EntrancePhase::Settled && frame.is_none()
             })
     };
+    let frame_timings: Vec<_> = frame_timings
+        .iter()
+        .map(|t| (t.callback_ms, t.resumed_ms))
+        .collect();
     println!(
-        "T53 reduced={reduced} reset={reset} duration={}ms bounds_fixed={fixed_bounds} samples={samples:?}",
-        started.elapsed().as_millis()
+        "T53 reduced={reduced} reset={reset} duration={}ms bounds_fixed={fixed_bounds} samples={samples:?} frame_timings={frame_timings:?}",
+        started.elapsed().as_millis(),
     );
     router.update(cx, |r, cx| r.open_settings(cx));
     input::settle(handle, cx).await;

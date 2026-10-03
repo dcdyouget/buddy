@@ -1,9 +1,9 @@
 # S07-11 单实例与生命周期（无窗口存活 / 休眠唤醒）
 
-> 状态: `blocked`
+> 状态: `doing`
 > Phase: 07
 > 依赖: S07-01
-> 阻塞: macOS 会话锁定；真实休眠唤醒 / OS 输入与已有实例聚焦尚待验收。
+> 阻塞: —（桌面已解锁，补已有实例聚焦与重绑后 OS 热键；真实睡眠证据单列）
 > 退役设计文档: docs/design/rust-architecture.md 生命周期 / 剩余职责与依赖
 
 ## 目标
@@ -38,7 +38,8 @@
 - `lifecycle_probe` 增强验证 `prepare_process_exit` 后进程仍活着时不可创建新 owner；锁由内核在进程死亡时释放。`wake_preview` 直接调用恢复回调，真实隐藏窗口、同 Router、尺寸保持与有效热键状态通过；移除实际 rearm 会明确 FAIL。该测试不等同系统睡眠。
 - 原生退出协调：实测 NSTerminateLater 会阻塞 GPUI 调度，改为先返回 NSTerminateCancel、异步排空真实 Router 配置队列、带一次性批准重新 terminate；不覆盖已有 delegate selector、不 fork GPUI。真实退出探针额外读取 config.json，要求新主题 dark 已落盘。
 - `verify_termination.py` 注入 700ms 的真实主题写盘前延迟：基线 rc=0 且最终 config.json=dark；跳过退出前等待时 rc=1 且明确主题未落盘，1/1 有效拦截（`/tmp/termination-interception.log`）。延迟与变异均 finally 还原，无测试开关残留。
-- 边界：真实睡眠 / 唤醒事件、重新注册后的 OS 热键输入和已有实例唤回聚焦仍待解锁；不把直接调用恢复函数等同系统睡眠。隐藏慢流完整 0–79 / 同一 Router 的既有证据来自 S07-04 T48，最终完整 shell 仍待解锁回归。
+- 2026-10-04 新增二进程 GPUI 闭环探针：owner 经生产 lifecycle IPC 被 secondary Forwarded 唤回，visible/key/app_active 与同一 windowNumber/Router 已通过；直接 resume_after_wake 后 hidden 与同一实体/注册值通过。独立 F19 sender 尚未唤回（`/tmp/lifecycle-os-final-1004.log`、`/tmp/lifecycle-os-key-spacing-1004.log` rc=1），已排除 canonical 文本误比较，正在区分 OS 注入与事件消费问题，不以注册值代替真实热键生效。
+- 边界：真实系统睡眠 / 唤醒事件未执行；不把直接调用恢复函数等同系统睡眠。隐藏慢流完整 0–79 / 同一 Router 在当前 T48 多轮真实 OS 回归均通过。
 
 - 最终回归：`/tmp/s071112-final-summary.log` rc=0，210 UI 单测、chat / pages / app / markdown / streaming / settings、settings preferences、shell window 共 8 组预览全部 rc=0 且 PASS。完整 OS 验收不包含在该结果中。
 

@@ -92,26 +92,41 @@ impl EntranceMotion {
     }
 
     /// 当前动画是否仍需请求下一帧。
+    ///
+    /// 终态转换由 [`Self::frame`] 独占。一次 render 可能在进入时尚未超时，
+    /// 但在完成布局后才跨过动画时长；此时仍须保留一次 follow-up render，
+    /// 让 `frame` 读到超时并清除 underlay。
     pub(crate) fn animating(&self) -> bool {
-        self.phase == EntrancePhase::Entering
-            && !accessibility::prefers_reduced_motion()
-            && self.started.elapsed() < duration()
+        if self.phase != EntrancePhase::Entering {
+            return false;
+        }
+        self.animating_with_preference(accessibility::prefers_reduced_motion())
+    }
+
+    fn animating_with_preference(&self, reduced_motion: bool) -> bool {
+        self.phase == EntrancePhase::Entering && !reduced_motion
     }
 
     /// 当前紧凑 underlay 帧；展开页和稳定态不渲染额外 underlay。
     pub(crate) fn frame(&mut self, compact: bool) -> Option<EntranceFrame> {
-        if self.phase == EntrancePhase::Entering
-            && (accessibility::prefers_reduced_motion() || self.started.elapsed() >= duration())
-        {
+        let reduced_motion =
+            self.phase == EntrancePhase::Entering && accessibility::prefers_reduced_motion();
+        self.frame_with_preference(compact, reduced_motion, self.started.elapsed())
+    }
+
+    fn frame_with_preference(
+        &mut self,
+        compact: bool,
+        reduced_motion: bool,
+        elapsed: Duration,
+    ) -> Option<EntranceFrame> {
+        if self.phase == EntrancePhase::Entering && (reduced_motion || elapsed >= duration()) {
             self.phase = EntrancePhase::Settled;
         }
         if !compact || self.phase != EntrancePhase::Entering {
             return None;
         }
-        Some(frame_at(
-            progress(self.started.elapsed()),
-            metrics::RADIUS_FULL,
-        ))
+        Some(frame_at(progress(elapsed), metrics::RADIUS_FULL))
     }
 
     /// 用确定的时间采样一帧，供纯逻辑测试复用。
@@ -228,6 +243,29 @@ mod tests {
         assert_eq!(motion.phase(), EntrancePhase::Hidden);
         motion.play_with_preference(false);
         assert_eq!(motion.phase(), EntrancePhase::Entering);
+    }
+
+    #[test]
+    fn animating_requests_followup_when_render_crosses_duration() {
+        let mut motion = EntranceMotion::default();
+        motion.play_with_preference(false);
+
+        // 模拟 render 在时长结束前进入；布局完成时已经跨过 duration。
+        assert!(
+            motion
+                .frame_with_preference(true, false, Duration::ZERO)
+                .is_some()
+        );
+
+        assert!(motion.animating_with_preference(false));
+        assert_eq!(motion.phase(), EntrancePhase::Entering);
+        assert!(
+            motion
+                .frame_with_preference(true, false, duration() + Duration::from_millis(1))
+                .is_none()
+        );
+        assert_eq!(motion.phase(), EntrancePhase::Settled);
+        assert!(!motion.animating_with_preference(false));
     }
 
     #[test]

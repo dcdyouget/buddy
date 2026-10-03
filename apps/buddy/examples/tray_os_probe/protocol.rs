@@ -78,7 +78,7 @@ impl Fixture {
         );
         for phase in ["show", "settings", "autostart-enable", "autostart-disable"] {
             println!(
-                "[S07-09/13] 等待 {}.ready 后，实际点击，再执行 touch {}.continue",
+                "[S07-09/13] 等待 {}.ready 后，实际点击，再执行 touch {}",
                 phase,
                 self.marker(&format!("{phase}.continue")).display()
             );

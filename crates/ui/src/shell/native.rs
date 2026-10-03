@@ -107,6 +107,9 @@ pub(crate) fn prepare_main_window(
 }
 
 #[cfg(target_os = "macos")]
+const NS_WINDOW_ANIMATION_NONE: i64 = 2;
+
+#[cfg(target_os = "macos")]
 impl PreparedMainWindow {
     pub(crate) fn apply_and_show(self) -> Result<NativeWindowSnapshot, NativeWindowError> {
         ensure_main_thread()?;
@@ -123,6 +126,9 @@ impl PreparedMainWindow {
                 | if self.resizable { NS_RESIZABLE } else { 0 };
             let _: () = objc::msg_send![native, setStyleMask: mask];
             let _: () = objc::msg_send![native, setHasShadow: objc::runtime::NO];
+            // GPUI PopUp 默认 UtilityWindow 动画与 AppShell 入场叠加，实测第三帧
+            // 阻塞约 477ms。首次显示前关闭 AppKit 自动显隐动画，统一由 GPUI 绘制。
+            let _: () = objc::msg_send![native, setAnimationBehavior: NS_WINDOW_ANIMATION_NONE];
             let _: () = objc::msg_send![native, setLevel: NS_NORMAL_WINDOW_LEVEL];
             apply_content_layer(native)?;
             let _: () = objc::msg_send![native, orderFrontRegardless];

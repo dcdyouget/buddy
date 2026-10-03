@@ -9,6 +9,8 @@ from verify_phase06 import Case, ROOT, run
 UNIT=("cargo","test","-q","-p","buddy-ui","--lib","shell::entrance::tests")
 GUI=("cargo","run","-q","-p","buddy-app","--example","shell_preview","--","--selftest-entrance")
 CASES=[
+    Case("native-animation","crates/ui/src/shell/native.rs","const NS_WINDOW_ANIMATION_NONE: i64 = 2;","const NS_WINDOW_ANIMATION_NONE: i64 = 4;",GUI,"timing=false"),
+    Case("followup-frame","crates/ui/src/shell/entrance.rs","self.phase == EntrancePhase::Entering && !reduced_motion","self.phase == EntrancePhase::Entering && reduced_motion",UNIT,"FAILED"),
     Case("reduced-play","crates/ui/src/shell/entrance.rs","fn play_with_preference(&mut self, reduced_motion: bool) {\n        self.phase = if reduced_motion {","fn play_with_preference(&mut self, reduced_motion: bool) {\n        self.phase = if false && reduced_motion {",UNIT,"FAILED"),
     Case("reduced-reset","crates/ui/src/shell/entrance.rs","fn reset_with_preference(&mut self, reduced_motion: bool) {\n        self.phase = if reduced_motion {","fn reset_with_preference(&mut self, reduced_motion: bool) {\n        self.phase = if false && reduced_motion {",UNIT,"FAILED"),
     Case("duration","crates/ui/src/shell/entrance.rs","motion::DURATION_NORMAL as u64","motion::DURATION_NORMAL as u64 + 50",UNIT,"FAILED"),

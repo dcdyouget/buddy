@@ -17,11 +17,11 @@
 | 04 | Markdown 栈 | 9 | **9** | S01-01 |
 | 05 | 聊天界面 | 18 | **18** | S03-*, S04-* |
 | 06 | 设置界面 | 6 | **6** | S03-* |
-| 07 | 应用外壳与窗口行为 | 13 | **8** | S01-01 |
+| 07 | 应用外壳与窗口行为 | 13 | **10** | S01-01 |
 | 08 | 更新与发布 | 11 | 0 | S07-* |
 | 09 | 平台对齐（Windows） | 9 | 0 | macOS 全链路验收 |
 | 10 | 测试与验收 | 7 | 0 | 与 02-09 并行 |
-| | **合计** | **104** | **72** | |
+| | **合计** | **104** | **74** | |
 
 > **准入条件是必要条件而非充分条件**：具体以各 spec 自身的「依赖」列为准（`RULES.md` §9.2）。
 > 规范强制 **Phase 单调性**：Phase `NN` 的 spec 只能依赖 Phase ≤ `NN` 的 spec（`RULES.md` §9.1）。
@@ -176,11 +176,11 @@
 | S07-04 | Esc / 点击外部关闭（不断流） | S07-02 | `done` | `phase-07/S07-04-dismiss.md` |
 | S07-05 | 置顶与全工作区可见 | S07-02 | `done` | `phase-07/S07-05-window-level.md` |
 | S07-06 | 多显示器与窗口定位 | S07-01 | `done` | `phase-07/S07-06-positioning.md` |
-| S07-07 | 窗口拖动与选择隔离 | S07-02 | `doing` | `phase-07/S07-07-drag-selection.md` |
-| S07-08 | 入场动画与减弱动效 | S07-02 | `blocked` | `phase-07/S07-08-entrance-motion.md` |
-| S07-09 | tray 图标与菜单 | S00-03 | `doing` | `phase-07/S07-09-tray.md` |
+| S07-07 | 窗口拖动与选择隔离 | S07-02 | `done` | `phase-07/S07-07-drag-selection.md` |
+| S07-08 | 入场动画与减弱动效 | S07-02 | `doing` | `phase-07/S07-08-entrance-motion.md` |
+| S07-09 | tray 图标与菜单 | S00-03 | `done` | `phase-07/S07-09-tray.md` |
 | S07-10 | 开机自启 | S00-03 | `done` | `phase-07/S07-10-autostart.md` |
-| S07-11 | 单实例与生命周期（无窗口存活 / 休眠唤醒） | S07-01 | `blocked` | `phase-07/S07-11-lifecycle.md` |
+| S07-11 | 单实例与生命周期（无窗口存活 / 休眠唤醒） | S07-01 | `doing` | `phase-07/S07-11-lifecycle.md` |
 | S07-12 | 窗口行为自检模式（探测静默 no-op） | S07-02 | `done` | `phase-07/S07-12-behavior-selfcheck.md` |
 | S07-13 | 自启与数据目录设置 UI | S07-01, S07-10 | `blocked` | `phase-07/S07-13-shell-settings.md` |
 
@@ -397,3 +397,14 @@
 | 2026-10-04 | S07-12 | `doing` → `done` | `1b388d8`；真实产品自检 T12-01～04 PASS，原生 shadow 变异 1/1 有效、恢复复测 PASS；210 单测、8 组预览及门禁 rc=0。复用同工厂已验浅深渲染，Windows 留 Phase 09。Phase 07 7→8，合计 71→72。 |
 
 | 2026-10-04 | S07-09 | `blocked` → `doing` | S07-12 完成后恢复真实托盘菜单验收；专用 supervisor / sandbox / LaunchAgent，OS 点击串行，禁止合成回调替代或影响用户自启项。 |
+
+| 2026-10-04 | S07-07 | `doing` → `done` | `a3d8b60`；定位外部系统权限弹窗遮挡，专用窗口受控起点后独立 / 完整串联 T52 PASS；5/5 拖动有效拦截及既有 Markdown 4/4，真实选区 / 设置截图读取，门禁 rc=0。整体 shell 仅 T53 仍失败，明确归 S07-08。Phase 07 8→9，合计 72→73。 |
+
+| 2026-10-04 | S07-08 | `blocked` → `doing` | S07-07 完成后恢复动画定位；修正 144Hz 下固定采样帧上限风险，保留 >=3 帧和 200ms 终态断言，并继续定位实际 500ms 停顿。与 S07-09 并行，GUI 串行。 |
+
+| 2026-10-04 | S07-09 | `doing` → `blocked` | 真实 OS 左/右键、设置、自启开关、退出及清理通过，Settings→Show 变异有效失败并还原；系统浅色图标尚缺实际渲染证据，进程 Aqua 属性不等于浅色系统菜单，不标 done。 |
+| 2026-10-04 | S07-11 | `blocked` → `doing` | 桌面已解锁，补真实二进程 IPC 唤回同一窗口/Router、重绑后 OS F19 输入；真实休眠仍单列证据边界。与 S07-08 并行，GUI 串行。 |
+| 2026-10-04 | S07-08 | `doing` → `blocked` | ZED_MEASUREMENTS 确认第三帧约 477ms；等价固定几何 A/B 无改善，已还原，仍不满足 T53。保留失败并先完成独立托盘验收。 |
+| 2026-10-04 | S07-09 | `blocked` → `doing` | 短暂切换真实系统浅色，已读取浅色原生菜单、图标和勾选实图，全链路 rc=0；finally 恢复原深色并读回。收尾证据、设计段落退役与门禁。 |
+| 2026-10-04 | S07-09 | `doing` → `done` | 产品 0d9903f、OS 探针 a3d8b60；真实左右键、设置、自启开关、退出与清理通过，Settings 回调 OS 变异有效FAIL并恢复PASS；浅/深系统实图已读且恢复原外观。托盘设计段落退役，空 pages-and-states 整份删除并更新索引。Phase 07 9→10，合计 73→74。 |
+| 2026-10-04 | S07-08 | `blocked` → `doing` | 托盘验收收尾后继续定位真实帧停顿；核查 GPUI PopUp 的 AppKit UtilityWindow 动画与 present 交互，保留原时序断言。 |

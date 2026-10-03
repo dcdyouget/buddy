@@ -19,7 +19,7 @@
 - S07-07 后续滚轮与返回失败已定位为 UserNotificationCenter 权限弹窗遮挡；仅移专用测试窗口后完整 T52 PASS，未操作系统权限弹窗。两项修正变异结果见本项 spec。
 - S07-08 实际帧在约 20ms 后停滞至约 500ms；焦点正常、几何读回不阻塞。144Hz/60Hz 虚拟显示链路只是待查假设，不能当根因或放宽 200ms 断言。
 - S07-12 解锁后的真实产品自检、native-shadow 1/1 有效拦截、恢复复测均已通过；当前提交验证见该项 spec。
-- S07-09 / S07-13 仍需真实托盘菜单点击；已有 tray_preview 仅打印动作，不能代替 Router / 自启链路验收。专用 LaunchAgent 必须由外部 supervisor 清理，不依赖 AppKit 退出后 main 返回。
+- S07-09 / S07-13 的真实托盘左/右键、设置、自启开关、退出已通过 `tray_os_probe`，专用 LaunchAgent / sandbox 由 supervisor 清理。Settings→Show 真实 OS 变异有效失败，恢复后 rc=0。浅/深真实系统外观下菜单、模板图标与勾选实图已读；浅色验收结束后 finally 恢复原深色，临时进程外观诊断已删除。
 - S07-11 的真实 OS IPC 唤回与热键 / 休眠边界仍待验收；已有生命周期和退出等待拦截见对应 spec。
 
 ---
@@ -183,7 +183,7 @@ S01-06 剩余范围（均无需屏幕权限）：页面×状态清单（供目�
 | 33 | S07-06 | 单屏定位、移动防抖、底边锚定 | 解锁后 `shell_preview --selftest-positioning`；再 `python3 scripts/shell/verify_positioning.py`，最后完整 `shell_preview --selftest`。GUI 自测和变异串行，变异期间全体源码 / cargo 冻结 | T51 真实移动后 160ms 保存最后位置；隐藏后故意移走原生窗口，热键恢复；页面展开固定底边和水平中心并裁剪工作区，普通切页保留用户尺寸。191 UI 单测与纯逻辑 9/9 有效拦截已通过；4 项 GUI 有效拦截及紧凑 / 展开实际渲染已通过。完整 shell 串联也在负坐标的第二块虚拟屏通过；物理多屏、混合 DPI、拔插无独立证据。 |
 | 34 | S07-07 | 真正拖动与选择隔离 | 解锁后 `shell_preview --selftest-drag`，再 `python3 scripts/shell/verify_drag.py`；Markdown 边界用 `python3 scripts/shell/verify_markdown_drag.py`。独占源码 / cargo，GUI 串行 | T52 同一主窗口 / Router：边缘、正文行尾、空 transcript、紧凑输入和设置边缘位移 45×35；字形选区 OS 复制精确，按钮、非空输入与滚动不移动窗口。2026-10-04 滚轮 / 返回失败已定位为系统权限弹窗遮挡；移专用测试窗后完整 T52 PASS，真实选区 / 设置截图已读取。Markdown 4/4、失活设置拖动隔离 1/1 有效拦截；新增 Markdown 传播隔离块无独立自动化证据。 |
 | 35 | S07-08 | 入场实际帧与减弱动态 | 解锁后 `shell_preview --selftest-entrance`、`python3 scripts/shell/verify_entrance.py`；最后完整 `shell_preview --selftest` | T53 同一 runtime / Router 采样真实 render 帧，紧凑唤回播放，普通切页不重播，展开页静态；原生 bounds 不动。纯逻辑 6/6 有效拦截；T53 / 两项 GUI 拦截与系统减弱动态另一个状态尚无证据。v1 的 260ms DOM 清理保护在 GPUI 为 200ms 视觉结束即 settled，单独登记。 |
-| 36 | S07-09 | 系统托盘图标、点击与中文菜单 | `tray_preview` 只打印真实动作且不改登录项；`tray_preview --selftest` 检查原生菜单状态。生产入口装配 services；解锁后验收实际左键呼出、右键菜单、设置与退出 | v1 的设置… / 开机自启 / 分隔 / 退出；左键始终呼出并按鼠标屏定位。原生状态与映射 3/3 有效拦截；浅深图标及真实 OS 菜单点击尚待解锁。自检需显式析构 tray 后返回失败码，AppKit terminate 本身固定以 0 退出。 |
+| 36 | S07-09 | 系统托盘图标、点击与中文菜单 | `tray_preview` 只打印真实动作且不改登录项；`tray_preview --selftest` 检查原生菜单状态。生产入口装配 services；解锁后验收实际左键呼出、右键菜单、设置与退出 | v1 的设置… / 开机自启 / 分隔 / 退出；左键始终呼出并按鼠标屏定位。原生状态与映射 3/3 有效拦截；真实 OS 菜单全链路及 Settings→Show 变异已完成，恢复 rc=0；浅/深真实系统图标、菜单与勾选实图已读，系统外观已恢复。自检需显式析构 tray 后返回失败码，AppKit terminate 本身固定以 0 退出。 |
 | 37 | S07-10 | LaunchAgent 注册与配置失败恢复 | `autostart_probe`；`autostart_preferences_preview --selftest`；`python3 scripts/shell/verify_services.py`。全部使用唯一专用登录项，自测后检查无 BuddyS0710*.plist 残留 | 真实注册文件开启 / 关闭、ProgramArguments 路径读回；配置写盘失败前确认 OS 已开启，再读回恢复关闭；配置与其他字段保持。5/5 有效拦截，增强原生回滚后定向 2/2；不把 plist 存在当作已经完成真实注销登录启动。 |
 | 38 | S07-11 | 单实例、退出清理与休眠唤醒 | `lifecycle_probe`；`python3 scripts/shell/verify_lifecycle.py`；解锁后补真实隐藏唤醒与 OS 热键读回。双进程 ACK、stale socket、锁文件和注销回收已有专用探针；真实 GPUI quit 的再次异步 App 借用已改为同步资源清理 | 双进程只保留 owner；隐藏窗口继续流式；退出释放热键、外点监听、tray、IPC；模拟 `on_system_wake` 只能证明重臂逻辑，不能替代真实睡眠 / 唤醒。真实睡眠唤醒、锁屏下激活 / 热键和已有实例重新聚焦仍缺证据；生命周期/诊断 9/9，另有 700ms 延迟真实保存退出 1/1 有效拦截；原生完整诊断尚未运行。 |
 | 39 | S07-12 | 产品窗口行为自检 | `cargo run -p buddy-app --bin buddy -- --selfcheck-window`；解锁桌面后读取真实原生窗口属性、工作区、移动恢复、隐藏 / 显示激活。锁屏或 CGEvent 权限不足必须输出 `BLOCKED` 并返回非零 | `selfcheck.rs` 的纯判定 fixture 逐字段坏值拦截有效，但只证明判定逻辑；不能替代真实 OS 读回。锁屏时产品自检明确阻塞，不将焦点失败伪装为 PASS；2026-10-04 T12-01～04 全 PASS，native-shadow 1/1 有效拦截，恢复后复测 PASS；详见本项 spec。 |

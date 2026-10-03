@@ -37,8 +37,7 @@
 
 | 设计文档 | 退役于 spec | why 迁移要求 |
 |---------|------------|-------------|
-| `docs/design/rust-architecture.md`（已部分退役，剩余：生命周期 / 托盘 / 定位职责及旧模块追溯） | S02-*, S07-11 | 模块职责边界的理由需迁移到 crate 级文档注释 |
-| `docs/design/pages-and-states.md`（已部分退役，剩余：系统菜单栏设置入口 S07-09 与光标屏幕定位 S07-06） | S07-*, S10-03 | 剩余段落随各 spec 实现后删除 |
+| `docs/design/rust-architecture.md`（已部分退役，剩余：生命周期及旧模块追溯） | S02-*, S07-11 | 模块职责边界的理由需迁移到 crate 级文档注释 |
 | `docs/design/overview.md` | 最后 | 架构约束需先迁移到 `AGENTS.md` 后再删 |
 
 > 上表中不存在的路径已被移除（原列有 `docs/design/colors_and_type.css` 与 `docs/design/prototypes/`）。
@@ -76,6 +75,8 @@
 
 | 2026-10-03 | `docs/design/rust-architecture.md` SavedWindowPositions / 定位职责；`docs/design/pages-and-states.md` 窗口定位段（部分，其余生命周期 / 托盘保留） | S07-06 | 焦点屏与鼠标屏来源、呼出按完整 frame、resize 按 work area、底边锚定及运行期 UUID key → S07-06 决策记录与 `crates/ui/src/shell/positioning.rs` / `positioning_controller.rs`。 |
 
+| 2026-10-04 | `docs/design/rust-architecture.md` 托盘模块映射与职责 | S07-09 | 中文设置 / 自启 / 退出菜单、左键呼出、主线程原生对象生命周期与 GPUI 事件桥 → S07-09 决策记录及 `crates/ui/src/shell/tray.rs`、`services.rs`；真实 OS 点击、浅深系统外观和清理证据记录在 S07-09。 |
+
 ## 退役记录
 
 > 每次删除后追加。**必须同时更新 `AGENTS.md` 的 Document Index 表。**
@@ -96,3 +97,5 @@
 | 2026-09-27 | `docs/design/design-tokens.md`（整份） | S03-02（颜色）、S03-03（圆角 / 阴影）、S03-04（排版 / 间距 / 动效）→ `crates/ui/src/theme_system/`（`tokens.rs` 由 `global.css` 生成，WebKit 全量验证） | 品牌色唯一、圆角刻度 → AGENTS.md 硬约束 2、3（生成器另行断言）；「禁止硬编码」→ 硬约束 5（S03-07 加脚本守卫）；阴影用途表 → `theme_system/mod.rs` 模块文档；排版角色 → `theme_system::typography`（以 v1 `.t-*` 实际定义为准）。**文档与代码不符之处**：表面色 8 处（半透明 rgba vs 实色）；列出的 `t-display` / `t-overline` 在代码中从未存在，`body` 字号写 14 而 `.t-body-sm` 实为 13；「红色警告底色 `rgba(220,38,38,0.12)` 例外」在 v1 代码中 0 处使用。S01-06 的 `extract_tokens.py` 改为读 git 历史版本（`e91bbc3:`），基线仍可复现 |
 
 > **注**：`.design/` 未被 git 跟踪，删除不产生 git 记录，仅在此登记以保留删除事实。
+
+| 2026-10-04 | `docs/design/pages-and-states.md` | S07-09（最后托盘段）；先前各段见部分删减记录 | 最后设计正文已由 S07-09 实现，文件仅剩历史迁移头和空 Pages，依 RULES §7.2 整份删除；页面、交互、设置与托盘 why 已在对应 S05 / S06 / S07 spec，S10-03 继续核对运行代码与 v1 基线。 |
