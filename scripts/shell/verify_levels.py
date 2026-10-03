@@ -13,10 +13,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "settings"))
 from verify_phase06 import Case, ROOT, run
 
 GUI = ("cargo", "run", "-q", "-p", "buddy-app", "--example", "shell_preview", "--", "--selftest-level")
+MENU_GUI = GUI[:-1] + ("--selftest-behavior",)
+MENU_FAIL = "T48 同应用模型菜单保持主窗 level=0：false"
 FAIL = "FAIL S07-05"
 CASES = [
+    Case("native-focus-restore", "crates/ui/src/shell/visibility.rs", "if state.is_visible && state.is_key {\n                self.restore_normal_level()?;", "if state.is_visible && state.is_key {\n                let _ = state;", GUI, FAIL),
+    Case("same-app-focus-level", "crates/ui/src/shell/visibility.rs", " && !state.app_is_active", " && (!state.app_is_active || !state.is_key)", MENU_GUI, MENU_FAIL),
+    Case("external-deactivation-level", "crates/ui/src/shell/visibility.rs", "setLevel: -1i64", "setLevel: 0i64", GUI, FAIL),
     Case("all-spaces-collection", "crates/ui/src/shell/native.rs", "let _: () = objc::msg_send![native, setLevel: NS_NORMAL_WINDOW_LEVEL];", "let _: () = objc::msg_send![native, setLevel: NS_NORMAL_WINDOW_LEVEL];\n            let _: () = objc::msg_send![native, setCollectionBehavior: 0u64];", GUI, FAIL),
-    Case("normal-show-level", "crates/ui/src/shell/visibility.rs", "setLevel: 0i64", "setLevel: 3i64", GUI, FAIL),
+    Case("normal-show-level", "crates/ui/src/shell/visibility.rs", "setLevel: 0i64", "setLevel: 3i64", MENU_GUI, MENU_FAIL),
 ]
 
 
@@ -37,7 +42,7 @@ def main() -> int:
     print(f"日志目录：{logs}", flush=True)
     for index, command in enumerate(dict.fromkeys(case.command for case in cases)):
         rc, output = run(command, logs / f"baseline-{index}.log")
-        marker = "PASS S07-05" if command == GUI else "test result: ok."
+        marker = "PASS S07-05" if command == GUI else "PASS S07-03/S07-04 behavior"
         if rc or marker not in output or "running 0 tests" in output:
             print(f"基线失败 rc={rc}：{output}", flush=True)
             return 1
@@ -55,7 +60,7 @@ def main() -> int:
             rc, output = run(case.command, logs / f"{case.name}.log")
         finally:
             path.write_bytes(original)
-        intercepted = rc not in (0, 124) and case.fail_marker in output and "T50:" in output and "error[E" not in output and "could not compile" not in output and not any(marker in output for marker in ("权限预检未通过", "会话已锁定", "未获得 CGEventPost 权限"))
+        intercepted = rc not in (0, 124) and case.fail_marker in output and ("T50:" in output if case.command == GUI else MENU_FAIL in output) and "error[E" not in output and "could not compile" not in output and not any(marker in output for marker in ("权限预检未通过", "会话已锁定", "未获得 CGEventPost 权限"))
         results.append(intercepted)
         print(f"{'PASS' if intercepted else 'FAIL'} {case.name}: rc={rc}; 源码已还原", flush=True)
         if not intercepted:

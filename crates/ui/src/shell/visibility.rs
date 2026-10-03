@@ -109,6 +109,34 @@ impl PreparedVisibility {
         }
     }
 
+    /// 全屏辅助 panel 外部失活时降低到普通应用以下；仍可见且不断流。
+    pub(crate) fn sync_focus_level(&self) -> Result<(), VisibilityError> {
+        #[cfg(target_os = "macos")]
+        {
+            ensure_main_thread()?;
+            let state = self.probe()?;
+            if state.is_visible && !state.app_is_active {
+                unsafe {
+                    let _: () = objc::msg_send![*self.native, setLevel: -1i64];
+                }
+            } else if state.is_visible && state.is_key {
+                self.restore_normal_level()?;
+            }
+        }
+        Ok(())
+    }
+
+    fn restore_normal_level(&self) -> Result<(), VisibilityError> {
+        #[cfg(target_os = "macos")]
+        {
+            ensure_main_thread()?;
+            unsafe {
+                let _: () = objc::msg_send![*self.native, setLevel: 0i64];
+            }
+        }
+        Ok(())
+    }
+
     /// 显示窗口并取得焦点，用于全局热键重新唤起。
     pub(crate) fn show_and_focus(&self) -> Result<VisibilitySnapshot, VisibilityError> {
         #[cfg(target_os = "macos")]
@@ -121,7 +149,7 @@ impl PreparedVisibility {
                     return Err(VisibilityError::NullObject("NSApplication"));
                 }
                 let _: () = objc::msg_send![app, activateIgnoringOtherApps: objc::runtime::YES];
-                let _: () = objc::msg_send![*self.native, setLevel: 0i64];
+                self.restore_normal_level()?;
                 let _: () = objc::msg_send![*self.native, orderFrontRegardless];
                 let _: () = objc::msg_send![
                     *self.native,

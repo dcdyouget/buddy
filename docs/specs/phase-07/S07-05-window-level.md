@@ -8,7 +8,7 @@
 
 ## 目标
 
-依当前 v1 普通 level 0 + 前置 / 激活，不永久置顶。
+唤起时沿用 v1 普通 level 0 + 前置 / 激活；外部应用重新激活后不持续覆盖。
 
 ## 输入
 
@@ -19,7 +19,7 @@
 
 ## 实现要点
 
-- 依当前 v1 普通 level 0 + 前置 / 激活，不永久置顶。
+- 唤起时沿用 v1 普通 level 0 + 前置 / 激活；外部应用重新激活后不持续覆盖。
 - 探测 AllSpaces / FullScreenAuxiliary，协调独立模型菜单；Windows 实测留 Phase 09。
 
 ## 验收标准
@@ -30,40 +30,25 @@
 
 ## 证据
 
-实现与接线已完成，尚未通过真实系统验收：
-
-- `apps/buddy/examples/shell_preview/fullscreen_target.rs` 启动独立 GPUI child，使用普通
-  `WindowKind::Normal`，通过 `Window::toggle_fullscreen()` 进入真实全屏 Space。只有
-  `is_fullscreen=true`、`is_window_active=true` 、真实 `isOnActiveSpace=true` 和 bounds 覆盖整屏同时成立才写 READY；
-  child 重新激活写 ACK，退出前先切回 windowed 并写 DONE。
-- `crates/ui/src/shell/workspaces.rs` 通过 GPUI raw window handle 和 AppKit `objc_msgSend`
-  实际读回 `NSWindow.windowNumber`、`isOnActiveSpace`、fullscreen style mask 与 frame；
-  `apps/buddy/examples/shell_preview/level_native.rs` 再通过 CoreGraphics
-  `CGWindowListCopyWindowInfo` 保存 on-screen window stack 的窗口号、层级和 bounds 相交关系。
-  主窗口验收值为 `level=0`、`collection_behavior=0x101`，覆盖判定必须命中 child 的真实
-  window number 及前台栈相交窗口。
-- `apps/buddy/examples/shell_preview/t50_level.rs` 复用 Runtime 中已有主窗口和已安装的
-  唯一热键，顺序执行：child READY → 热键唤起 Buddy → 主窗口原生读回 → child ACK 再次
-  激活 → 主窗口失活且 child 仍全屏 → RAII 退出清理。不会再次 install runtime。
-- 可选真实渲染证据：设置 `BUDDY_SHELL_T50_CAPTURE_DIR` 后，测试在
-  `fullscreen-child`、`buddy-in-fullscreen`、`child-recovered` 三个阶段写 `.ready`，
-  等待外部 `screencapture` 完成后写对应 `.continue`；普通自测不启用该人工 checkpoint。
-
-当前未宣称通过：主入口 `--selftest-level` 已接线；`scripts/shell/verify_levels.py` 准备两项 GUI 变异（强制 collection=0、呼出 level=3），尚未运行。必须看到 T50 自身失败才算有效拦截，前置热键失败不能代替。Windows 行为留 Phase 09。
-
-2026-10-03：`--selftest-positioning` 的 T47 前置返回锁屏预检失败（rc=1、未投递事件）；只读复核 CGSSessionScreenIsLocked=1、CGPreflightPostEventAccess=true。T50 未运行，三阶段截图未读取，无独立全屏 / 层级 GUI 拦截证据。
-
-主窗口激活后通过 query 标记要求 child 重新读取原生状态，避免旧 READY 冒充当前 Space；窗口栈必须证明 Buddy 在 child 前，child 重激活后则在 Buddy 前并相交；退出全屏还检查同一主窗口在普通 Space 可用。这些断言已经实现，不能视作已通过。
-
-2026-10-03 静态回归：chat / pages / app / markdown / streaming / settings preview 的 `--selftest`、settings 的 `--selftest-preferences`、shell 的 `--selftest-window` 共 8 组 rc=0 / PASS（`/tmp/preview-s0706-summary.log`）。T45 已在当前定位接线上验证尺寸策略，T46 读回 level=0 / collection=257 等原生属性；锁屏下这些值不能证明真实工作区 / 聚焦 / 系统定位行为。完整 `--selftest` 待解锁后执行。
-
-2026-10-03：暂存后运行 `scripts/gate.sh`，rc=0，输出「gate: 全部通过」（`/tmp/gate-s0706.log`）；门禁不代替上述待验 GUI 行为。
+- `fullscreen_target.rs` 是专用独立普通窗口进程，通过真实全屏 Space，只有 native fullscreen、key window、NSApplication.isActive、isOnActiveSpace 和整屏 bounds 都成立才写 READY。初版 `titlebar: None` 导致 GPUI 不设置 Resizable、全屏静默失败；改为 Some(Default) 后真实全屏成功。未更改产品无装饰配置。
+- `workspaces.rs` 从真实 raw window handle 读窗口号、AppKit Space / fullscreen / app-active；`level_native.rs` 以该窗口号查询 CGWindowList 的真实栈与相交 bounds，不用位置猜身份。T50 复用 T47 安装的唯一主窗口 / Router，并要求 child 在 Buddy 激活后重新响应 query，避免旧 READY 冒充当前状态。
+- 实测发现：PopUp NSPanel 即使 level=0，仍会在全屏 child 重新激活后覆盖它。单独 orderBack、去掉 FullScreenAuxiliary 后 orderBack 均未修复；改普通 NSWindow 的隔离实验使唤起时 active_space=false。所有无效实验及临时日志已还原，没有修改断言制造通过。
+- `focus_order.rs` 订阅真实窗口激活变化；合并旧任务，在 1 秒内分四次重新读取当前 key / app-active / visible，避免 resignKey 早于应用失活的交错。外部应用激活时仅降到 level=-1，仍保留 visible、0x101、同一 Router 与流式；同应用模型菜单转焦不降层。外部 app-inactive 优先于暂存的 key 状态，避免激活交错时错误恢复普通层级；该短暂原生状态没有独立自动化复现证据。原生重新聚焦及 `show_and_focus` 共用恢复 level=0 的方法，避免直接点击重新激活后仍低于普通窗口。
+- `/tmp/level-lower.log`：T47–T49 / T50 rc=0 / PASS；Buddy 唤回时 level=0、collection=0x101、active_space=true，位于 child 前；child 再激活时 Buddy level=-1、visible=true、active=false、active_space=true，child window number 位于其前且相交；退出全屏后原主窗口普通 Space 可用。
+- 实际渲染：设置 `BUDDY_SHELL_T50_CAPTURE_DIR=/tmp/buddy-t50-final`，各阶段 `.ready` 后 `screencapture -x` 并写 `.continue`；已读取 `/tmp/buddy-t50-final-fullscreen-child.png`、`/tmp/buddy-t50-final-buddy-in-fullscreen.png`、`/tmp/buddy-t50-final-child-recovered.png`，分别为全屏目标、Buddy 前置、目标重新覆盖 Buddy。带截图检查点自测 rc=0（`/tmp/level-final-capture.log`），图片不入库。
+- T48 增加同应用模型菜单保持主窗 level=0 的原生读回；已通过。T50 另增加绕过 runtime::show 的原生重新激活恢复 level=0 验证，拦截基线已通过。
+- `python3 scripts/shell/verify_levels.py` rc=0，5/5 有效拦截（`/tmp/level-interception-final.log`）：native-focus-restore / external-deactivation-level / all-spaces-collection 均到 T50 后按对应字段 FAIL；same-app-focus-level / normal-show-level 由 T48 新增的原生 level=0 断言明确返回 false，不把任意前置失败算作拦截。基线完整 PASS，逐项故意改坏后均已还原原始字节。
+- 最终激活分支顺序修正后，定向重跑 native-focus-restore / same-app-focus-level / external-deactivation-level，3/3 有效拦截，两个 GUI 基线通过（`/tmp/level-focus-order-interception.log` rc=0）。
+- 191 UI 单测通过；8 组独立预览回归 rc=0（`/tmp/preview-s0705-final-summary.log`）。首次完整 shell 串联因 T45/T46 遗留窗口及全屏 child 退出后的焦点交错使 T51 失败；现按窗口身份清理本自测创建的窗口、先结束 child 再激活主窗，T51 增加有界聚焦前置，不放宽原定位断言。重跑完整 `shell_preview --selftest` rc=0 / 全部 PASS（`/tmp/shell-full-final.log`），合计 9 组预览有效通过。
+- 当前系统有两块 scale=2 的虚拟显示器，完整串联还在负坐标屏完成 T51；这不替代物理多屏 / 混合 DPI / 拔插证据。Windows 留用户后续执行。提交门禁 rc=0（`/tmp/gate-s0705-final.log`）。
 
 ## 决策记录
 
 | 决策 | 选择 | 理由 |
 |------|------|------|
 | 行为依据 | 当前 v1 源码 | 旧素材尺寸 / 毛玻璃 / 置顶描述不覆盖当前源码与已接受决定。 |
+| 层级偏离 v1 | 唤起 / 聚焦为 0，外部失活为 -1 | 当前 v1 NSWindow 只设普通层级；GPUI NSPanel 在全屏 Space 中普通 level=0 仍覆盖外部窗口。实测需外部失活时降一级才能实现“不永久覆盖”；不隐藏、不取消流式，不使用私有 CGS。 |
+| 保留 PopUp | 保留全工作区 0x101 与 NonactivatingPanel | Normal 隔离实验无法在全屏 Space 保持可用，既有原生外观与首次点击语义不变。 |
 | 视觉验收 | agent 本地读取真实渲染 | 用户已授权自行验收，不再等待用户目检。 |
 
 ## 完成记录

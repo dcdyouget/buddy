@@ -4,6 +4,7 @@
 //! 原生外观在首个可见帧之前应用；页面展开固定底边并裁剪到当前屏幕工作区。
 
 pub mod config;
+mod focus_order;
 pub mod hotkey;
 pub mod native;
 pub mod positioning;
@@ -34,6 +35,8 @@ pub struct AppShell {
     pending_position_save: Option<Task<()>>,
     pending_resize: Option<Task<()>>,
     _position_subscriptions: [Subscription; 2],
+    _focus_order_subscription: Subscription,
+    focus_order_task: Option<Task<()>>,
 }
 
 impl AppShell {
@@ -61,6 +64,8 @@ impl AppShell {
             pending_position_save: None,
             pending_resize: None,
             _position_subscriptions: position_subscriptions,
+            _focus_order_subscription: focus_order::observe(window, cx),
+            focus_order_task: None,
         }
     }
 

@@ -253,6 +253,15 @@ pub(crate) async fn run(
     let model_consumed = if model_open {
         let menu = router.read_with(cx, |router, _| router.model_menu());
         if let Some(menu) = menu {
+            cx.background_executor()
+                .timer(Duration::from_millis(80))
+                .await;
+            let menu_preserves_level = cx
+                .update_window(handle.into(), |_, window, _| {
+                    shell::native::probe_main_window(window).is_ok_and(|s| s.level == 0)
+                })
+                .unwrap_or(false);
+            println!("T48 同应用模型菜单保持主窗 level=0：{menu_preserves_level}");
             let _ = cx.update_window(menu.into(), |_, window, cx| {
                 window.dispatch_event(
                     buddy_ui::gpui::PlatformInput::KeyDown(buddy_ui::gpui::KeyDownEvent {
@@ -265,7 +274,7 @@ pub(crate) async fn run(
             });
             input::draw(handle, cx).await;
             let menu_removed = menu.read_with(cx, |_, _| ()).is_err();
-            menu_removed && visible(handle, cx) == Some(true)
+            menu_preserves_level && menu_removed && visible(handle, cx) == Some(true)
         } else {
             false
         }

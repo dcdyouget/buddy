@@ -85,6 +85,24 @@ pub(crate) async fn run(cx: &mut AsyncApp) -> bool {
     if shell::runtime::show(handle, cx).await.is_err() {
         return false;
     }
+    let mut focused = false;
+    for _ in 0..100 {
+        focused = cx
+            .update_window(handle.into(), |_, window, _| {
+                shell::native::probe_main_window(window).is_ok_and(|s| s.is_visible && s.is_key)
+            })
+            .unwrap_or(false);
+        if focused {
+            break;
+        }
+        cx.background_executor()
+            .timer(Duration::from_millis(20))
+            .await;
+    }
+    if !focused {
+        println!("FAIL T51：主窗口尚未聚焦");
+        return false;
+    }
     router.update(cx, |router, cx| router.invoked_after_idle(cx));
     let compact = wait_size(
         handle,

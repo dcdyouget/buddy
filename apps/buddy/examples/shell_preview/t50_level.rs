@@ -33,6 +33,9 @@ async fn checkpoint(dir: &Option<PathBuf>, phase: &str, cx: &mut AsyncApp) -> bo
     let proceed = dir.join(format!("{phase}.continue"));
     let _ = std::fs::create_dir_all(dir);
     let _ = std::fs::remove_file(&proceed);
+    cx.background_executor()
+        .timer(Duration::from_millis(500))
+        .await;
     if std::fs::write(&ready, phase).is_err() {
         return false;
     }
@@ -102,6 +105,9 @@ pub(crate) async fn run(cx: &mut AsyncApp) -> bool {
         && child_before
             .as_deref()
             .is_some_and(|value| value.contains("fullscreen=true active=true"));
+    if !child_ready {
+        fail!(format!("全屏 child 未就绪：{child_before:?}"));
+    }
     let _ = shell::runtime::hide(handle, cx).await;
     let before_capture = checkpoint(&capture_dir, "fullscreen-child", cx).await;
 
@@ -145,11 +151,28 @@ pub(crate) async fn run(cx: &mut AsyncApp) -> bool {
     let _ = std::fs::write(&child.activate, "ACTIVATE");
     let child_reactivated = wait_file(&child.ack, cx).await;
     let child_after = read_status(&child.status);
-    let main_after_child = level_native::probe(handle, cx);
+    let mut main_after_child = level_native::probe(handle, cx);
     let child_number = status_window_number(child_after.as_ref());
+    // Activation ACK and compositor ordering need not become observable in the same turn.
+    // Poll the exact stack predicate; a timeout remains a failure.
+    for _ in 0..150 {
+        if main_after_child.as_ref().is_some_and(|snapshot| {
+            !snapshot.active
+                && child_number.is_some_and(|id| snapshot.front_window_numbers.contains(&id))
+        }) {
+            break;
+        }
+        cx.background_executor()
+            .timer(Duration::from_millis(20))
+            .await;
+        main_after_child = level_native::probe(handle, cx);
+    }
     let main_is_covered = main_after_child.as_ref().is_some_and(|snapshot| {
         snapshot.native.is_visible
+            && snapshot.native.level == -1
+            && snapshot.native.collection_behavior == 0x101
             && !snapshot.active
+            && snapshot.is_on_active_space
             && snapshot.front_window_intersects
             && child_number.is_some_and(|number| snapshot.front_window_numbers.contains(&number))
     });
@@ -158,9 +181,36 @@ pub(crate) async fn run(cx: &mut AsyncApp) -> bool {
         && child_after.as_deref().is_some_and(|value| {
             value.contains("fullscreen=true active=true") && value.contains("active_space=true")
         });
+    println!(
+        "T50 child ACK={child_reactivated} status={child_after:?}; main after child={}",
+        level_native::describe(main_after_child.as_ref())
+    );
     let child_capture = checkpoint(&capture_dir, "child-recovered", cx).await;
+    // Native activation (e.g. clicking an exposed part) also restores normal level;
+    // this deliberately bypasses runtime::show and its explicit level restoration.
+    cx.update(|app| app.activate(true));
+    let _ = handle.update(cx, |_, window, _| window.activate_window());
+    let mut native_reactivated = false;
+    for _ in 0..150 {
+        if level_native::probe(handle, cx)
+            .as_ref()
+            .is_some_and(|snapshot| {
+                level_native::expected_main(snapshot)
+                    && snapshot.active
+                    && child_number.is_some_and(|id| !snapshot.front_window_numbers.contains(&id))
+            })
+        {
+            native_reactivated = true;
+            break;
+        }
+        cx.background_executor()
+            .timer(Duration::from_millis(20))
+            .await;
+    }
+    println!("T50: 原生重新激活恢复普通层级={native_reactivated}");
     let _ = std::fs::write(&child.exit, "EXIT");
     let child_done = wait_file(&child.done, cx).await;
+    drop(child);
     let returned_main = child_done
         && shell::runtime::show(handle, cx).await.is_ok()
         && wait_main_active(handle, cx)
@@ -177,6 +227,7 @@ pub(crate) async fn run(cx: &mut AsyncApp) -> bool {
         && main_capture
         && child_overlays_main
         && child_capture
+        && native_reactivated
         && child_done
         && returned_main;
     println!(
@@ -196,6 +247,5 @@ pub(crate) async fn run(cx: &mut AsyncApp) -> bool {
     println!(
         "T50: 主窗在全屏 child 之前={main_in_front}；退出全屏后原窗口普通 Space 可用={returned_main}；同一 runtime=true"
     );
-    drop(child);
     ok
 }

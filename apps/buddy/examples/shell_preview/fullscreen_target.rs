@@ -60,7 +60,8 @@ fn options() -> WindowOptions {
             point(px(80.0), px(80.0)),
             size(px(640.0), px(360.0)),
         ))),
-        titlebar: None,
+        // GPUI only applies NSResizableWindowMask in its Some(titlebar) branch.
+        titlebar: Some(Default::default()),
         kind: WindowKind::Normal,
         focus: true,
         show: true,
@@ -104,7 +105,7 @@ fn state(
         Some(ChildState {
             fullscreen: window.is_fullscreen()
                 && workspace.is_some_and(|value| value.is_fullscreen),
-            active: window.is_window_active(),
+            active: window.is_window_active() && workspace.is_some_and(|value| value.app_is_active),
             fills_screen: same_bounds(bounds, display_bounds),
             is_on_active_space: workspace.is_some_and(|workspace| workspace.is_on_active_space),
             window_number: workspace.map(|workspace| workspace.window_number),

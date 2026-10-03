@@ -11,6 +11,8 @@ use gpui::Window;
 pub struct WorkspaceWindowSnapshot {
     /// AppKit `windowNumber`，可与 CGWindowList 的窗口栈稳定关联。
     pub window_number: i64,
+    /// NSApplication.isActive，区别于单个窗口的 key 状态。
+    pub app_is_active: bool,
     /// AppKit `isOnActiveSpace` 的真实返回值。
     pub is_on_active_space: bool,
     /// NSWindow style mask 是否包含 `NSFullScreenWindowMask`。
@@ -93,12 +95,15 @@ pub fn probe(window: &Window) -> Result<WorkspaceWindowSnapshot, WorkspaceWindow
         if native.is_null() {
             return Err(WorkspaceWindowError::NullWindow);
         }
+        let app: *mut Object = msg_send![class!(NSApplication), sharedApplication];
+        let app_active: BOOL = msg_send![app, isActive];
         let window_number: i64 = msg_send![native, windowNumber];
         let on_active_space: BOOL = msg_send![native, isOnActiveSpace];
         let style_mask: u64 = msg_send![native, styleMask];
         let frame: Rect = msg_send![native, frame];
         Ok(WorkspaceWindowSnapshot {
             window_number,
+            app_is_active: app_active == YES,
             is_on_active_space: on_active_space == YES,
             is_fullscreen: style_mask & (1 << 14) != 0,
             frame: [

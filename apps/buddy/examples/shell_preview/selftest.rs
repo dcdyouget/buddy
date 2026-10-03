@@ -24,7 +24,7 @@ mod t50_level;
 #[path = "t51_positioning.rs"]
 mod t51_positioning;
 
-use buddy_ui::gpui::AsyncApp;
+use buddy_ui::gpui::{AppContext, AsyncApp};
 
 /// 由 `shell_preview` 示例入口调用的 T45/T46 自测入口。
 pub async fn run(cx: &mut AsyncApp) -> bool {
@@ -59,8 +59,17 @@ pub async fn run_positioning(cx: &mut AsyncApp) -> bool {
 
 /// 不投递系统键鼠，可在锁屏会话中复核既有窗口尺寸和原生属性。
 pub async fn run_windows(cx: &mut AsyncApp) -> bool {
+    let existing = cx.update(|app| app.windows());
     let t46 = t46_native::run(cx).await;
     let t45 = t45_window::run(cx).await;
+    // T45/T46 create their own windows; do not let them steal focus/Space selection
+    // from the one runtime window installed by the following behavioral tests.
+    let created = cx.update(|app| app.windows());
+    for window in created {
+        if !existing.contains(&window) {
+            let _ = cx.update_window(window, |_, window, _| window.remove_window());
+        }
+    }
     let ok = t45 && t46;
     println!(
         "{} S07-01/S07-02 window 自测",
