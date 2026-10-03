@@ -139,7 +139,7 @@ S01-06 剩余范围（均无需屏幕权限）：页面×状态清单（供目�
 
 **2026-10-03：第 30–31 项已在解锁桌面完成 T47/T48/T49 系统输入基线（rc=0）。行为变异首轮 24/25，回滚项修正变异类型后单项有效，累计 25/25；窗口拦截 23/23、182 UI 单测、9 组预览回归、浅深渲染及门禁 rc=0；实现提交 `2ddf6d6`，完成状态以注册表为准。历史锁屏不是产品缺陷或有效拦截，不要求用户再次目检确认。**
 
-**2026-10-03 恢复验收：桌面已解锁，S07-05/06 恢复 doing。第 33 项 T51 原生定位与 4 项 GUI 有效拦截已通过，实际渲染补证中；第 32 项真实全屏暴露 panel 失活后仍覆盖外部窗口，正在排查。最终状态见注册表；不可把前置失败或单测当作 GUI 验收。仅本地提交，不 push。**
+**2026-10-03 验收更新：S07-05/06 已完成真实系统验证，第 32/33 项已通过并读取实际渲染。S07-07 继续 doing，状态与计数以注册表为准。本轮仅完成 Phase 07 后做 macOS 验收，Phase 08 留用户重新设计、Phase 09 留用户在 Windows 执行。仅本地提交，不 push。**
 
 **第二批（Phase 05）：** 2026-09-28 第 8–11 项全部通过（#8 / #11 首轮反馈滚轮逐行，改为无极滚动后复核通过）。2026-09-29 第 12–15 项全部通过（S05-09 / S05-10 / S05-14 / S05-05 → `done`）；第 16 项通过（S05-16 → `done`）；第 17 项通过（S05-18 → `done`）；第 18 项通过（S05-15 → `done`）；第 19 项通过（S05-13 → `done`）。**2026-09-29 发现并修复全局缺陷：GPUI 的 `svg` 不继承父元素颜色，此前所有放在带颜色元素里的图标（输入区设置 / 模型 / 发送、操作栏复制 / 回到问题等）都没有画出来；修复后图标才真正显示，已通过的 #4 / #12 / #13 / #14 等含图标的项请顺带复看。**
 
@@ -170,8 +170,8 @@ S01-06 剩余范围（均无需屏幕权限）：页面×状态清单（供目�
 | 29 | S07-02 | 主窗口无装饰、无系统阴影、16px 圆角与首次点击 | 同一 shell 预览查看角区、标题栏和按钮；加 `-- --dark` 看深色；`-- --selftest-window` 的 T46 实际读回原生属性并模拟首击齿轮；`python3 scripts/shell/verify_window.py` 复现有效拦截和焦点漏检 | 原生标题栏 / 交通灯均无、hasShadow=false、cornerRadius=16、masksToBounds=true、普通层级 0；首次点击可进入设置。主窗口专用补丁，模型菜单保留系统阴影。23 项变异 22 项有效；native-focus 未捕获，脚本预期 rc=1，已在 spec 写明无独立自动化证据；GPUIView 内建首击、真实 OS 投递、layer wantsLayer 自身及 Windows 实测边界见 spec。 |
 | 30 | S07-03 | 系统热键三态、保存更新 / 回滚、选区草稿 | 解锁桌面后 `NO_PROXY=127.0.0.1,localhost cargo run -q -p buddy-app --example shell_preview -- --selftest-behavior`；T47 用专用 CmdOrCtrl+Alt+Shift+B/N 与独立 Carbon owner；T49 用独立 child 实际选区、OS Cmd+C 和完整热键唤起链路 | 已聚焦则隐藏，隐藏或可见失焦则唤回；旧键失效、新键生效，保存失败仍保留旧注册；选区 trim 后仅进入允许页面的草稿并恢复剪贴板，不自动发送。T47/T49 全部通过，冲突 owner 有按键 ACK，外部选区有点击及完整选区 ACK。偏离 v1：完整剪贴板恢复、写盘失败回滚注册、Carbon 独占冲突检测、复制等待 50ms 后激活。 |
 | 31 | S07-04 | Esc 优先级、真实外部点击与隐藏不断流 | 同一自测的 T48：慢流中 Esc / 点击专用 child；模型菜单、审批、添加 Provider、热键录制时按 Esc；普通设置页按 Esc。手动模式 Cmd+Q 退出 | 外点和普通 Esc 隐藏并保留 Router / 慢流到终态；菜单关闭、审批拒绝、Provider 返回、录制取消优先消费 Esc 且主窗保持可见。T48 与对应 GUI 变异已有效验证，隐藏期间完整比对 0～79 全部 token 和终态；偏离 v1：按硬约束 7 补真实外点隐藏，避免用原生失焦代替。 |
-| 32 | S07-05 | 普通层级与真实全屏 Space | 解锁后 `shell_preview --selftest-level`；再 `python3 scripts/shell/verify_levels.py`。可设 `BUDDY_SHELL_T50_CAPTURE_DIR=/tmp/buddy-t50-capture`，每个 `.ready` 对应阶段读取真实屏幕后写同名 `.continue` | T47–T49 先建立唯一 runtime，T50 child 真正满屏 / 活跃 / 当前 Space；热键后 Buddy 在该 child 前，child 再激活覆盖 Buddy；退出全屏恢复普通 Space。已接线但本轮再次锁屏未运行，不算已验收；两项 GUI 拦截待跑。 |
-| 33 | S07-06 | 单屏定位、移动防抖、底边锚定 | 解锁后 `shell_preview --selftest-positioning`；再 `python3 scripts/shell/verify_positioning.py`，最后完整 `shell_preview --selftest`。GUI 自测和变异串行，变异期间全体源码 / cargo 冻结 | T51 真实移动后 160ms 保存最后位置；隐藏后故意移走原生窗口，热键恢复；页面展开固定底边和水平中心并裁剪工作区，普通切页保留用户尺寸。191 UI 单测与纯逻辑 9/9 有效拦截已通过；4 项 GUI 拦截、单屏实际渲染待解锁，多屏硬件无独立证据。 |
+| 32 | S07-05 | 普通层级与真实全屏 Space | 解锁后 `shell_preview --selftest-level`；再 `python3 scripts/shell/verify_levels.py`。可设 `BUDDY_SHELL_T50_CAPTURE_DIR=/tmp/buddy-t50-capture`，每个 `.ready` 对应阶段读取真实屏幕后写同名 `.continue` | T47–T49 先建立唯一 runtime，T50 child 真正满屏 / 活跃 / 当前 Space；热键后 Buddy 在该 child 前，child 再激活覆盖 Buddy；退出全屏恢复普通 Space。已通过，读取三个阶段真实截图；5/5 层级有效拦截，最终焦点分支定向复测 3/3。偏离 v1：外部应用激活时 panel 降为 level=-1，原生聚焦或唤回恢复 0，同应用菜单保持 0。 |
+| 33 | S07-06 | 单屏定位、移动防抖、底边锚定 | 解锁后 `shell_preview --selftest-positioning`；再 `python3 scripts/shell/verify_positioning.py`，最后完整 `shell_preview --selftest`。GUI 自测和变异串行，变异期间全体源码 / cargo 冻结 | T51 真实移动后 160ms 保存最后位置；隐藏后故意移走原生窗口，热键恢复；页面展开固定底边和水平中心并裁剪工作区，普通切页保留用户尺寸。191 UI 单测与纯逻辑 9/9 有效拦截已通过；4 项 GUI 有效拦截及紧凑 / 展开实际渲染已通过。完整 shell 串联也在负坐标的第二块虚拟屏通过；物理多屏、混合 DPI、拔插无独立证据。 |
 
 
 | # | 来源 | 看什么 | 怎么操作 | 预期 |
