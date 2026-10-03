@@ -9,6 +9,8 @@ use super::{fullscreen_target, level_native};
 mod input;
 #[path = "os_input.rs"]
 mod os_input;
+#[path = "os_pointer.rs"]
+mod os_pointer;
 #[path = "t45_window.rs"]
 mod t45_window;
 #[path = "t46_native.rs"]
@@ -23,6 +25,10 @@ mod t49_selection;
 mod t50_level;
 #[path = "t51_positioning.rs"]
 mod t51_positioning;
+#[path = "t52_drag.rs"]
+mod t52_drag;
+#[path = "t53_entrance.rs"]
+mod t53_entrance;
 
 use buddy_ui::gpui::{AppContext, AsyncApp};
 
@@ -32,12 +38,24 @@ pub async fn run(cx: &mut AsyncApp) -> bool {
     let behavior = run_behaviors(cx).await;
     let levels = behavior && t50_level::run(cx).await;
     let positioning = levels && t51_positioning::run(cx).await;
-    let ok = windows && behavior && levels && positioning;
+    let dragging = positioning && t52_drag::run(cx).await;
+    let entrance = dragging && t53_entrance::run(cx).await;
+    let ok = windows && behavior && levels && positioning && dragging && entrance;
     println!(
-        "{} S07-01/S07-02/S07-03/S07-04/S07-05/S07-06 shell 自测",
+        "{} S07-01–S07-08 shell 自测",
         if ok { "PASS" } else { "FAIL" }
     );
     ok
+}
+
+pub async fn run_entrance(cx: &mut AsyncApp) -> bool {
+    let behavior = run_behaviors(cx).await;
+    behavior && t53_entrance::run(cx).await
+}
+
+pub async fn run_drag(cx: &mut AsyncApp) -> bool {
+    let behavior = run_behaviors(cx).await;
+    behavior && t52_drag::run(cx).await
 }
 
 pub async fn run_levels(cx: &mut AsyncApp) -> bool {

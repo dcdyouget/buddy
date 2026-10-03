@@ -22,6 +22,7 @@ pub mod attachments;
 pub mod chat_page;
 pub mod composer;
 pub mod composer_attachments;
+pub(crate) mod drag;
 pub mod empty_page;
 pub mod image_gen;
 pub mod image_gen_state;

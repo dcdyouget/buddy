@@ -28,6 +28,7 @@ use gpui::{
     MouseUpEvent, PaintQuad, Pixels, Point, ScrollWheelEvent, SharedString, Style, TextAlign, TextRun, UTF16Selection, UnderlineStyle,
     Window, WrappedLine, actions, div, fill, point, prelude::*, px, relative, size,
 };
+use crate::chat::drag::{self, DragSource};
 use std::ops::Range;
 use std::time::{Duration, Instant};
 use unicode_segmentation::UnicodeSegmentation;
@@ -306,6 +307,9 @@ pub struct TextArea {
     masked: bool,
     /// 是否接受焦点、键盘、鼠标与输入法输入。
     enabled: bool,
+    /// v1 standalone empty textarea may also begin a window drag.
+    window_drag_when_empty: bool,
+    window_drag_source: Option<DragSource>,
 }
 
 impl EventEmitter<TextAreaEvent> for TextArea {}
@@ -388,6 +392,8 @@ impl TextArea {
             style,
             masked: false,
             enabled: true,
+            window_drag_when_empty: false,
+            window_drag_source: None,
         }
     }
 
@@ -447,6 +453,12 @@ impl TextArea {
     pub fn set_style(&mut self, style: TextAreaStyle, cx: &mut Context<Self>) {
         self.style = style;
         cx.notify();
+    }
+
+    /// Configure the v1 empty-field window-drag affordance.
+    pub fn set_window_drag_when_empty(&mut self, enabled: bool, source: DragSource) {
+        self.window_drag_when_empty = enabled;
+        self.window_drag_source = enabled.then_some(source);
     }
 
     /// 是否启用密码字符绘制。
@@ -788,6 +800,15 @@ impl TextArea {
     // ── 鼠标 ──
 
     fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.window_drag_when_empty
+            && self.content.trim().is_empty()
+            && let Some(source) = self.window_drag_source.clone()
+        {
+            window.focus(&self.focus_handle, cx);
+            drag::invoke(&source, window);
+            cx.stop_propagation();
+            return;
+        }
         window.focus(&self.focus_handle, cx);
         let offset = self.offset_for_window_point(event.position);
         if event.click_count == 2 {

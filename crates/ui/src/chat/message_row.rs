@@ -12,14 +12,17 @@
 //! | `.chat-error` | 见 [`error_banner`] | 同 |
 
 use super::attachments;
+use super::drag::{self, DragSource};
 use super::rows::RowPos;
 use buddy_engine::models::ImageAttachment;
 use crate::components::{IconButtonVariant, icon_button};
 use crate::icons::{IconName, icon};
-use crate::markdown::zed_markdown::MarkdownStyle;
+use crate::markdown::zed_markdown::{MarkdownElement, MarkdownStyle};
 use crate::theme_system::{BuddyTheme, box_shadows, fonts, tokens::metrics as m};
-use gpui::{AnyElement, App, Div, FontWeight, Hsla, Image, ImageFormat, ImageSource, ObjectFit, Refineable, SharedString, TextStyleRefinement, div, img, prelude::*, px, relative};
+use gpui::{AnyElement, App, Div, FontWeight, Hsla, Image, ImageFormat, ImageSource, MouseButton, ObjectFit, Refineable, SharedString, TextStyleRefinement, div, img, prelude::*, px, relative};
+use std::cell::Cell;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 
 /// 用户消息的行高（v1 内联 `lineHeight: 1.5`）
@@ -46,10 +49,57 @@ pub fn assistant_padding(pos: RowPos) -> (f32, f32) {
     (top, bottom)
 }
 
+/// Add v1-compatible blank-body dragging without putting a full-width mouse
+/// listener over Markdown text. The Markdown element itself can distinguish a
+/// glyph hit from the surrounding blank area and preserves native selection.
+pub fn with_blank_drag(markdown: MarkdownElement, source: DragSource) -> MarkdownElement {
+    markdown.on_blank_mouse_down(move |window| drag::invoke(&source, window))
+}
+
 /// 助手行容器：左右 space-4，上下按位置
 pub fn assistant_row(pos: RowPos, content: impl IntoElement) -> Div {
     let (top, bottom) = assistant_padding(pos);
     div().w_full().px(px(m::SPACE_4)).pt(px(top)).pb(px(bottom)).child(content)
+}
+
+/// Assistant row with drag regions restricted to the row's actual padding.
+/// The content area is intentionally left without a structural listener;
+/// Markdown owns its own blank-body hit testing and controls remain isolated.
+pub fn assistant_row_with_drag(pos: RowPos, content: impl IntoElement, source: DragSource) -> Div {
+    let (top, bottom) = assistant_padding(pos);
+    div()
+        .relative()
+        .w_full()
+        .px(px(m::SPACE_4))
+        .pt(px(top))
+        .pb(px(bottom))
+        .children([
+            drag::region(&source)
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .h(px(top)),
+            drag::region(&source)
+                .absolute()
+                .bottom_0()
+                .left_0()
+                .right_0()
+                .h(px(bottom)),
+            drag::region(&source)
+                .absolute()
+                .top(px(top))
+                .bottom(px(bottom))
+                .left_0()
+                .w(px(m::SPACE_4)),
+            drag::region(&source)
+                .absolute()
+                .top(px(top))
+                .bottom(px(bottom))
+                .right_0()
+                .w(px(m::SPACE_4)),
+        ])
+        .child(content)
 }
 
 /// 用户消息正文的样式：14px / 1.5、正文色；链接不着色（v1 用户消息不识别链接）
@@ -106,6 +156,74 @@ pub fn user_row(text: impl IntoElement, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
+/// User row variant used by the transcript so the bubble's surrounding blank
+/// area remains draggable while the bubble keeps text selection and controls.
+pub fn user_row_with_drag(text: impl IntoElement, cx: &App, source: DragSource) -> AnyElement {
+    let theme = cx.buddy_theme();
+    let c = theme.colors;
+    let bubble_bounds = Rc::new(Cell::new(None::<gpui::Bounds<gpui::Pixels>>));
+    let recorded_bounds = bubble_bounds.clone();
+    let root_bounds = bubble_bounds.clone();
+    div()
+        .relative()
+        .w_full()
+        .px(px(m::SPACE_4))
+        .py(px(m::SPACE_2))
+        .flex()
+        .justify_end()
+        .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+            // Exclude the measured content box, while leaving the bubble's
+            // explicit padding draggable. Markdown owns blank glyph-area
+            // decisions inside this box; images and controls remain there too.
+            let Some(bounds) = root_bounds.get() else {
+                return;
+            };
+            let content_left = bounds.left() + px(m::SPACE_3 + 1.0);
+            let content_right = bounds.right() - px(m::SPACE_3 + 1.0);
+            let content_top = bounds.top() + px(m::SPACE_2 + 1.0);
+            let content_bottom = bounds.bottom() - px(m::SPACE_2 + 1.0);
+            if event.position.x >= content_left
+                && event.position.x <= content_right
+                && event.position.y >= content_top
+                && event.position.y <= content_bottom
+            {
+                return;
+            }
+            cx.stop_propagation();
+            drag::invoke(&source, window);
+        })
+        .child(
+            div()
+                .max_w(relative(USER_MAX_WIDTH))
+                .min_w_0()
+                .px(px(m::SPACE_3))
+                .py(px(m::SPACE_2))
+                .rounded_tl(px(m::RADIUS_MD))
+                .rounded_tr(px(m::RADIUS_MD))
+                .rounded_br(px(m::RADIUS_MD))
+                .rounded_bl(px(m::RADIUS_SM))
+                .bg(c.user_bubble)
+                .border_1()
+                .border_color(c.user_bubble_border)
+                .shadow(box_shadows(theme.shadows.shadow_static))
+                .text_color(c.text_primary)
+                .text_size(px(m::FONT_SIZE_MD))
+                .line_height(relative(USER_LINE_HEIGHT))
+                .child(text)
+                // Measurement only: no hitbox and no layout contribution.
+                .child(
+                    gpui::canvas(|_, _, _| {}, move |bounds, _, _, _| {
+                        recorded_bounds.set(Some(bounds));
+                    })
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
+                ),
+        )
+        .into_any_element()
+}
+
 /// 用户消息行，附带 v1 同样的图片缩略图带。
 pub fn user_row_with_images(
     text: impl IntoElement,
@@ -133,6 +251,38 @@ pub fn user_row_with_images(
     user_row(
         div().flex().flex_col().items_end().child(image_strip).child(text),
         cx,
+    )
+}
+
+/// User row with attachments and a structural blank drag region.
+pub fn user_row_with_images_drag(
+    text: impl IntoElement,
+    images: &[ImageAttachment],
+    has_text: bool,
+    window: &gpui::Window,
+    cx: &App,
+    source: DragSource,
+) -> AnyElement {
+    if images.is_empty() {
+        return user_row_with_drag(text, cx, source);
+    }
+    let columns = if images.len() > 1 { 2 } else { 1 };
+    let available = (f32::from(window.viewport_size().width) - m::SPACE_4 * 2.0) * USER_MAX_WIDTH
+        - m::SPACE_3 * 2.0
+        - 2.0;
+    let max_width = ((available - m::SPACE_1 * (columns - 1) as f32) / columns as f32)
+        .clamp(m::SPACE_12, 260.0);
+    let image_strip = div()
+        .grid()
+        .grid_cols(columns)
+        .max_w(px(max_width * columns as f32 + m::SPACE_1 * (columns - 1) as f32))
+        .gap(px(m::SPACE_1))
+        .when(has_text, |d| d.mb(px(m::SPACE_2)))
+        .children(images.iter().map(|image| attachment_image_sized(image, cx, max_width)));
+    user_row_with_drag(
+        div().flex().flex_col().items_end().child(image_strip).child(text),
+        cx,
+        source,
     )
 }
 

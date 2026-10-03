@@ -4,6 +4,7 @@
 //! 原生外观在首个可见帧之前应用；页面展开固定底边并裁剪到当前屏幕工作区。
 
 pub mod config;
+pub mod entrance;
 mod focus_order;
 pub mod hotkey;
 pub mod native;
@@ -19,17 +20,20 @@ pub mod workspaces;
 use crate::chat::page_state::Page;
 use crate::chat::router::{PageRouter, RouterEvent, preload};
 use crate::chat_bridge::spawn_engine;
+use crate::theme_system::{BuddyTheme, box_shadows};
 use buddy_engine::chat::ChatEngine;
 use config::ShellConfig;
 use gpui::{
-    App, AppContext, AsyncApp, Context, Entity, KeyDownEvent, Render, Subscription, Task, Window,
-    WindowHandle, div, prelude::*,
+    App, AppContext, AsyncApp, Context, Entity, Hsla, KeyDownEvent, Render, Subscription, Task,
+    Window, WindowHandle, div, prelude::*, px, relative,
 };
 use std::sync::Arc;
 
 /// 主窗口根视图；持有同一 Router 和页面变更订阅。
 pub struct AppShell {
     router: Entity<PageRouter>,
+    entrance: entrance::EntranceMotion,
+    last_entrance_frame: Option<entrance::EntranceFrame>,
     _page_subscription: Subscription,
     positions: positioning::PositionMemory,
     pending_position_save: Option<Task<()>>,
@@ -59,6 +63,8 @@ impl AppShell {
         let position_subscriptions = positioning_controller::observe(window, cx);
         Self {
             router,
+            entrance: entrance::EntranceMotion::default(),
+            last_entrance_frame: None,
             _page_subscription: subscription,
             positions: positioning::PositionMemory::default(),
             pending_position_save: None,
@@ -78,21 +84,78 @@ impl AppShell {
     pub fn saved_window_position(&self, display_key: &str) -> Option<positioning::Point> {
         self.positions.saved(display_key)
     }
+
+    /// 当前入场阶段，供真实渲染自测读取。
+    pub fn entrance_phase(&self) -> entrance::EntrancePhase {
+        self.entrance.phase()
+    }
+
+    /// 入场开始后的已采样时长，供真实帧验收读取。
+    pub fn entrance_elapsed_ms(&self) -> u64 {
+        self.entrance.elapsed_ms()
+    }
+
+    /// 最近一次真实 render 采样的 underlay 参数；稳定态或展开页为 `None`。
+    pub fn last_entrance_frame(&self) -> Option<entrance::EntranceFrame> {
+        self.last_entrance_frame
+    }
+
+    /// 隐藏时立即重置入场外壳。
+    pub(crate) fn reset_entrance(&mut self, cx: &mut Context<Self>) {
+        self.entrance.reset();
+        cx.notify();
+    }
+
+    /// 显示完成后开始紧凑页入场外壳。
+    pub(crate) fn play_entrance(&mut self, cx: &mut Context<Self>) {
+        if self.router.read(cx).page().is_compact() {
+            self.entrance.play();
+        } else {
+            self.entrance.settle();
+        }
+        cx.notify();
+    }
 }
 
 impl Render for AppShell {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .on_key_down(cx.listener(|_, event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape"
-                    && let Some(handle) = window.window_handle().downcast::<AppShell>()
-                {
-                    cx.stop_propagation();
-                    runtime::request_hide(handle, cx);
-                }
-            }))
-            .child(self.router.clone())
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let compact = self.router.read(cx).page().is_compact();
+        let frame = self.entrance.frame(compact);
+        self.last_entrance_frame = frame;
+        if self.entrance.animating() {
+            window.request_animation_frame();
+        }
+        let theme = *cx.buddy_theme();
+        let mut root = div().size_full().relative().overflow_hidden();
+        if let Some(frame) = frame {
+            let c = theme.colors;
+            root = root.child(
+                div()
+                    .absolute()
+                    .left(relative((1.0 - frame.scale_x) / 2.0))
+                    .top(relative((1.0 - frame.scale_y) / 2.0))
+                    .w(relative(frame.scale_x))
+                    .h(relative(frame.scale_y))
+                    .rounded(px(frame.radius))
+                    .overflow_hidden()
+                    .bg(Hsla::from(c.bg_surface.blend(c.buddy_primary.alpha(0.04))))
+                    .opacity(frame.opacity)
+                    .shadow(box_shadows(theme.shadows.shadow_floating_md)),
+            );
+        }
+        root.child(
+            div()
+                .size_full()
+                .on_key_down(cx.listener(|_, event: &KeyDownEvent, window, cx| {
+                    if event.keystroke.key == "escape"
+                        && let Some(handle) = window.window_handle().downcast::<AppShell>()
+                    {
+                        cx.stop_propagation();
+                        runtime::request_hide(handle, cx);
+                    }
+                }))
+                .child(self.router.clone()),
+        )
     }
 }
 

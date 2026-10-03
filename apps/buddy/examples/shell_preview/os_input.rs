@@ -134,6 +134,10 @@ mod macos {
         post(KEY_A, FLAG_COMMAND, true) && post(KEY_A, FLAG_COMMAND, false)
     }
 
+    pub(super) fn copy() -> bool {
+        post(8, FLAG_COMMAND, true) && post(8, FLAG_COMMAND, false)
+    }
+
     pub(super) fn click_screen(x: f64, y: f64) -> bool {
         const LEFT_MOUSE_DOWN: u32 = 1;
         const LEFT_MOUSE_UP: u32 = 2;
@@ -247,5 +251,15 @@ pub(crate) fn click_screen(x: f64, y: f64) -> bool {
 
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn click_screen(_: f64, _: f64) -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn copy() -> bool {
+    macos::copy()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn copy() -> bool {
     false
 }

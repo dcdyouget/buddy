@@ -1,4 +1,5 @@
 use super::*;
+use crate::chat::drag;
 
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -8,6 +9,7 @@ impl Render for SettingsView {
         let c = cx.buddy_theme().colors;
         let interactive = self.active && !self.provider_motion.interactive();
         let header = div()
+            .relative()
             .flex_none()
             .h(px(m::SPACE_12 + m::SPACE_2))
             .flex()
@@ -15,6 +17,20 @@ impl Render for SettingsView {
             .gap(px(m::SPACE_2))
             .px(px(m::SPACE_4))
             .py(px(m::SPACE_3))
+            .children([
+                drag::region_if(&self.drag_source, interactive)
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .h(px(m::SPACE_3)),
+                drag::region_if(&self.drag_source, interactive)
+                    .absolute()
+                    .bottom_0()
+                    .left_0()
+                    .right_0()
+                    .h(px(m::SPACE_3)),
+            ])
             .child(
                 div()
                     .id("settings-back")
@@ -43,6 +59,7 @@ impl Render for SettingsView {
         let models = self.render_models(interactive, cx);
         let content = div()
             .id("settings-content")
+            .relative()
             .flex_1()
             .min_h_0()
             .w_full()
@@ -54,23 +71,61 @@ impl Render for SettingsView {
             .when(!interactive, |d| d.overflow_hidden())
             .child(
                 div()
+                    .relative()
                     .w_full()
                     .flex()
                     .flex_col()
                     .p(px(m::SPACE_4))
-                    .gap(px(m::SPACE_3))
+                    .children([
+                        drag::region_if(&self.drag_source, interactive)
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .right_0()
+                            .h(px(m::SPACE_4)),
+                        drag::region_if(&self.drag_source, interactive)
+                            .absolute()
+                            .bottom_0()
+                            .left_0()
+                            .right_0()
+                            .h(px(m::SPACE_4)),
+                        drag::region_if(&self.drag_source, interactive)
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .left_0()
+                            .w(px(m::SPACE_4)),
+                        drag::region_if(&self.drag_source, interactive)
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .right_0()
+                            .w(px(m::SPACE_4)),
+                    ])
                     .child(crate::settings::controls::section(
                         "外观",
                         "选择窗口的显示模式",
                         self.theme.clone(),
                         cx,
                     ))
+                    .child(
+                        drag::region_if(&self.drag_source, interactive)
+                            .flex_none()
+                            .w_full()
+                            .h(px(m::SPACE_3)),
+                    )
                     .child(crate::settings::controls::section(
                         "呼出快捷键",
                         "在任意应用中快速打开 Buddy",
                         self.hotkey.clone(),
                         cx,
                     ))
+                    .child(
+                        drag::region_if(&self.drag_source, interactive)
+                            .flex_none()
+                            .w_full()
+                            .h(px(m::SPACE_3)),
+                    )
                     .child(models),
             );
         let provider = self.provider_motion.present().then(|| {

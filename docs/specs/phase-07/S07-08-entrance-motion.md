@@ -1,9 +1,9 @@
 # S07-08 入场动画与减弱动效
 
-> 状态: `todo`
+> 状态: `blocked`
 > Phase: 07
 > 依赖: S07-02
-> 阻塞: —
+> 阻塞: macOS 会话再次锁定；待解锁后完成 T53 实际采样、渲染及 OS 变异
 > 退役设计文档: —
 
 ## 目标
@@ -31,13 +31,16 @@
 
 ## 证据
 
-待实施后填写可复现命令、观察值、拦截结果与证据边界。
+- 已接入 `shell/entrance.rs`、AppShell underlay 与 runtime 显隐；按当前 v1 `window-surface-morph` 分属性关键帧区间应用 Theme 的 200ms / EASE_STANDARD，背景混合 Theme primary 4% + surface，整体 opacity 含阴影。正文与原生窗口尺寸不参与动画。
+- 已添加纯时间采样和减弱动态状态测试，以及复用主 runtime 的 T53：读取最近一次真实 render 的 frame / phase / elapsed，并比对 native bounds、普通切页、再次显示和展开页静态。197 项 UI 单测 rc=0（`/tmp/ui-s070708.log`）；`verify_entrance.py` 的 reduced-play / reduced-reset / duration / curve / keyframe-opacity / initial-scale 六项有效拦截并还原，rc=0（`/tmp/entrance-unit-interception.log`）。T53 与 show-trigger / expanded-static 两项 OS 变异未执行；桌面再次锁定，未计入完成。
+- 当前 v1 的装饰 underlay 大部分被不透明 Composer / NoKey 面板覆盖；不新增上层炫光或内容形变。系统减弱动态另一状态如未实际切换，不以注入布尔值的单测冒充系统证据。
 
 ## 决策记录
 
 | 决策 | 选择 | 理由 |
 |------|------|------|
 | 行为依据 | 当前 v1 源码 | 旧素材尺寸 / 毛玻璃 / 置顶描述不覆盖当前源码与已接受决定。 |
+| 状态收尾时机 | 200ms 视觉结束即 settled | v1 的 260ms 是 DOM phase 清理保护；GPUI 按采样结束停止请求帧，不额外延长不可见终态。此实现差异单独登记。 |
 | 视觉验收 | agent 本地读取真实渲染 | 用户已授权自行验收，不再等待用户目检。 |
 
 ## 完成记录

@@ -23,8 +23,9 @@
 //! （本地服务返回一张 1×1 PNG），并解码成功。
 
 use buddy_ui::gpui::{
-    App, AppContext, AsyncApp, Bounds, Context, Entity, Font, FontStyle, Hsla, Render, TextRun,
-    Window, WindowBounds, WindowHandle, WindowOptions, div, prelude::*, px, size,
+    App, AppContext, AsyncApp, Bounds, Context, Entity, Font, FontStyle, Hsla, Image, ImageFormat,
+    ImageSource, MouseButton, Render, TextRun, Window, WindowBounds, WindowHandle, WindowOptions, canvas, div,
+    prelude::*, px, size,
 };
 use buddy_ui::markdown::zed_markdown::{
     CodeBlockRenderer, ListBulletKind, Markdown, MarkdownDecorations, MarkdownElement, syntax::LanguageRegistry,
@@ -38,6 +39,9 @@ use std::time::{Duration, Instant};
 use buddy_ui::gpui_platform::application;
 use buddy_ui::markdown::{self, zed_markdown::syntax::{Rope, language_for_tag}};
 use buddy_ui::theme_system::{Appearance, BuddyTheme, Theme, fonts, set_appearance, tokens::metrics};
+
+#[path = "markdown_preview/interaction.rs"]
+mod interaction;
 
 const SAMPLES: &[(&str, &str)] = &[
     ("rust", "fn main() {\n    let answer: u32 = 42; // 注释 comment\n    println!(\"{answer}\");\n}"),
@@ -153,6 +157,7 @@ struct Preview {
     recorded: Recorded,
     /// T05：各装饰回调的调用次数
     counts: Counts,
+    interaction: Rc<interaction::InteractionState>,
 }
 
 fn doc() -> String {
@@ -263,10 +268,25 @@ impl Render for Preview {
             unreachable!("Buddy 代码块渲染器为 Custom")
         };
         let recorded = self.recorded.clone();
+        let interaction = self.interaction.clone();
+        let code_interaction = interaction.clone();
         let recording = CodeBlockRenderer::Custom {
             render: Arc::new(move |kind, parsed, range, metadata, window, cx| {
                 recorded.borrow_mut().push(code_block::code_text(parsed, &range));
-                render(kind, parsed, range, metadata, window, cx)
+                let code = render(kind, parsed, range, metadata, window, cx);
+                let bounds = code_interaction.clone();
+                code.relative().child(
+                    canvas(
+                        move |code_bounds, _window, _cx| {
+                            bounds.code_bounds.set(Some(code_bounds));
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .size_full()
+                    .absolute()
+                    .top_0()
+                    .left_0(),
+                )
             }),
             transform,
         };
@@ -276,6 +296,34 @@ impl Render for Preview {
         };
         let mut style = markdown::message_style(window, cx);
         style.decorations = counting(style.decorations, &self.counts);
+        if let Some(list_bullet) = style.decorations.list_bullet.take() {
+            let interaction = interaction.clone();
+            style.decorations.list_bullet = Some(Arc::new(move |kind, cx| {
+                let bullet = list_bullet(kind, cx);
+                if matches!(kind, ListBulletKind::Task { .. }) {
+                    let interaction = interaction.clone();
+                    div()
+                        .relative()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(bullet)
+                        .child(
+                            canvas(
+                                move |bounds, _window, _cx| {
+                                    interaction.task_bounds.set(Some(bounds));
+                                },
+                                |_, _, _, _| {},
+                            )
+                            .size_full()
+                            .absolute()
+                            .top_0()
+                            .left_0(),
+                        )
+                        .into_any_element()
+                } else {
+                    bullet
+                }
+            }));
+        }
         div()
             .size_full()
             .flex()
@@ -299,8 +347,64 @@ impl Render for Preview {
                 div().id("scroll").flex_1().overflow_y_scroll().px(px(metrics::SPACE_4)).pb(px(metrics::SPACE_6)).child(
                     MarkdownElement::new(self.md.clone(), style)
                         .code_block_renderer(recording)
-                        .on_url_click(|url, _, cx| markdown::gfm::open_link(&url, cx))
-                        .image_resolver(|url, _| markdown::gfm::image_source(url)),
+                        .on_url_click({
+                            let interaction = interaction.clone();
+                            move |url, _, cx| {
+                                interaction.url_click.set(interaction.url_click.get() + 1);
+                                if interaction.open_links.get() {
+                                    markdown::gfm::open_link(&url, cx);
+                                }
+                            }
+                        })
+                        .on_url_hover({
+                            let interaction = interaction.clone();
+                            move |url, _, _| {
+                                interaction.hovered_url.set(url.is_some());
+                            }
+                        })
+                        .on_checkbox_toggle({
+                            let interaction = interaction.clone();
+                            move |_, _, _, _| {
+                                interaction.checkbox_toggle.set(
+                                    interaction.checkbox_toggle.get() + 1,
+                                );
+                            }
+                        })
+                        .when(interaction.blank_enabled.get(), |element| {
+                            let interaction = interaction.clone();
+                            element.on_blank_mouse_down(move |_| {
+                                interaction.blank_mouse_down.set(
+                                    interaction.blank_mouse_down.get() + 1,
+                                );
+                            })
+                        })
+                        .image_resolver({
+                            let interaction = interaction.clone();
+                            move |url, _| {
+                                if url.starts_with("fixture://") {
+                                    interaction.image_resolved.set(
+                                        interaction.image_resolved.get() + 1,
+                                    );
+                                    Some(ImageSource::Image(Arc::new(Image::from_bytes(
+                                        ImageFormat::Png,
+                                        PNG_16X16.to_vec(),
+                                    ))))
+                                } else {
+                                    markdown::gfm::image_source(url)
+                                }
+                            }
+                        })
+                        .on_image_bounds({
+                            let interaction = interaction.clone();
+                            move |url, bounds| {
+                                if url.starts_with("fixture://") {
+                                    interaction
+                                        .image_bounds
+                                        .borrow_mut()
+                                        .insert(url.to_string(), bounds);
+                                }
+                            }
+                        }),
                 ),
             )
     }
@@ -308,10 +412,23 @@ impl Render for Preview {
 
 /// 1×1 透明 PNG
 const PNG_1X1: &[u8] = &[
-    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01,
-    0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41,
-    0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49,
-    0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0b, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x60, 0x00, 0x02, 0x00,
+    0x00, 0x05, 0x00, 0x01, 0x7a, 0x5e, 0xab, 0x3f, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44,
+    0xae, 0x42, 0x60, 0x82,
+];
+
+/// Local 16×16 fixture used by T08 so the observed bounds have a stable,
+/// non-zero center that can be clicked without network or fallback timing.
+const PNG_16X16: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+    0x52, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x10, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
+    0xF3, 0xFF, 0x61, 0x00, 0x00, 0x00, 0x25, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63,
+    0x8C, 0x8E, 0x7F, 0xF9, 0x9F, 0x81, 0x02, 0xC0, 0x44, 0x89, 0xE6, 0x51, 0x03, 0x20,
+    0x80, 0x89, 0x81, 0x42, 0xC0, 0x34, 0x6A, 0x00, 0xC3, 0xA8, 0x01, 0x0C, 0x94, 0x1B,
+    0x00, 0x00, 0xEF, 0xF6, 0x02, 0xC2, 0x20, 0x08, 0xA1, 0xE9, 0x00, 0x00, 0x00, 0x00,
+    0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
 ];
 
 async fn selftest_t06(handle: WindowHandle<Preview>, md: &Entity<Markdown>, cx: &mut AsyncApp) -> bool {
@@ -500,6 +617,7 @@ fn selftest_t04(handle: WindowHandle<Preview>, cx: &mut App) {
         println!("{} S04-08 T05 每个 GFM 块元素都经过 Buddy 装饰（逐类计数一致，覆盖 {} 类）", if t05 { "PASS" } else { "FAIL" }, want.len());
         let t06 = selftest_t06(handle, &md, cx).await;
         let t07 = selftest_t07(handle, &md, cx).await;
+        let t08 = interaction::selftest_t08(handle, &md, cx).await;
         // T10：整窗重绘耗时（用回完整样例文档）
         let full = doc.clone(); // 本函数开头的 `doc` 即完整样例
         md.update(cx, |m, cx| m.replace(full.clone(), cx));
@@ -509,7 +627,7 @@ fn selftest_t04(handle: WindowHandle<Preview>, cx: &mut App) {
         let t10 = median < FRAME_BUDGET_MS;
         println!("T10: 整窗重绘 30 帧，中位 {median:.2} ms（预算 {FRAME_BUDGET_MS} ms）");
         println!("{} S04 T10 重绘耗时在预算内", if t10 { "PASS" } else { "FAIL" });
-        std::process::exit(if ok && t05 && t06 && t07 && t10 { 0 } else { 1 });
+        std::process::exit(if ok && t05 && t06 && t07 && t08 && t10 { 0 } else { 1 });
     })
     .detach();
 }
@@ -741,7 +859,12 @@ fn main() {
                 |_, cx| {
                     let registry = Arc::new(LanguageRegistry::default());
                     let md = cx.new(|cx| Markdown::new(doc().into(), Some(registry), None, cx));
-                    cx.new(|_| Preview { md, recorded: Rc::default(), counts: Rc::default() })
+                    cx.new(|_| Preview {
+                        md,
+                        recorded: Rc::default(),
+                        counts: Rc::default(),
+                        interaction: Rc::new(interaction::InteractionState::default()),
+                    })
                 },
             )
             .expect("open_window 失败");

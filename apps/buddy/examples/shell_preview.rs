@@ -38,14 +38,27 @@ fn main() {
     let window_test = args.iter().any(|arg| arg == "--selftest-window");
     let level_test = args.iter().any(|arg| arg == "--selftest-level");
     let positioning_test = args.iter().any(|arg| arg == "--selftest-positioning");
+    let entrance_test = args.iter().any(|arg| arg == "--selftest-entrance");
+    let drag_test = args.iter().any(|arg| arg == "--selftest-drag");
     let dark = args.iter().any(|arg| arg == "--dark");
     application()
         .with_assets(buddy_ui::icons::Assets)
         .run(move |cx: &mut App| {
             shell::init(cx);
-            if self_test || behavior_test || window_test || level_test || positioning_test {
+            if self_test
+                || behavior_test
+                || window_test
+                || level_test
+                || positioning_test
+                || drag_test
+                || entrance_test
+            {
                 cx.spawn(async move |cx: &mut AsyncApp| {
-                    let passed = if level_test {
+                    let passed = if entrance_test {
+                        selftest::run_entrance(cx).await
+                    } else if drag_test {
+                        selftest::run_drag(cx).await
+                    } else if level_test {
                         selftest::run_levels(cx).await
                     } else if positioning_test {
                         selftest::run_positioning(cx).await

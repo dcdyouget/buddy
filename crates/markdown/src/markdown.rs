@@ -1841,8 +1841,10 @@ pub struct MarkdownElement {
     code_span_link: Option<CodeSpanLinkCallback>,
     on_source_click: Option<SourceClickCallback>,
     on_checkbox_toggle: Option<CheckboxToggleCallback>,
+    on_blank_mouse_down: Option<Rc<dyn Fn(&mut Window)>>,
     on_mermaid_zoom: Option<MermaidZoomCallback>,
     image_resolver: Option<Box<dyn Fn(&str, &App) -> Option<ImageSource>>>,
+    on_image_bounds: Option<Rc<dyn Fn(SharedString, Bounds<Pixels>)>>,
     show_root_block_markers: bool,
     autoscroll: AutoscrollBehavior,
     /// Test-only hook to observe the laid-out text when this element is
@@ -1867,8 +1869,10 @@ impl MarkdownElement {
             code_span_link: None,
             on_source_click: None,
             on_checkbox_toggle: None,
+            on_blank_mouse_down: None,
             on_mermaid_zoom: None,
             image_resolver: None,
+            on_image_bounds: None,
             show_root_block_markers: false,
             autoscroll: AutoscrollBehavior::Propagate,
             #[cfg(test)]
@@ -1950,6 +1954,19 @@ impl MarkdownElement {
         self
     }
 
+    /// Registers a callback for a left mouse down outside rendered text glyphs.
+    ///
+    /// Text, links, images, and interactive controls keep their existing mouse
+    /// behavior. The callback is intended for consumers that use the blank
+    /// portion of a markdown body as a window-drag affordance.
+    pub fn on_blank_mouse_down(
+        mut self,
+        handler: impl Fn(&mut Window) + 'static,
+    ) -> Self {
+        self.on_blank_mouse_down = Some(Rc::new(handler));
+        self
+    }
+
     /// Registers a callback invoked when a mermaid diagram's zoom level changes.
     /// Consumers that scroll the markdown can use this to keep the diagram's
     /// position anchored while it grows or shrinks.
@@ -1963,6 +1980,19 @@ impl MarkdownElement {
         resolver: impl Fn(&str, &App) -> Option<ImageSource> + 'static,
     ) -> Self {
         self.image_resolver = Some(Box::new(resolver));
+        self
+    }
+
+    /// Registers a read-only observer for each rendered image's layout bounds.
+    ///
+    /// The callback receives the image destination and the bounds from the
+    /// image overlay canvas after layout. It is intended for visual tests and
+    /// diagnostics; it does not affect image interaction or rendering.
+    pub fn on_image_bounds(
+        mut self,
+        callback: impl Fn(SharedString, Bounds<Pixels>) + 'static,
+    ) -> Self {
+        self.on_image_bounds = Some(Rc::new(callback));
         self
     }
 
@@ -2038,27 +2068,35 @@ impl MarkdownElement {
 
         let image_element = {
             let wrapper = div().id(("markdown-image-link", range.start)).min_w_0();
+            let image_bounds = Rc::new(Cell::new(None));
+            builder.push_image_bounds(image_bounds.clone());
+            let image_bounds_for_paint = image_bounds.clone();
+            let image_bounds_callback = self.on_image_bounds.clone();
+            let image_destination = dest_url.clone();
+            let image_overlay = canvas(
+                move |bounds, _window, _cx| {
+                    image_bounds_for_paint.set(Some(bounds));
+                    if let Some(callback) = image_bounds_callback.as_ref() {
+                        callback(image_destination.clone(), bounds);
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .size_full()
+            .absolute()
+            .top_0()
+            .left_0();
             let wrapper = if !self.style.prevent_mouse_interaction
                 && let Some(url) = enclosing_link_url
             {
                 let click_url = url.clone();
                 let markdown = self.markdown.clone();
                 let url_click = self.on_url_click.clone();
-                let bounds = Rc::new(Cell::new(None));
-                builder.push_image_link(url.clone(), bounds.clone());
+                builder.push_image_link(url.clone(), image_bounds.clone());
                 wrapper
                     .relative()
                     .cursor_pointer()
-                    .child(
-                        canvas(
-                            move |image_bounds, _window, _cx| bounds.set(Some(image_bounds)),
-                            |_, _, _, _| {},
-                        )
-                        .size_full()
-                        .absolute()
-                        .top_0()
-                        .left_0(),
-                    )
+                    .child(image_overlay)
                     .on_click(move |_, window, cx| {
                         if let Some(ref on_url_click) = url_click {
                             on_url_click(click_url.clone(), window, cx);
@@ -2074,9 +2112,11 @@ impl MarkdownElement {
                         }
                     })
             } else {
-                wrapper
+                wrapper.relative().child(image_overlay)
             };
-            wrapper.child(
+            wrapper
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
                 img(source)
                     .id(("markdown-image", range.start))
                     .min_w_0()
@@ -2412,6 +2452,7 @@ impl MarkdownElement {
         let on_open_url = self.on_url_click.take();
         let on_url_hover = self.on_url_hover.take();
         let on_source_click = self.on_source_click.take();
+        let on_blank_mouse_down = self.on_blank_mouse_down.take();
 
         self.on_mouse_event(window, cx, {
             let hitbox = hitbox.clone();
@@ -2436,9 +2477,42 @@ impl MarkdownElement {
             let hitbox = hitbox.clone();
             move |markdown, event: &MouseDownEvent, phase, window, cx| {
                 if hitbox.is_hovered(window) {
+                    // A row-level drag region may overlap this Markdown hitbox. Once the
+                    // consumer opts into blank-area dragging, stop the shared mouse event
+                    // before handling glyphs, links, images, or blank space so the event
+                    // cannot reach that overlapping region. Keep the legacy propagation
+                    // behavior when no blank-area handler is installed.
+                    if phase.bubble()
+                        && event.button == MouseButton::Left
+                        && on_blank_mouse_down.is_some()
+                    {
+                        cx.stop_propagation();
+                    }
                     if phase.bubble() && event.button != MouseButton::Right {
                         let position_result =
                             rendered_text.source_index_for_position(event.position);
+
+                        if event.button == MouseButton::Left
+                            && position_result.is_err()
+                            && on_blank_mouse_down.is_some()
+                        {
+                            if rendered_text
+                                .image_bounds_for_position(event.position)
+                                .is_some()
+                            {
+                                return;
+                            }
+
+                            markdown.selection = Selection::default();
+                            markdown.pressed_link = None;
+                            markdown.pressed_footnote_ref = None;
+                            if let Some(handler) = on_blank_mouse_down.as_ref() {
+                                handler(window);
+                            }
+                            window.prevent_default();
+                            cx.notify();
+                            return;
+                        }
 
                         if let Ok(source_index) = position_result {
                             if let Some(footnote_ref) =
@@ -3318,6 +3392,9 @@ impl Element for MarkdownElement {
 
                                 let button_row = h_flex()
                                     .gap_0p5()
+                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                        cx.stop_propagation()
+                                    })
                                     .absolute()
                                     .bg(cx.theme().colors().editor_background)
                                     .when_else(
@@ -3908,6 +3985,7 @@ struct MarkdownElementBuilder {
     pending_line: PendingLine,
     rendered_links: Vec<RenderedLink>,
     rendered_image_links: Vec<RenderedImageLink>,
+    rendered_image_bounds: Vec<RenderedImageBounds>,
     rendered_footnote_refs: Vec<RenderedFootnoteRef>,
     current_source_index: usize,
     html_comment: bool,
@@ -4031,6 +4109,7 @@ impl MarkdownElementBuilder {
             pending_line: PendingLine::default(),
             rendered_links: Vec::new(),
             rendered_image_links: Vec::new(),
+            rendered_image_bounds: Vec::new(),
             rendered_footnote_refs: Vec::new(),
             current_source_index: 0,
             html_comment: false,
@@ -4253,6 +4332,10 @@ impl MarkdownElementBuilder {
         });
     }
 
+    fn push_image_bounds(&mut self, bounds: Rc<Cell<Option<Bounds<Pixels>>>>) {
+        self.rendered_image_bounds.push(RenderedImageBounds { bounds });
+    }
+
     fn push_footnote_ref(&mut self, label: SharedString, source_range: Range<usize>) {
         self.rendered_footnote_refs.push(RenderedFootnoteRef {
             source_range,
@@ -4407,7 +4490,9 @@ impl MarkdownElementBuilder {
             checkbox.visualization_only(true).into_any_element()
         };
 
-        let mut checkbox_container = h_flex().w_full();
+        let mut checkbox_container = h_flex()
+            .w_full()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
         checkbox_container = match self.text_style().text_align {
             TextAlign::Left => checkbox_container.justify_start(),
             TextAlign::Center => checkbox_container.justify_center(),
@@ -4500,6 +4585,7 @@ impl MarkdownElementBuilder {
                 lines: self.rendered_lines.into(),
                 links: self.rendered_links.into(),
                 image_links: self.rendered_image_links.into(),
+                image_bounds: self.rendered_image_bounds.into(),
                 footnote_refs: self.rendered_footnote_refs.into(),
             },
         }
@@ -4955,6 +5041,7 @@ struct RenderedText {
     lines: Rc<[Rc<RenderedLine>]>,
     links: Rc<[RenderedLink]>,
     image_links: Rc<[RenderedImageLink]>,
+    image_bounds: Rc<[RenderedImageBounds]>,
     footnote_refs: Rc<[RenderedFootnoteRef]>,
 }
 
@@ -4977,6 +5064,11 @@ struct RenderedImageLink {
     // text layout, so their hit-test region can't be derived from a source range.
     bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     destination_url: SharedString,
+}
+
+#[derive(Clone)]
+struct RenderedImageBounds {
+    bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -5192,6 +5284,15 @@ impl RenderedText {
 
     fn image_link_for_position(&self, position: Point<Pixels>) -> Option<&RenderedImageLink> {
         self.image_links.iter().find(|image| {
+            image
+                .bounds
+                .get()
+                .is_some_and(|bounds| bounds.contains(&position))
+        })
+    }
+
+    fn image_bounds_for_position(&self, position: Point<Pixels>) -> Option<&RenderedImageBounds> {
+        self.image_bounds.iter().find(|image| {
             image
                 .bounds
                 .get()
@@ -7616,9 +7717,9 @@ mod tests {
                         size(
                             px(bounds.size.width.as_f32() / scale_factor),
                             px(bounds.size.height.as_f32() / scale_factor),
-                        ),
-                    )
-                };
+                ),
+            )
+        };
                 let quads = window
                     .painted_quads()
                     .into_iter()

@@ -176,8 +176,8 @@
 | S07-04 | Esc / 点击外部关闭（不断流） | S07-02 | `done` | `phase-07/S07-04-dismiss.md` |
 | S07-05 | 置顶与全工作区可见 | S07-02 | `done` | `phase-07/S07-05-window-level.md` |
 | S07-06 | 多显示器与窗口定位 | S07-01 | `done` | `phase-07/S07-06-positioning.md` |
-| S07-07 | 窗口拖动与选择隔离 | S07-02 | `doing` | `phase-07/S07-07-drag-selection.md` |
-| S07-08 | 入场动画与减弱动效 | S07-02 | `todo` | `phase-07/S07-08-entrance-motion.md` |
+| S07-07 | 窗口拖动与选择隔离 | S07-02 | `blocked` | `phase-07/S07-07-drag-selection.md` |
+| S07-08 | 入场动画与减弱动效 | S07-02 | `blocked` | `phase-07/S07-08-entrance-motion.md` |
 | S07-09 | tray 图标与菜单 | S00-03 | `todo` | `phase-07/S07-09-tray.md` |
 | S07-10 | 开机自启 | S00-03 | `todo` | `phase-07/S07-10-autostart.md` |
 | S07-11 | 单实例与生命周期（无窗口存活 / 休眠唤醒） | S07-01 | `todo` | `phase-07/S07-11-lifecycle.md` |
@@ -370,3 +370,6 @@
 | 2026-10-03 | S07-07 | `todo` → `doing` | S07-06 系统验收完成后推进真实窗口拖动 / 文字选择隔离；主 agent 负责系统验收，子 agent 按文件归属实现，不把旧 T30 的替身调用次数当原生拖动证据。 |
 
 | 2026-10-03 | S07-05 | `doing` → `done` | `888a7ae`；真实全屏 child / 热键唤起 / 外部重新覆盖 / 原生重新激活均通过，读取三阶段真实截图；5/5 层级有效拦截，最终焦点分支再跑 3/3；191 UI 单测、9 组预览及门禁 rc=0。偏离 v1：panel 外部失活时 level=-1、聚焦恢复 0；物理多屏 / 混合 DPI 等缺口保留。Phase 07 5→6，合计 69→70。 |
+
+| 2026-10-03 | S07-08 | `todo` → `doing` | S07-05 完成后，与 S07-07 按文件归属并行；移植当前 v1 紧凑 underlay 入场及减弱动效，主 agent 串行系统验证。此项属于 Phase 07，不涉及用户保留重设计的 Phase 08。 |
+| 2026-10-03 | S07-07 / S07-08 | `doing` → `blocked` | 实现与事件 / 纯时间测试已落地；macOS 再次锁屏（locked=1、CGEventPost=true），扩展 T52 / T53 和 OS 变异待解锁。Markdown 4/4、设置失活 1/1、动效纯逻辑 6/6 有效拦截；不把锁屏失败计入产品失败或完成。 |

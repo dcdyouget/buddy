@@ -13,20 +13,21 @@
 //! v1 的规则是「空白区域和玻璃边缘都能拖，文本 / 按钮 / 输入框不能」（`useDragHandle`）。窗口本身没有标题栏
 //! （`titlebar: None` 时 macOS 仍保留一条透明标题栏，只有最上面那一条能原生拖动），所以在四周放
 //! 不可见的拖动条：顶部 16px、左右与底部各 8px（正是输入区的外边距，即「玻璃边缘」），按下即 `start_window_move`。
-//! 消息正文里的空白处暂不可拖（需要按字形范围判定，属 S07-07「窗口拖动与选择隔离」）。
+//! 消息正文空白由 Markdown 字形命中判定与行 padding 区域处理，文字与控件保留各自输入。
 //!
 //! 页面本身无状态：错误来自 [`Conversation`]，输入区与空态页共用（草稿两页共享）。
 
 use super::approval_panel::{DecideFn, Decision, approval_panel};
 use super::ask_card::AnswerFn;
 use super::composer::Composer;
+pub use super::drag::DragFn;
+use super::drag::DragSource;
 use super::image_gen_state::DownloadFn;
 use super::message_row::error_banner;
 use super::session::Conversation;
 use super::transcript::Transcript;
 use crate::theme_system::{BuddyTheme, tokens::metrics as m};
 use gpui::{BoxShadow, Context, Div, Entity, FocusHandle, Focusable, Hsla, KeyDownEvent, MouseButton, Window, div, linear_color_stop, linear_gradient, point, prelude::*, px};
-use std::rc::Rc;
 
 /// 工具交互的回调（路由器提供，经 engine 回传）
 #[derive(Clone)]
@@ -44,9 +45,6 @@ const DRAG_TOP: f32 = m::SPACE_4;
 /// 左 / 右 / 底的「玻璃边缘」拖动条宽度（= 输入区的外边距）
 const DRAG_EDGE: f32 = m::SPACE_2;
 
-/// 开始拖动窗口（默认 `Window::start_window_move`；自检可替换）
-pub type DragFn = Rc<dyn Fn(&mut Window)>;
-
 /// 对话页
 pub struct ChatPage {
     conversation: Entity<Conversation>,
@@ -54,6 +52,7 @@ pub struct ChatPage {
     composer: Entity<Composer>,
     actions: ToolActions,
     drag: DragFn,
+    drag_source: DragSource,
     /// 有审批时页面持有焦点，Esc 才能拒绝（v1 是 window 级 keydown）
     focus: FocusHandle,
 }
@@ -68,6 +67,7 @@ impl ChatPage {
     /// 新建；`composer` 与空态页共用
     pub fn new(conversation: Entity<Conversation>, composer: Entity<Composer>, actions: ToolActions, cx: &mut Context<Self>) -> Self {
         let transcript = cx.new(|cx| Transcript::new(conversation.clone(), cx));
+        let drag_source = transcript.read(cx).drag_source();
         let answer = actions.answer.clone();
         let download = actions.download.clone();
         transcript.update(cx, |t, _| {
@@ -76,11 +76,13 @@ impl ChatPage {
         });
         // 错误条随会话状态出现 / 消失
         cx.observe(&conversation, |_, _, cx| cx.notify()).detach();
-        Self { conversation, transcript, composer, actions, drag: Rc::new(|window| window.start_window_move()), focus: cx.focus_handle() }
+        let drag = drag_source.borrow().clone();
+        Self { conversation, transcript, composer, actions, drag, drag_source, focus: cx.focus_handle() }
     }
 
     /// 替换拖动窗口的动作（自检用：合成鼠标事件下没有系统事件可供 `start_window_move` 使用）
     pub fn set_drag_handler(&mut self, drag: DragFn) {
+        *self.drag_source.borrow_mut() = drag.clone();
         self.drag = drag;
     }
 
@@ -93,6 +95,10 @@ impl ChatPage {
 impl Render for ChatPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.buddy_theme().colors;
+        let drag_source = self.drag_source.clone();
+        self.composer.update(cx, |composer, _| {
+            composer.set_drag_source(drag_source.clone());
+        });
         let error = self.conversation.read(cx).state.error.clone();
         let approval = self.conversation.read(cx).state.approval.clone();
         if approval.is_some() && !self.focus.is_focused(window) {

@@ -16,6 +16,7 @@
 //! 行外观见 [`message_row`]（S05-08）；思考块 / 工具行的完整外观由 S05-09 / S05-10 完成。
 
 use super::ask_card::{self, AnswerFn, AskUserCard, CardInput};
+use super::drag::{self, DragSource};
 use super::image_gen;
 use super::image_gen_state::{
     self, CopyStates, DownloadFn, DownloadState, DownloadStates, ImageLoadStates, RetryStates,
@@ -43,6 +44,7 @@ use gpui::{
     AnyElement, App, Context, Entity, FollowMode, Hsla, ListAlignment, ListState, Pixels, Render,
     RetainAllImageCache, SharedString, Subscription, Task, Window, div, list, prelude::*, px,
 };
+use gpui::MouseButton;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -121,6 +123,8 @@ pub struct Transcript {
     ask_cards: HashMap<String, (Entity<AskUserCard>, Subscription)>,
     /// 回答回调（路由器提供，经 engine 回传）
     answer: Option<AnswerFn>,
+    /// Shared by shell edge strips and Markdown blank-body hit testing.
+    drag_source: DragSource,
     /// 打开搜索结果链接（默认系统浏览器；自检可替换）
     open_url: OpenFn,
     /// 保存生成图片（默认返回未接入错误；路由器注入 engine 下载动作）
@@ -175,6 +179,7 @@ impl Transcript {
             copied_actions: None,
             ask_cards: HashMap::new(),
             answer: None,
+            drag_source: drag::default_drag_source(),
             open_url: Rc::new(|url, cx| markdown::gfm::open_link(url, cx)),
             download_image: Rc::new(image_gen_state::default_download),
             image_cache: RetainAllImageCache::new(cx),
@@ -192,6 +197,12 @@ impl Transcript {
     /// 替换打开链接的动作（自检用）
     pub fn set_open_handler(&mut self, open: OpenFn) {
         self.open_url = open;
+    }
+
+    /// Shared callback source used by ChatPage's edge strips and Markdown
+    /// blank-body dragging. Kept stable so self-tests can replace the action.
+    pub fn drag_source(&self) -> DragSource {
+        self.drag_source.clone()
     }
 
     /// 替换生成图片的保存动作（生产路由可接入 engine `download_generated_image`）。
@@ -464,16 +475,21 @@ impl Transcript {
         let now = conversation.now_ms();
         let state = &conversation.state;
         let reduce_motion = crate::accessibility::prefers_reduced_motion();
+        let drag_source = self.drag_source.clone();
         match &row.kind {
             RowKind::User { msg } => match self.markdown.get(&row.id) {
-                Some((md, _)) => message_row::user_row_with_images(
+                Some((md, _)) => message_row::user_row_with_images_drag(
                     // 纯文本：网址不作链接（v1 不识别链接），点击无动作
-                    MarkdownElement::new(md.clone(), message_row::user_text_style(window, cx))
-                        .on_url_click(|_, _, _| {}),
+                    message_row::with_blank_drag(
+                        MarkdownElement::new(md.clone(), message_row::user_text_style(window, cx))
+                            .on_url_click(|_, _, _| {}),
+                        drag_source.clone(),
+                    ),
                     &state.messages[*msg].images,
                     !state.messages[*msg].content.trim().is_empty(),
                     window,
                     cx,
+                    drag_source.clone(),
                 ),
                 None => div().into_any_element(),
             },
@@ -491,11 +507,14 @@ impl Transcript {
                         let expanded = self.think_expanded.get(&row.id).copied().unwrap_or(false);
                         let view = expanded.then(|| self.markdown.get(&row.id)).flatten().map(
                             |(md, _)| {
-                                MarkdownElement::new(
-                                    md.clone(),
-                                    markdown::thinking_style(window, cx),
+                                message_row::with_blank_drag(
+                                    MarkdownElement::new(
+                                        md.clone(),
+                                        markdown::thinking_style(window, cx),
+                                    )
+                                    .on_url_click(|url, _, cx| markdown::gfm::open_link(&url, cx)),
+                                    drag_source.clone(),
                                 )
-                                .on_url_click(|url, _, cx| markdown::gfm::open_link(&url, cx))
                                 .into_any_element()
                             },
                         );
@@ -545,17 +564,20 @@ impl Transcript {
                                     window.request_animation_frame();
                                 }
                             }
-                            MarkdownElement::new(md.clone(), style)
-                                .code_block_renderer(code_block::renderer(md.downgrade(), *live))
-                                .on_url_click(|url, _, cx| markdown::gfm::open_link(&url, cx))
-                                .image_resolver(|url, _| markdown::gfm::image_source(url))
-                                .into_any_element()
+                            message_row::with_blank_drag(
+                                MarkdownElement::new(md.clone(), style)
+                                    .code_block_renderer(code_block::renderer(md.downgrade(), *live))
+                                    .on_url_click(|url, _, cx| markdown::gfm::open_link(&url, cx))
+                                    .image_resolver(|url, _| markdown::gfm::image_source(url)),
+                                drag_source.clone(),
+                            )
+                            .into_any_element()
                         }
                         None => div().into_any_element(),
                     },
                     None => div().into_any_element(),
                 };
-                message_row::assistant_row(row.pos, content).into_any_element()
+                message_row::assistant_row_with_drag(row.pos, content, drag_source.clone()).into_any_element()
             }
             RowKind::Tool { call, msg } => {
                 let Some(tool) = state.tools.get(call).cloned() else {
@@ -629,7 +651,7 @@ impl Transcript {
                             });
                         });
                     }
-                    return message_row::assistant_row(row.pos, card).into_any_element();
+                    return message_row::assistant_row_with_drag(row.pos, card, drag_source.clone()).into_any_element();
                 }
                 if web_search::is_web_search(&tool.name) {
                     // v1 `ToolSection`：websearch 走专用卡片（外壳同思考块），默认折叠，可点开看来源
@@ -656,7 +678,7 @@ impl Transcript {
                         window,
                         cx,
                     );
-                    return message_row::assistant_row(row.pos, card).into_any_element();
+                    return message_row::assistant_row_with_drag(row.pos, card, drag_source.clone()).into_any_element();
                 }
                 let mut details = Vec::new();
                 if ask_card::shows_card(&tool.name, awaiting, expanded) {
@@ -685,11 +707,11 @@ impl Transcript {
                         };
                         let scroll = this.detail_scroll.entry(id.clone()).or_default().clone();
                         this.nested_scroll.borrow_mut().push(scroll.clone());
-                        let content = MarkdownElement::new(
-                            md.clone(),
-                            markdown::tool_detail_style(window, cx),
+                        let content = message_row::with_blank_drag(
+                            MarkdownElement::new(md.clone(), markdown::tool_detail_style(window, cx))
+                                .code_block_renderer(code_block::compact_renderer(md.downgrade())),
+                            drag_source.clone(),
                         )
-                        .code_block_renderer(code_block::compact_renderer(md.downgrade()))
                         .into_any_element();
                         details.push(tool_card::detail_block(
                             SharedString::from(format!("detail-{id}")),
@@ -742,7 +764,7 @@ impl Transcript {
                     window,
                     cx,
                 );
-                message_row::assistant_row(row.pos, card).into_any_element()
+                message_row::assistant_row_with_drag(row.pos, card, drag_source.clone()).into_any_element()
             }
             RowKind::Actions { msg } => {
                 let message = &state.messages[*msg];
@@ -776,7 +798,7 @@ impl Transcript {
                     },
                     cx,
                 );
-                message_row::assistant_row(row.pos, bar).into_any_element()
+                message_row::assistant_row_with_drag(row.pos, bar, drag_source.clone()).into_any_element()
             }
             // 回答尚无内容：只显示呼吸星标（v1 `StreamingNextStar`）
             RowKind::Pending { .. } => {
@@ -784,9 +806,10 @@ impl Transcript {
                 if !reduce_motion {
                     window.request_animation_frame();
                 }
-                message_row::assistant_row(
+                message_row::assistant_row_with_drag(
                     row.pos,
                     streaming::star_element(&theme, since, reduce_motion),
+                    drag_source.clone(),
                 )
                 .into_any_element()
             }
@@ -1157,6 +1180,7 @@ impl Transcript {
                     .hover(|s| s.text_color(c.text_primary).bg(c.bg_surface))
                     .children(ring)
                     .child(icon(IconName::ChevronDown, px(16.0)))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(|this, _, _, cx| this.scroll_to_bottom(cx))),
             )
     }
@@ -1196,8 +1220,24 @@ impl Render for Transcript {
         self.nested_scroll.borrow_mut().clear();
         // 行绘制边界同样只保留本帧（否则未重绘的行留着过期位置）
         self.painted_rows.borrow_mut().clear();
+        let painted_rows = self.painted_rows.clone();
+        let drag_source = self.drag_source.clone();
         // 陷阱 1：`list()` 自己 flex_grow；v1 列表上下内边距 space-3 / space-2
         div()
+            .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                // A row's measured screen bounds are the exclusion zone for
+                // glyph selection, links, and row controls. Those events may
+                // bubble to this root without becoming a window drag.
+                if painted_rows
+                    .borrow()
+                    .values()
+                    .any(|bounds| bounds.contains(&event.position))
+                {
+                    return;
+                }
+                cx.stop_propagation();
+                drag::invoke(&drag_source, window);
+            })
             .relative()
             .size_full()
             .flex()

@@ -903,9 +903,17 @@ async fn selftest_drag(url: &str, cx: &mut AsyncApp) -> bool {
         click(handle, x, y, cx).await;
         check(match name { "顶部" => "点顶部拖动条 → 开始拖动窗口", "左边缘" => "点左边缘 → 开始拖动窗口", "右边缘" => "点右边缘 → 开始拖动窗口", _ => "点底边缘 → 开始拖动窗口" }, counter.get() == before + 1);
     }
+    let transcript = chat.read_with(cx, |p, _| p.transcript().clone());
+    let text_bounds = transcript.read_with(cx, |t, _| {
+        t.rows().iter().find(|row| matches!(row.kind, buddy_ui::chat::rows::RowKind::Block { .. }))
+            .and_then(|row| t.painted_row_bounds(&row.id))
+    });
+    check("实际正文行已绘制", text_bounds.is_some());
     let before = counter.get();
-    click(handle, WIDTH / 2.0, HEIGHT / 2.0, cx).await;
-    check("点消息区中部 → 不拖动窗口（保留文本选择）", counter.get() == before);
+    if let Some(bounds) = text_bounds {
+        click(handle, 20.0, f32::from(bounds.origin.y) + 22.0, cx).await;
+    }
+    check("点实际正文首字形 → 不拖动窗口（保留文本选择）", text_bounds.is_some() && counter.get() == before);
     let composer = handle.read_with(cx, |r, _| r.composer().clone()).unwrap();
     let bounds = composer.read_with(cx, |c, _| c.model_button_bounds()).unwrap();
     click(handle, f32::from(bounds.center().x), f32::from(bounds.center().y), cx).await;
@@ -919,7 +927,7 @@ async fn selftest_drag(url: &str, cx: &mut AsyncApp) -> bool {
     for (name, ok) in &checks {
         println!("  {} {name}", if *ok { "ok  " } else { "FAIL" });
     }
-    println!("{} S05-13 T30 对话页窗口拖动条（顶 / 左 / 右 / 底可拖，消息区与按钮不拖）", if ok { "PASS" } else { "FAIL" });
+    println!("{} S05-13 T30 对话页窗口拖动条（顶 / 左 / 右 / 底可拖，字形与按钮不拖）", if ok { "PASS" } else { "FAIL" });
     ok
 }
 

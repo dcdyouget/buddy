@@ -21,7 +21,7 @@ use super::zed_markdown::{
 use crate::icons::{IconName, icon};
 use crate::theme_system::{BuddyTheme, Theme, box_shadows, easing::cubic_bezier, fonts, tokens::{metrics as m, motion}};
 use gpui::{
-    Animation, AnimationExt, AnyElement, App, ClipboardItem, Div, EntityId, FontWeight, Global, Hsla, SharedString,
+    Animation, AnimationExt, AnyElement, App, ClipboardItem, Div, EntityId, FontWeight, Global, Hsla, MouseButton, SharedString,
     StyleRefinement, TextStyleRefinement, Transformation, WeakEntity, div, prelude::*, px, relative, size,
 };
 use std::collections::HashSet;
@@ -242,6 +242,9 @@ fn render_container(
         .when(!copied, |b| b.hover(|s| s.text_color(c.code_syntax_keyword).bg(info(0.08))))
         .child(copy_icon(copied, block_start))
         .child(if copied { "已复制" } else { "复制" })
+        // Keep the Markdown blank-area drag handler away from this control;
+        // the click itself still runs on mouse-up.
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click({
             let markdown = markdown.clone();
             move |_, _, cx| copy(markdown.clone(), block_start, code.clone(), cx)

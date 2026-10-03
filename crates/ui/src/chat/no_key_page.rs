@@ -7,8 +7,9 @@
 //! | 「请先设置 API Key」14px / 500 / `--state-error` / `flex: 1`；「设置」14px / 600；`ChevronRight` 16 | 同 |
 //! | Enter / 空格触发（`preventDefault`） | 聚焦时按键触发 |
 //! | 面板描边 `--glass-outline` | 改用 `--border-default`（`--glass-outline` 已按用户决定不迁移，见 `tokens.rs` 的 `EXCLUDED`） |
-//! | 窗口拖拽（`useDragHandle`，面板 `data-no-window-drag`）、紧凑窗口尺寸 | **不做**：属 Phase 07 |
+//! | 窗口拖拽（`useDragHandle`，面板 `data-no-window-drag`）、紧凑窗口尺寸 | 面板外空白可拖，面板自身保留点击；尺寸由 shell 控制 |
 
+use super::drag::{self, DragSource};
 use crate::icons::{IconName, icon};
 use crate::theme_system::{BuddyTheme, tokens::metrics as m};
 use gpui::{Context, EventEmitter, FocusHandle, Focusable, FontWeight, KeyDownEvent, Window, div, prelude::*, px};
@@ -30,6 +31,7 @@ pub enum NoKeyPageEvent {
 /// 无 Key 页
 pub struct NoKeyPage {
     focus: FocusHandle,
+    drag_source: DragSource,
 }
 
 impl EventEmitter<NoKeyPageEvent> for NoKeyPage {}
@@ -43,7 +45,13 @@ impl Focusable for NoKeyPage {
 impl NoKeyPage {
     /// 新建
     pub fn new(cx: &mut Context<Self>) -> Self {
-        Self { focus: cx.focus_handle() }
+        Self { focus: cx.focus_handle(), drag_source: drag::default_drag_source() }
+    }
+
+    /// Replace the outer blank-area drag callback; the panel itself remains
+    /// intentionally non-draggable, matching v1 `data-no-window-drag`.
+    pub fn set_drag_source(&mut self, source: DragSource) {
+        self.drag_source = source;
     }
 }
 
@@ -55,7 +63,15 @@ pub fn is_activation_key(key: &str) -> bool {
 impl Render for NoKeyPage {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let c = cx.buddy_theme().colors;
-        div().size_full().flex().items_center().justify_center().child(
+        div().size_full().relative().flex().items_center().justify_center()
+            .child(
+                drag::region(&self.drag_source)
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full(),
+            )
+            .child(
             div()
                 .id("no-key-panel")
                 .track_focus(&self.focus)

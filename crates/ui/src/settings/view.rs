@@ -9,6 +9,7 @@ use super::{
     provider_form::ProviderSubmission,
 };
 use crate::{
+    chat::drag::{self, DragSource},
     icons::{IconName, icon},
     theme_system::{BuddyTheme, tokens::metrics as m},
 };
@@ -50,6 +51,7 @@ pub struct SettingsView {
     hotkey: gpui::Entity<super::hotkey::HotkeyRecorder>,
     theme: gpui::Entity<super::theme_control::ThemeControl>,
     provider_motion: SlideMotion,
+    drag_source: DragSource,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -120,8 +122,14 @@ impl SettingsView {
             hotkey,
             theme,
             provider_motion: SlideMotion::default(),
+            drag_source: drag::default_drag_source(),
             _subscriptions: subscriptions,
         }
+    }
+
+    /// Replace the callback used by structural blank-area drag regions.
+    pub fn set_drag_source(&mut self, source: DragSource) {
+        self.drag_source = source;
     }
 
     /// 路由器外部变更配置时同步显示。

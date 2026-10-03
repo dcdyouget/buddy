@@ -71,6 +71,7 @@ impl AddProviderPanel {
             subscriptions: vec![],
             model_subscription_start: 0,
             bounds: Rc::new(RefCell::new(BTreeMap::new())),
+            drag_source: crate::chat::drag::default_drag_source(),
         };
         panel.subscriptions.push(cx.subscribe(
             &panel.url_field,

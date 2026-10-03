@@ -1,6 +1,7 @@
 //! AddProviderPanel 根元素。
 
 use super::panel::AddProviderPanel;
+use crate::chat::drag;
 use crate::theme_system::{tokens::metrics as m, BuddyTheme};
 use gpui::{div, prelude::*, px, Context, KeyDownEvent, Render, Window};
 
@@ -124,6 +125,32 @@ impl Render for AddProviderPanel {
                         }
                     }))
             })
+            .children([
+                drag::region_if(&self.drag_source, self.active)
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .h(px(m::SPACE_3)),
+                drag::region_if(&self.drag_source, self.active)
+                    .absolute()
+                    .bottom_0()
+                    .left_0()
+                    .right_0()
+                    .h(px(m::SPACE_3)),
+                drag::region_if(&self.drag_source, self.active)
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left_0()
+                    .w(px(m::SPACE_4)),
+                drag::region_if(&self.drag_source, self.active)
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right_0()
+                    .w(px(m::SPACE_4)),
+            ])
             .child(layout::header(self, cx))
             .child(layout::content(self, cx))
             .child(

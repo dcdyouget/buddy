@@ -155,6 +155,9 @@ pub async fn toggle(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Result
 pub async fn hide(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Result<(), String> {
     let prepared = prepare(handle, cx)?;
     if !prepared.probe().map_err(|e| e.to_string())?.is_visible {
+        handle
+            .update(cx, |shell, _, cx| shell.reset_entrance(cx))
+            .map_err(|e| e.to_string())?;
         return Ok(());
     }
     handle
@@ -164,6 +167,9 @@ pub async fn hide(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Result<(
                 .router()
                 .update(cx, |router, cx| router.prepare_window_hide(cx))
         })
+        .map_err(|e| e.to_string())?;
+    handle
+        .update(cx, |shell, _, cx| shell.reset_entrance(cx))
         .map_err(|e| e.to_string())?;
     let result = prepared.hide().map_err(|e| e.to_string());
     if result.is_err() {
@@ -186,6 +192,7 @@ pub async fn show(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Result<(
             shell
                 .router()
                 .update(cx, |router, cx| router.window_visibility_changed(true, cx));
+            shell.play_entrance(cx);
             window.refresh();
         })
         .map_err(|e| e.to_string())

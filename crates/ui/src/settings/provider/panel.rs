@@ -2,6 +2,7 @@
 
 use super::focus::ProviderFocus;
 use crate::settings::provider_form::{Busy, ProviderForm, ProviderSubmission};
+use crate::chat::drag::DragSource;
 use crate::settings::{controls::SettingsField, select::SettingsSelect};
 use buddy_engine::chat::ChatEngine;
 use gpui::{
@@ -38,6 +39,7 @@ pub struct AddProviderPanel {
     pub(super) subscriptions: Vec<Subscription>,
     pub(super) model_subscription_start: usize,
     pub(super) bounds: Rc<RefCell<BTreeMap<String, Bounds<Pixels>>>>,
+    pub(super) drag_source: DragSource,
 }
 
 impl Focusable for AddProviderPanel {

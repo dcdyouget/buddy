@@ -16,6 +16,7 @@
 //! 模型选择（S05-15，菜单见 [`super::model_menu`]）、图片附件（S05-07）、设置入口（S05-18）只提供回调位置。
 
 use crate::components::{IconButtonVariant, TextTooltip, icon_button};
+use super::drag::{self, DragSource};
 use crate::icons::{IconName, icon};
 use crate::text_area::{Paste, TextArea, TextAreaEvent, TextAreaStyle};
 use crate::theme_system::{BuddyTheme, Theme, box_shadows, tokens::metrics as m};
@@ -76,7 +77,10 @@ pub struct Composer {
     standalone: bool,
     /// 上一帧绘制的模型按钮边界（窗口坐标；模型菜单据此定位，流式中按钮不存在时为 `None`）
     model_button: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// 上一帧绘制的 Composer 整体边界（窗口坐标；空态根拖动区据此排除输入控件）
+    bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     _subscriptions: Vec<Subscription>,
+    drag_source: DragSource,
 }
 
 impl EventEmitter<ComposerEvent> for Composer {}
@@ -126,12 +130,17 @@ impl Composer {
                 cx.notify();
             }),
         ];
-        Self { text, streaming: false, streaming_model: None, supports_vision: false, images: Vec::new(), saving_images: false, attachment_error: None, engine, save_tasks: Vec::new(), focused: false, hovered: false, standalone: false, model_button: Rc::default(), _subscriptions: subscriptions }
+        Self { text, streaming: false, streaming_model: None, supports_vision: false, images: Vec::new(), saving_images: false, attachment_error: None, engine, save_tasks: Vec::new(), focused: false, hovered: false, standalone: false, model_button: Rc::default(), bounds: Rc::default(), _subscriptions: subscriptions, drag_source: drag::default_drag_source() }
     }
 
     /// 模型按钮在窗口中的边界（上一帧；流式中为 `None`）
     pub fn model_button_bounds(&self) -> Option<Bounds<Pixels>> {
         self.model_button.get()
+    }
+
+    /// Composer 整体边界（窗口坐标；供空态页排除输入区拖动）。
+    pub fn bounds(&self) -> Option<Bounds<Pixels>> {
+        self.bounds.get()
     }
 
     /// 输入框实体
@@ -167,6 +176,11 @@ impl Composer {
         cx.notify();
     }
 
+    /// Share the page-level drag callback with the composer and its empty field.
+    pub fn set_drag_source(&mut self, source: DragSource) {
+        self.drag_source = source;
+    }
+
     /// 当前模型是否支持图片
     pub fn set_supports_vision(&mut self, supports: bool, cx: &mut Context<Self>) {
         self.supports_vision = supports;
@@ -198,6 +212,10 @@ impl Render for Composer {
         let active = self.focused || self.hovered;
         let compact = window.viewport_size().height <= px(COMPACT_MAX_HEIGHT);
         let unsupported_images = !self.images.is_empty() && !self.supports_vision;
+        let drag_source = self.drag_source.clone();
+        self.text.update(cx, |text, _| {
+            text.set_window_drag_when_empty(standalone, drag_source.clone());
+        });
 
         // v1 `.input-dock`：外描边 + 内描边（inset 1px `--border-subtle`）+ `--shadow-composer`；
         // 悬停 / 聚焦时 v1 的品牌色渐变描边加粗到 2px → 以品牌色内描边近似（目检项）
@@ -372,6 +390,7 @@ impl Render for Composer {
         } else {
             div().flex().flex_col().child(image_strip).child(body)
         };
+        let recorded_bounds = self.bounds.clone();
         div()
             .id("input-dock")
             .when(!standalone, |d| d.mx(px(m::SPACE_2)).mb(px(m::SPACE_2)).rounded(px(m::RADIUS_LG)).border_color(c.border_default))
@@ -399,12 +418,40 @@ impl Render for Composer {
                 this.hovered = *hovered;
                 cx.notify();
             }))
+            .children([
+                drag::region(&self.drag_source)
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .h(px(m::SPACE_1)),
+                drag::region(&self.drag_source)
+                    .absolute()
+                    .bottom_0()
+                    .left_0()
+                    .right_0()
+                    .h(px(m::SPACE_1)),
+                drag::region(&self.drag_source)
+                    .absolute()
+                    .top(px(m::SPACE_1))
+                    .bottom(px(m::SPACE_1))
+                    .left_0()
+                    .w(px(m::SPACE_1)),
+                drag::region(&self.drag_source)
+                    .absolute()
+                    .top(px(m::SPACE_1))
+                    .bottom(px(m::SPACE_1))
+                    .right_0()
+                    .w(px(m::SPACE_1)),
+            ])
             .child(
                 // v1 背景：`linear-gradient(180deg, --surface-highlight, transparent)` 叠在表面色上
                 div()
                     .bg(linear_gradient(180., linear_color_stop(c.surface_highlight, 0.), linear_color_stop(Hsla::from(c.surface_highlight).opacity(0.), 1.)))
                     .child(body),
             )
+            // 仅记录外层实际边界，不插入 hitbox 或参与布局。
+            .child(gpui::canvas(|_, _, _| {}, move |bounds, _, _, _| recorded_bounds.set(Some(bounds))).absolute().top_0().left_0().size_full())
     }
 }
 
