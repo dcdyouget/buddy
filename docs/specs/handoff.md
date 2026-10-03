@@ -17,10 +17,11 @@
 
 - 桌面已解锁，CGEventPost 权限 true；GUI 串行，原地变异期间仍冻结源码和其他 cargo。
 - S07-07 后续滚轮与返回失败已定位为 UserNotificationCenter 权限弹窗遮挡；仅移专用测试窗口后完整 T52 PASS，未操作系统权限弹窗。两项修正变异结果见本项 spec。
-- S07-08 实际帧在约 20ms 后停滞至约 500ms；焦点正常、几何读回不阻塞。144Hz/60Hz 虚拟显示链路只是待查假设，不能当根因或放宽 200ms 断言。
+- S07-08 停顿已由最小 A/B 定位到 GPUI PopUp 的 AppKit UtilityWindow 自动动画；首次显示前设置 None 后，完整 T45–T53 rc=0，动画纯逻辑 7/7 + GUI 3/3 有效拦截。浅深真实紧凑窗终态已读取；未实际切换系统减弱动态开启状态，该分支只列单测证据。
 - S07-12 解锁后的真实产品自检、native-shadow 1/1 有效拦截、恢复复测均已通过；当前提交验证见该项 spec。
 - S07-09 / S07-13 的真实托盘左/右键、设置、自启开关、退出已通过 `tray_os_probe`，专用 LaunchAgent / sandbox 由 supervisor 清理。Settings→Show 真实 OS 变异有效失败，恢复后 rc=0。浅/深真实系统外观下菜单、模板图标与勾选实图已读；浅色验收结束后 finally 恢复原深色，临时进程外观诊断已删除。
-- S07-11 的真实 OS IPC 唤回与热键 / 休眠边界仍待验收；已有生命周期和退出等待拦截见对应 spec。
+- S07-13 实际菜单写盘失败闭环已通过：系统自启、原配置、Router和重新打开菜单的勾选全部恢复；跳过OS回滚时有效失败，恢复后全链路通过，专用资源已清理。
+- S07-11 真实二进程 IPC 唤回与重绑后的 OS F19 已通过同一窗口/Router 和 visible/key/active 读回。F19 注入必须带 Function 标志；缺标志仅有注册值，不能证明唤回。新增 IPC / F19 / quit-hook 变异 3/3 有效，真实系统睡眠仍未执行。
 
 ---
 
@@ -146,6 +147,8 @@ S01-06 剩余范围（均无需屏幕权限）：页面×状态清单（供目�
 
 **2026-10-02：第 28–29 项已由 agent 按本地读取授权核对浅 / 深紧凑、对话、设置及用户尺寸共 8 帧；真实窗口 T45 / T46、167 UI 单测、8 组预览回归与门禁通过（实现 `4a511e0`）。23 项变异中 22 项有效，焦点漏检与 OS 首击证据边界已登记，不将其声称为通过；临时诊断还原，不需用户确认。**
 
+**2026-10-04 更正最终结果：解锁后窗口变异23/23有效，native-focus本轮定向1/1再次有效；旧22/23仅保留为当时失败记录。Phase 07 整体 macOS 回归完整T45–T53、211 UI单测、8组预览及产品T12-01～04均通过。真实睡眠通知、系统减弱动态开启、多屏硬件及Windows边界继续保留，不扩大验收结论。**
+
 **2026-10-03：第 30–31 项已在解锁桌面完成 T47/T48/T49 系统输入基线（rc=0）。行为变异首轮 24/25，回滚项修正变异类型后单项有效，累计 25/25；窗口拦截 23/23、182 UI 单测、9 组预览回归、浅深渲染及门禁 rc=0；实现提交 `2ddf6d6`，完成状态以注册表为准。历史锁屏不是产品缺陷或有效拦截，不要求用户再次目检确认。**
 
 **2026-10-03 验收更新：S07-05/06 已完成真实系统验证，第 32/33 项已通过并读取实际渲染。桌面之后再次锁定，第 34–36 项的真实 OS 验收待解锁，状态与计数以注册表为准。本轮仅完成 Phase 07 后做 macOS 验收，Phase 08 留用户重新设计、Phase 09 留用户在 Windows 执行。仅本地提交，不 push。**
@@ -176,18 +179,18 @@ S01-06 剩余范围（均无需屏幕权限）：页面×状态清单（供目�
 | 26 | S06-05 | 热键键帽、录制、取消、错误提示和重试 | `cargo run -p buddy-app --example settings_preview -- --models`；点「重新录制」，按 Cmd/Ctrl + Shift + K 后释放；再录制时试裸键、纯修饰键、Esc；`--selftest-preferences` 覆盖真实按键与目录故障 | 键帽按平台显示；只有含 Cmd/Ctrl、Shift 或 Alt 的组合在主键释放时保存；裸键 / 纯修饰键继续等待，Esc 取消录制并保留设置页；失败保留旧值，提示可读且可重试。系统全局注册与冲突检测归 S07-03。偏离 v1：保存期间短暂禁用录制，新增就地错误提示。 |
 | 27 | S06-06 | 浅 / 深分段控件、整窗换色、配置恢复与尺寸保持 | 同一设置预览点「深色 / 浅色」，Tab / ShiftTab 聚焦后 Enter / Space 操作；`--selftest-preferences` 覆盖保存失败和真实读盘后新建 Router | 保存成功后这次操作直接换色，只有浅 / 深两种外观；失败保留原选择和全局外观；新 Router 从配置恢复，尺寸不变。偏离 v1：保存期间短暂禁用选择，新增就地错误与品牌色聚焦提示。像素样式、系统阴影、销毁窗口后的保存与真实阻塞请求交错无独立自动化证据。 |
 | 28 | S07-01 | 统一生产主窗口、紧凑 / 对话 / 设置尺寸与用户尺寸保留 | `cargo run -p buddy-app --example shell_preview` 使用独立沙盒与本地 mock；紧凑页点齿轮、点返回，输入「你好」或「慢」并 Enter；手动改窗口大小后进入设置再返回；`-- --selftest-window` 复现 T45 | 初始 560×60，紧凑进入设置 760×640、返回对话 750×500；紧凑直接发送展开 750×500。普通内容切换与流式保持用户尺寸。已接受偏离 v1：回紧凑缩回 560×60。当前临时默认屏幕居中、resize 以左上角为锚，v1 定位 / 底边锚定归 S07-06；热键 / 隐藏 / tray 等归后续项。原生最小尺寸拖拽与所有错误清理分支无独立自动化证据。 |
-| 29 | S07-02 | 主窗口无装饰、无系统阴影、16px 圆角与首次点击 | 同一 shell 预览查看角区、标题栏和按钮；加 `-- --dark` 看深色；`-- --selftest-window` 的 T46 实际读回原生属性并模拟首击齿轮；`python3 scripts/shell/verify_window.py` 复现有效拦截和焦点漏检 | 原生标题栏 / 交通灯均无、hasShadow=false、cornerRadius=16、masksToBounds=true、普通层级 0；首次点击可进入设置。主窗口专用补丁，模型菜单保留系统阴影。23 项变异 22 项有效；native-focus 未捕获，脚本预期 rc=1，已在 spec 写明无独立自动化证据；GPUIView 内建首击、真实 OS 投递、layer wantsLayer 自身及 Windows 实测边界见 spec。 |
+| 29 | S07-02 | 主窗口无装饰、无系统阴影、16px 圆角与首次点击 | `shell_preview --selftest-window` T46 实际读回原生属性；`python3 scripts/shell/verify_window.py` 验证拦截 | 标题栏 / 交通灯无、hasShadow=false、cornerRadius=16、masksToBounds=true、普通层级0，首击可进入设置。旧锁屏22/23不覆盖最终结果：解锁后23/23；2026-10-04 native-focus定向1/1再次有效，见 `/tmp/window-focus-final-1004.log`。GPUIView内建首击、layer wantsLayer本身及Windows边界仍见spec。 |
 | 30 | S07-03 | 系统热键三态、保存更新 / 回滚、选区草稿 | 解锁桌面后 `NO_PROXY=127.0.0.1,localhost cargo run -q -p buddy-app --example shell_preview -- --selftest-behavior`；T47 用专用 CmdOrCtrl+Alt+Shift+B/N 与独立 Carbon owner；T49 用独立 child 实际选区、OS Cmd+C 和完整热键唤起链路 | 已聚焦则隐藏，隐藏或可见失焦则唤回；旧键失效、新键生效，保存失败仍保留旧注册；选区 trim 后仅进入允许页面的草稿并恢复剪贴板，不自动发送。T47/T49 全部通过，冲突 owner 有按键 ACK，外部选区有点击及完整选区 ACK。偏离 v1：完整剪贴板恢复、写盘失败回滚注册、Carbon 独占冲突检测、复制等待 50ms 后激活。 |
 | 31 | S07-04 | Esc 优先级、真实外部点击与隐藏不断流 | 同一自测的 T48：慢流中 Esc / 点击专用 child；模型菜单、审批、添加 Provider、热键录制时按 Esc；普通设置页按 Esc。手动模式 Cmd+Q 退出 | 外点和普通 Esc 隐藏并保留 Router / 慢流到终态；菜单关闭、审批拒绝、Provider 返回、录制取消优先消费 Esc 且主窗保持可见。T48 与对应 GUI 变异已有效验证，隐藏期间完整比对 0～79 全部 token 和终态；偏离 v1：按硬约束 7 补真实外点隐藏，避免用原生失焦代替。 |
 | 32 | S07-05 | 普通层级与真实全屏 Space | 解锁后 `shell_preview --selftest-level`；再 `python3 scripts/shell/verify_levels.py`。可设 `BUDDY_SHELL_T50_CAPTURE_DIR=/tmp/buddy-t50-capture`，每个 `.ready` 对应阶段读取真实屏幕后写同名 `.continue` | T47–T49 先建立唯一 runtime，T50 child 真正满屏 / 活跃 / 当前 Space；热键后 Buddy 在该 child 前，child 再激活覆盖 Buddy；退出全屏恢复普通 Space。已通过，读取三个阶段真实截图；5/5 层级有效拦截，最终焦点分支定向复测 3/3。偏离 v1：外部应用激活时 panel 降为 level=-1，原生聚焦或唤回恢复 0，同应用菜单保持 0。 |
 | 33 | S07-06 | 单屏定位、移动防抖、底边锚定 | 解锁后 `shell_preview --selftest-positioning`；再 `python3 scripts/shell/verify_positioning.py`，最后完整 `shell_preview --selftest`。GUI 自测和变异串行，变异期间全体源码 / cargo 冻结 | T51 真实移动后 160ms 保存最后位置；隐藏后故意移走原生窗口，热键恢复；页面展开固定底边和水平中心并裁剪工作区，普通切页保留用户尺寸。191 UI 单测与纯逻辑 9/9 有效拦截已通过；4 项 GUI 有效拦截及紧凑 / 展开实际渲染已通过。完整 shell 串联也在负坐标的第二块虚拟屏通过；物理多屏、混合 DPI、拔插无独立证据。 |
 | 34 | S07-07 | 真正拖动与选择隔离 | 解锁后 `shell_preview --selftest-drag`，再 `python3 scripts/shell/verify_drag.py`；Markdown 边界用 `python3 scripts/shell/verify_markdown_drag.py`。独占源码 / cargo，GUI 串行 | T52 同一主窗口 / Router：边缘、正文行尾、空 transcript、紧凑输入和设置边缘位移 45×35；字形选区 OS 复制精确，按钮、非空输入与滚动不移动窗口。2026-10-04 滚轮 / 返回失败已定位为系统权限弹窗遮挡；移专用测试窗后完整 T52 PASS，真实选区 / 设置截图已读取。Markdown 4/4、失活设置拖动隔离 1/1 有效拦截；新增 Markdown 传播隔离块无独立自动化证据。 |
-| 35 | S07-08 | 入场实际帧与减弱动态 | 解锁后 `shell_preview --selftest-entrance`、`python3 scripts/shell/verify_entrance.py`；最后完整 `shell_preview --selftest` | T53 同一 runtime / Router 采样真实 render 帧，紧凑唤回播放，普通切页不重播，展开页静态；原生 bounds 不动。纯逻辑 6/6 有效拦截；T53 / 两项 GUI 拦截与系统减弱动态另一个状态尚无证据。v1 的 260ms DOM 清理保护在 GPUI 为 200ms 视觉结束即 settled，单独登记。 |
+| 35 | S07-08 | 入场实际帧与减弱动态 | `shell_preview --selftest-entrance`、`python3 scripts/shell/verify_entrance.py`；完整 `shell_preview --selftest` | 首次显示前关闭AppKit自动动画后，T53同一runtime/Router真实帧、200ms终态及原生bounds保持均通过；纯逻辑7/7、GUI3/3有效拦截，完整T45–T53 rc=0。真实系统减弱动态开启分支未执行，仅有确定性单测/变异证据。v1 260ms DOM清理在GPUI为200ms视觉结束即settled，差异保留。 |
 | 36 | S07-09 | 系统托盘图标、点击与中文菜单 | `tray_preview` 只打印真实动作且不改登录项；`tray_preview --selftest` 检查原生菜单状态。生产入口装配 services；解锁后验收实际左键呼出、右键菜单、设置与退出 | v1 的设置… / 开机自启 / 分隔 / 退出；左键始终呼出并按鼠标屏定位。原生状态与映射 3/3 有效拦截；真实 OS 菜单全链路及 Settings→Show 变异已完成，恢复 rc=0；浅/深真实系统图标、菜单与勾选实图已读，系统外观已恢复。自检需显式析构 tray 后返回失败码，AppKit terminate 本身固定以 0 退出。 |
 | 37 | S07-10 | LaunchAgent 注册与配置失败恢复 | `autostart_probe`；`autostart_preferences_preview --selftest`；`python3 scripts/shell/verify_services.py`。全部使用唯一专用登录项，自测后检查无 BuddyS0710*.plist 残留 | 真实注册文件开启 / 关闭、ProgramArguments 路径读回；配置写盘失败前确认 OS 已开启，再读回恢复关闭；配置与其他字段保持。5/5 有效拦截，增强原生回滚后定向 2/2；不把 plist 存在当作已经完成真实注销登录启动。 |
-| 38 | S07-11 | 单实例、退出清理与休眠唤醒 | `lifecycle_probe`；`python3 scripts/shell/verify_lifecycle.py`；解锁后补真实隐藏唤醒与 OS 热键读回。双进程 ACK、stale socket、锁文件和注销回收已有专用探针；真实 GPUI quit 的再次异步 App 借用已改为同步资源清理 | 双进程只保留 owner；隐藏窗口继续流式；退出释放热键、外点监听、tray、IPC；模拟 `on_system_wake` 只能证明重臂逻辑，不能替代真实睡眠 / 唤醒。真实睡眠唤醒、锁屏下激活 / 热键和已有实例重新聚焦仍缺证据；生命周期/诊断 9/9，另有 700ms 延迟真实保存退出 1/1 有效拦截；原生完整诊断尚未运行。 |
+| 38 | S07-11 | 单实例、退出清理与休眠唤醒 | `lifecycle_probe`、`lifecycle_app_probe`；`python3 scripts/shell/verify_lifecycle.py`；`python3 scripts/shell/verify_termination.py` | 真实二进程Forwarded/ACK唤回同一窗口/Router，直接wake重绑保持hidden，独立OS F19再次唤回均通过；退出主题落盘、socket清理、锁保留与重新acquire通过。原8/8，加IPC/F19/quit-hook定向3/3和700ms退出1/1有效拦截（quit-hook有重复复核，不累加计数）。真实系统睡眠通知未执行，直接回调不替代该证据。 |
 | 39 | S07-12 | 产品窗口行为自检 | `cargo run -p buddy-app --bin buddy -- --selfcheck-window`；解锁桌面后读取真实原生窗口属性、工作区、移动恢复、隐藏 / 显示激活。锁屏或 CGEvent 权限不足必须输出 `BLOCKED` 并返回非零 | `selfcheck.rs` 的纯判定 fixture 逐字段坏值拦截有效，但只证明判定逻辑；不能替代真实 OS 读回。锁屏时产品自检明确阻塞，不将焦点失败伪装为 PASS；2026-10-04 T12-01～04 全 PASS，native-shadow 1/1 有效拦截，恢复后复测 PASS；详见本项 spec。 |
-| 40 | S07-13 | 自启与数据目录设置 UI | 按当前 v1 核对 `SettingsPage`、tray 与 engine 数据路径；真实 tray 菜单点击需在解锁桌面验收 | v1 SettingsPage 没有自启或数据目录控件，tray 只有“设置… / 开机自启 / 分隔 / 退出”，也没有打开数据目录命令；v2 沿用 `dirs::data_dir()/com.buddy.chat` 兼容路径，不应凭旧素材虚构数据目录 UI。自启复用 S07-10 的 OS 查询 / 保存失败回滚；真实 tray OS 验收仍因锁屏 `blocked`。 |
+| 40 | S07-13 | 自启与数据目录设置UI | `tray_os_probe`：实际菜单开启→config.json专用故障沙盒→实际关闭→读回回滚→正常关闭→退出 | 写盘失败后set_targets=false,true，OS/plist/disk/Router=true、原配置字节一致；重开真实菜单勾选仍在。跳过OS回滚时实际读回false而失败，1/1有效；还原后全链路rc=0、专用进程/LaunchAgent/sandbox清理。当前v1没有数据目录UI或打开命令，沿用兼容路径，不新增入口或虚构文件管理器证据。 |
 
 
 | # | 来源 | 看什么 | 怎么操作 | 预期 |

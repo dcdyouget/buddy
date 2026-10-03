@@ -76,7 +76,13 @@ impl Fixture {
         println!(
             "[S07-09/13] 自启 ack 的 launch_agent_entry 表示 LaunchAgent entry/plist 读回，不代表 launchd 已加载。"
         );
-        for phase in ["show", "settings", "autostart-enable", "autostart-disable"] {
+        for phase in [
+            "show",
+            "settings",
+            "autostart-enable",
+            "autostart-save-failure",
+            "autostart-disable",
+        ] {
             println!(
                 "[S07-09/13] 等待 {}.ready 后，实际点击，再执行 touch {}",
                 phase,

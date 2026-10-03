@@ -18,6 +18,8 @@ rearm_start = core_source.index("    pub(crate) fn rearm(")
 rearm_end = core_source.index("    pub(crate) fn shutdown(", rearm_start)
 rearm_block = core_source[rearm_start:rearm_end]
 CASES = [
+    Case("ipc-show", "crates/ui/src/shell/lifecycle.rs", "if let Err(error) = runtime::show(handle, cx).await {", "if let Err(error) = runtime::hide(handle, cx).await {", APP, "IPC 唤回未达到 visible/key/appactive"),
+    Case("f19-function-flag", "apps/buddy/examples/lifecycle_app_probe/os_input.rs", "const FLAG_FUNCTION: u64 = 1 << 23;", "const FLAG_FUNCTION: u64 = 0;", APP, "独立 F19 后未达到同一窗口/Router visible/key/appactive"),
     Case("owner-lock", "crates/ui/src/shell/lifecycle/instance.rs", "let result = unsafe { libc::flock(lock.file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };", "let result = 0; let _ = lock;", PROBE, "secondary 越过 owner 锁"),
     Case("stale-socket", "crates/ui/src/shell/lifecycle/instance.rs", "let _ = fs::remove_file(path);\n                thread::sleep(BIND_RETRY_DELAY);", "let _ = path;\n                thread::sleep(BIND_RETRY_DELAY);", PROBE, "绑定单实例 socket失败"),
     Case("socket-cleanup", "crates/ui/src/shell/lifecycle/instance.rs", "let _ = fs::remove_file(&self.socket_path);", "let _ = &self.socket_path;", PROBE, "owner 正常 drop 后 socket 未清理"),
@@ -55,7 +57,7 @@ def main():
         finally:
             path.write_bytes(original)
         caught = rc not in (0, 124) and case.fail_marker in output and not any(
-            marker in output for marker in ("error[E", "could not compile", "BLOCKED S07-12", "超时")
+            marker in output for marker in ("error[E", "could not compile", "BLOCKED", "超时")
         )
         results.append(caught)
         print(f"{'PASS' if caught else 'FAIL'} {case.name}: rc={rc}; 已还原", flush=True)

@@ -1297,3 +1297,11 @@ provider 事件流以 `TurnEnd` 结束；`Done` / `Error` 由编排层（v1 `com
 - 直接调用唤醒恢复只证明回调逻辑，不证明系统睡眠事件或实际 OS 热键重新送达；锁屏时继续保留真实系统验收缺口。
 
 - 追加退出协调实测：GPUI native shutdown 只等 200ms，主线程配置队列不能依靠 quit future 排空。NSTerminateLater 的 AppKit 模式也使本探针调度停滞（超时不计有效拦截）；采用 NSTerminateCancel 维持正常事件循环，等待配置完成后一次性批准重新 terminate。新增探针读回真实主题落盘，延迟配置的独立拦截见 S07-11。
+
+## 21. macOS 真实外壳验收的原生干扰（2026-10-04）
+
+- **AppKit 自动动画与 GPUI 帧叠加**：GPUI `WindowKind::PopUp` 默认 `NSWindowAnimationBehaviorUtilityWindow=4`。T53 第三帧实际耗时约 477ms；改 underlay 百分比几何为等价固定几何无改善，已还原。仅改原生 `animationBehavior=None(2)` 后帧耗时约 3–4ms，原 200ms / >=3 帧 / 350ms 截止断言全部通过；恢复 UtilityWindow 会再次 FAIL。最终在 `native::PreparedMainWindow::apply_and_show` 首次 orderFront 前设置，不 fork GPUI。证据：`/tmp/entrance-measure-1004.log`、`/tmp/entrance-gui-interception-1004.log`、`/tmp/shell-full-final-1004.log`。
+- **系统弹窗遮挡不等于产品焦点故障**：UserNotificationCenter 权限弹窗遮住 T52 的点击坐标，即使主窗 visible/key/active 全 true，目标点击也会成为真实外点。只把专用测试窗口移到无遮挡区域，保留原拖动和滚动断言；不操作权限弹窗。
+- **CGEvent 默认修饰键与功能键分类**：普通托盘点击必须显式清空继承的 Command flags，否则 macOS 将其解释成菜单栏管理操作。F19 键码 0x50 除 Command/Option/Shift 外，还须携带 Function 位 `1 << 23`；无该位时本机注入未唤回，System Events 对照和补位后的独立 sender 均可唤回。注册值不是实际事件生效证据；生命周期探针同时检查同一窗口/Router、visible/key/active。
+- **系统外观不等于进程 appearance 属性**：测试进程 `NSApplication.appearance=Aqua` 读回成功，状态栏菜单仍可为系统深色。真实浅深验收使用系统外观，结束后 finally 恢复原值并读回；进程外观诊断已删除，不能以属性读回冒充浅色截图。
+- **截图路径**：本机 `screencapture` 曾超时，先初始化 `NSApplication.shared` 的 ScreenCaptureKit CLI 可捕获指定自有窗口。截图超时不能直接推断 Metal 或显示链路有故障；聚合采样栈也不能代替具体慢帧的因果 A/B。

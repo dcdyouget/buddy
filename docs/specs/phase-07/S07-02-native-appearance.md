@@ -49,6 +49,8 @@
 
 ## 决策记录
 
+补充验收（2026-10-04 复核）：上文 native-focus 无独立证据描述仅对应早期锁屏阶段。解锁后的 `/tmp/window-interception-current.log` 为 23/23，native-focus 子日志明确读回 key=true、T46 字段探测 false。最新 `/tmp/window-focus-final-1004.log` 也为 1/1 有效拦截并还原。GPUIView 内建首击、wantsLayer 自身及 Windows 的既有证据边界不因此扩大。
+
 | 决策 | 选择 | 理由 |
 |------|------|------|
 | 行为依据 | 当前 v1 源码 | 旧素材尺寸 / 毛玻璃 / 置顶描述不覆盖当前源码与已接受决定。 |

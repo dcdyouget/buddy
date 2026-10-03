@@ -19,6 +19,10 @@ fn validate_protocol(fixture: &Fixture) -> Result<(), String> {
             "launch_agent_entry=true disk=true plist=true\n",
         ),
         (
+            "autostart-save-failure.ack",
+            "config_write=failed set_targets=false,true launch_agent_entry=true disk=true router=true plist=true bytes_equal=true\n",
+        ),
+        (
             "autostart-disable.ack",
             "launch_agent_entry=false disk=false plist=false\n",
         ),

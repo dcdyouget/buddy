@@ -8,7 +8,7 @@
 
 1. **Read `AGENTS.md` first** — it's the **项目权威入口** and document index（`CLAUDE.md` 只是指向它的薄指针，见规则 §1.7）
 2. **不修改已退役/历史文档** — `docs/tasks/v1.0.0/` 是历史记录；设计文档实现完成后会被退役（见 `docs/specs/RULES.md` §7）
-3. **Follow the docs** — 待实现内容由 `docs/specs/README.md`（spec 注册表）定义；外观由代码定义（v1 `src/styles/global.css`，v2 `crates/ui/src/theme_system/`）与 `docs/design/pages-and-states.md` 定义；Rust 架构由 `docs/design/rust-architecture.md` 定义
+3. **Follow the docs** — 待实现内容由 `docs/specs/README.md`（spec 注册表）定义；外观由代码定义（v1 `src/styles/global.css`，v2 `crates/ui/src/theme_system/`）；页面状态与 Rust 架构由对应 spec 的决策记录和 `crates/` / `apps/` 实现定义（原设计脚手架已退役，见 `docs/specs/design-deletions.md`）
 4. **YAGNI** — 只实现 spec 列出的内容，不做「以后可能用得上」的东西
 5. **One file, one purpose** — max ~300 lines per file; split if larger
 6. **Progressive disclosure** — keep files focused and scannable

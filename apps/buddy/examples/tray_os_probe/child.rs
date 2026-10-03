@@ -1,3 +1,4 @@
+use std::fs;
 use std::rc::Rc;
 use std::sync::{
     Arc,
@@ -14,6 +15,12 @@ use buddy_ui::shell::{self, AppShell};
 
 use super::protocol::{
     Fixture, PHASE_TIMEOUT, POLL, STATE_TIMEOUT, clear_marker, fixture_from_args, marker,
+};
+
+#[path = "failure.rs"]
+mod failure;
+use self::failure::{
+    ConfigPathGuard, ObservedAutostart, router_autostart, wait_autostart_save_failure,
 };
 
 async fn wait_for_marker(path: &std::path::Path, cx: &mut AsyncApp) -> Result<(), String> {
@@ -156,6 +163,8 @@ fn run_child(fixture: Fixture) -> Result<(), String> {
             shell::init(cx);
             let fixture = fixture;
             let service = service;
+            let observed = Rc::new(ObservedAutostart::new(service.clone()));
+            let observed_for_app = observed.clone();
             let failed = failed_for_app.clone();
             cx.spawn(async move |cx: &mut AsyncApp| {
                 let result = async {
@@ -172,7 +181,7 @@ fn run_child(fixture: Fixture) -> Result<(), String> {
                     shell::runtime::hide(handle, cx)
                         .await
                         .map_err(|error| format!("隐藏初始主窗口失败：{error}"))?;
-                    let backend: Rc<dyn AutostartBackend> = service.clone();
+                    let backend: Rc<dyn AutostartBackend> = observed_for_app.clone();
                     shell::services::install_with_backend(Ok(backend), cx)
                         .map_err(|error| format!("安装真实 tray services 失败：{error}"))?;
                     clear_marker(&fixture.marker("ready.continue"))?;
@@ -221,6 +230,56 @@ fn run_child(fixture: Fixture) -> Result<(), String> {
                     )?;
                     println!(
                         "[S07-09/13 child] AUTOSTART_ENABLE_ACK launch_agent_entry=true disk=true plist=true"
+                    );
+
+                    // The next real menu click must fail during config persistence after
+                    // the OS has changed, forcing Router to restore the old OS state.
+                    observed.clear_set_targets();
+                    let config_path = fixture.data.join("config.json");
+                    let before_bytes = fs::read(&config_path)
+                        .map_err(|error| format!("读取写盘失败基线失败：{error}"))?;
+                    let mut guard = ConfigPathGuard::block(config_path.clone())?;
+                    clear_marker(&fixture.marker("autostart-save-failure.continue"))?;
+                    marker(
+                        &fixture.marker("autostart-save-failure.ready"),
+                        "AUTOSTART_SAVE_FAILURE_READY\n",
+                    )?;
+                    let phase = async {
+                        wait_for_marker(&fixture.marker("autostart-save-failure.continue"), cx)
+                            .await?;
+                        wait_autostart_save_failure(&service, &observed, &fixture, cx).await
+                    }
+                    .await;
+                    let restore = guard.restore();
+                    phase?;
+                    restore?;
+                    let after_bytes = fs::read(&config_path)
+                        .map_err(|error| format!("读取恢复后配置失败：{error}"))?;
+                    let disk = storage::get_config(&fixture.data)?.auto_start;
+                    let router = router_autostart(handle, cx)?;
+                    let targets = observed.set_targets();
+                    let entry = service.query()?;
+                    let plist = fixture.plist()?.exists();
+                    if targets != [false, true]
+                        || !entry
+                        || !plist
+                        || !disk
+                        || !router
+                        || before_bytes != after_bytes
+                    {
+                        return Err(format!(
+                            "写盘失败回滚断言失败：set_targets={targets:?} entry={} disk={disk} router={router} plist={} bytes_equal={}",
+                            entry,
+                            plist,
+                            before_bytes == after_bytes
+                        ));
+                    }
+                    marker(
+                        &fixture.marker("autostart-save-failure.ack"),
+                        "config_write=failed set_targets=false,true launch_agent_entry=true disk=true router=true plist=true bytes_equal=true\n",
+                    )?;
+                    println!(
+                        "[S07-09/13 child] AUTOSTART_SAVE_FAILURE_ACK config_write=failed set_targets=false,true launch_agent_entry=true disk=true router=true plist=true bytes_equal=true"
                     );
 
                     clear_marker(&fixture.marker("autostart-disable.continue"))?;
