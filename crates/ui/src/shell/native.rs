@@ -65,6 +65,9 @@ pub struct NativeWindowSnapshot {
     pub is_visible: bool,
     /// NSWindow 当前是否为 key window；显示主窗口不应强行置 key。
     pub is_key: bool,
+    /// GPUI contentView 是否为第一响应者。否则 NSTextInputContext 不激活：
+    /// 键盘事件仍到达 GPUI（快捷键可用），但任何文字（含输入法）都无法输入。
+    pub view_is_first_responder: bool,
 }
 
 impl NativeWindowSnapshot {
@@ -131,6 +134,9 @@ impl PreparedMainWindow {
             let _: () = objc::msg_send![native, setAnimationBehavior: NS_WINDOW_ANIMATION_NONE];
             let _: () = objc::msg_send![native, setLevel: NS_NORMAL_WINDOW_LEVEL];
             apply_content_layer(native)?;
+            // 修改 styleMask 会重建窗口边框视图并把第一响应者重置为窗口本身；
+            // 不恢复则 NSTextInputContext 不激活，键盘事件仍到达 GPUI，但任何文字（含输入法）都无法输入。
+            let _: objc::runtime::BOOL = objc::msg_send![native, makeFirstResponder: *self.view];
             let _: () = objc::msg_send![native, orderFrontRegardless];
             probe_native(native, *self.view)
         }
@@ -265,6 +271,7 @@ unsafe fn probe_native(
         ];
         let is_visible: BOOL = objc::msg_send![native, isVisible];
         let is_key: BOOL = objc::msg_send![native, isKeyWindow];
+        let first_responder: *mut objc::runtime::Object = objc::msg_send![native, firstResponder];
 
         Ok(NativeWindowSnapshot {
             style_mask,
@@ -278,6 +285,8 @@ unsafe fn probe_native(
             accepts_first_mouse: accepts_first_mouse == YES,
             is_visible: is_visible == YES,
             is_key: is_key == YES,
+            view_is_first_responder: first_responder == view,
         })
     }
 }
+

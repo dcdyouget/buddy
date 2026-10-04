@@ -74,7 +74,7 @@ async fn run_native_checks(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) ->
     };
     let native_ok = expected_native(&initial);
     println!(
-        "T12-01 原生属性：装饰={} 可调整={} level={} shadow={} opaque={} layer={} radius={:.1} masks={} 首击={} visible={}；{}",
+        "T12-01 原生属性：装饰={} 可调整={} level={} shadow={} opaque={} layer={} radius={:.1} masks={} 首击={} visible={} 文字输入={}；{}",
         initial.is_decoration_free(),
         initial.style_mask & (1 << 3) != 0,
         initial.level,
@@ -85,6 +85,7 @@ async fn run_native_checks(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) ->
         initial.masks_to_bounds,
         initial.accepts_first_mouse,
         initial.is_visible,
+        initial.view_is_first_responder,
         if native_ok { "PASS" } else { "FAIL" },
     );
 
@@ -141,6 +142,7 @@ fn expected_native(snapshot: &native::NativeWindowSnapshot) -> bool {
         && snapshot.masks_to_bounds
         && snapshot.accepts_first_mouse
         && snapshot.is_visible
+        && snapshot.view_is_first_responder
 }
 
 #[cfg(target_os = "macos")]
@@ -387,6 +389,7 @@ mod tests {
             accepts_first_mouse: true,
             is_visible: true,
             is_key: false,
+            view_is_first_responder: true,
         }
     }
 
@@ -415,6 +418,10 @@ mod tests {
         assert!(!expected_native(&bad));
         let mut bad = base.clone();
         bad.wants_layer = false;
+        assert!(!expected_native(&bad));
+        // 第一响应者不是 GPUI 视图时无法输入文字（0.1.0 首发缺陷）
+        let mut bad = base.clone();
+        bad.view_is_first_responder = false;
         assert!(!expected_native(&bad));
         let mut bad = base.clone();
         bad.corner_radius = 12.0;

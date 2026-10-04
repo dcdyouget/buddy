@@ -71,3 +71,13 @@
 ## 备注
 
 后续 spec 的能力不计入本项完成。
+
+### 发布后缺陷：无法输入文字（2026-10-04 修复）
+
+- 现象：0.1.0 安装包中点击输入框有光标，但英文与中文输入法都无法输入。
+- 根因：`apply_and_show` 修改 `styleMask` 后 AppKit 重建边框视图，把第一响应者重置为窗口本身（`GPUIPanel`）。
+  诊断读回：`first_responder=GPUIPanel`、`[NSTextInputContext currentInputContext]=nil`；键盘事件仍到达 GPUI（`observe_keystrokes` 有记录），
+  但 `replace_text_in_range` 从未被调用。此前的自动化输入测试直接向 GPUI 派发 `PlatformInput`，绕过了 AppKit 文本输入链，所以没有发现。
+- 修复：补丁后 `makeFirstResponder:` 恢复 GPUI 视图；`NativeWindowSnapshot` 新增 `view_is_first_responder`，S07-12 自检 T12-01 要求其为真。
+- 证据：HID 键盘事件（`CGEventPost`，ABC 布局）输入 `asd` 上屏；微信输入法拼音 `nihao` 显示带下划线的组字与候选框，空格上屏「你好」；
+  Esc 隐藏后再唤起仍可输入。产品自检 `--selfcheck-window` rc=0（`文字输入=true`）；删除修复行后同一自检 rc=1（T12-01 FAIL），恢复后通过。
