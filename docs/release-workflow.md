@@ -51,7 +51,8 @@ buddy/
     source/buddy-<版本>-src.tar.gz           ← GPL-3.0 源码
 ```
 
-制品使用 `Cache-Control: public,max-age=31536000,immutable`；清单使用 `no-cache`。
+制品与清单都使用 `Cache-Control: no-cache`：浏览器每次向 OSS 校验 ETag，内容未变时返回 304，不会重复下载。
+不使用长期缓存：0.1.0 曾以一年 `immutable` 缓存发布，重新发布后用户浏览器仍拿到旧安装包（2026-10-05 起改为 no-cache）。
 
 ## 4. 发版
 

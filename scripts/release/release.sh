@@ -33,7 +33,9 @@ CHANNEL_KEY="$PREFIX/channels/stable.json"
 CHANNEL_URL="$PUBLIC_BASE/$CHANNEL_KEY"
 KEY_PATH="${TAURI_SIGNING_PRIVATE_KEY_PATH:-$HOME/.tauri/buddy-v2.key}"
 TAURI="$ROOT/node_modules/.bin/tauri"
-IMMUTABLE="public,max-age=31536000,immutable"
+# 制品也用 no-cache：浏览器每次向 OSS 校验 ETag（未变化时 304，不重复下载）。
+# 曾用 immutable 一年缓存，0.1.0 重新发布后用户浏览器仍拿到旧安装包。
+ARTIFACT_CACHE="no-cache"
 
 VERSION=""
 NOTES=""
@@ -199,9 +201,9 @@ node scripts/release/manifest.mjs --version "$VERSION" --notes-file "$OUT/notes.
 # ── 6. 上传版本目录 ───────────────────────────────────────────
 step 6/9 "上传到 OSS 并公网回读校验"
 for f in "$UPDATE" "$UPDATE.sig" "$INSTALLER" "$INSTALLER.sig"; do
-  upload "$f" "$REMOTE_DIR/macos/aarch64/$(basename "$f")" "$IMMUTABLE"
+  upload "$f" "$REMOTE_DIR/macos/aarch64/$(basename "$f")" "$ARTIFACT_CACHE"
 done
-upload "$OUT/source/buddy-$VERSION-src.tar.gz" "$REMOTE_DIR/source/buddy-$VERSION-src.tar.gz" "$IMMUTABLE"
+upload "$OUT/source/buddy-$VERSION-src.tar.gz" "$REMOTE_DIR/source/buddy-$VERSION-src.tar.gz" "$ARTIFACT_CACHE"
 upload "$OUT/manifest.json" "$REMOTE_DIR/manifest.json" "no-cache"
 for f in "$UPDATE" "$INSTALLER"; do
   verify_public "$PUBLIC_BASE/$REMOTE_DIR/macos/aarch64/$(basename "$f")" "$f"
