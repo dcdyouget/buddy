@@ -1,7 +1,6 @@
 //! Buddy 主题体系（S03-*）
 //!
-//! 令牌数据由 `scripts/theme/gen_tokens.py` 从 v1 代码真值（`v1-final:src/styles/global.css`）
-//! 生成到 [`tokens`]；本模块只提供结构、全局安装与读取。
+//! 令牌数据在 [`tokens`]（最初取自 v1 `global.css`）；本模块只提供结构、全局安装与读取。
 //!
 //! # 与 zed `theme` crate 的关系
 //!

@@ -19,7 +19,7 @@ mod config_files;
 /// 每个分块文件的最大消息数量
 const CHUNK_SIZE: u32 = 100;
 
-/// v1 Tauri 的 bundle identifier（`src-tauri/tauri.conf.json` `identifier`）。
+/// 应用标识（与 v1 Tauri 的 bundle identifier 相同，也是 Info.plist 的 `CFBundleIdentifier`）。
 ///
 /// ⚠️ 不要改：v1 的数据目录由它决定，v2 沿用同一目录，两版并存期间共用配置。
 ///

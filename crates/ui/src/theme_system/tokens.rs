@@ -1,8 +1,7 @@
-//! 设计令牌 —— **自动生成，勿手改**。
+//! 设计令牌 —— **界面颜色、间距、圆角的唯一来源**，改外观直接改这里。
 //!
-//! 生成：`python3 scripts/theme/gen_tokens.py`；校验：`--check`（纪律检查 S03-07 调用）。
-//! 来源：`v1-final:src/styles/global.css`（`:root` = 浅色，`html.dark` = 深色覆盖），139 个变量，
-//! 其中 1 个按理由排除（见 [`EXCLUDED`]）。每个颜色后的注释为 `#RRGGBBAA`，便于人工复核。
+//! 最初由 v1 的 `src/styles/global.css`（git 标签 `v1-final`）逐变量生成（139 个变量，
+//! 1 个按理由排除，见 [`EXCLUDED`]）。每个颜色后的注释为 `#RRGGBBAA`，便于人工复核。
 
 #![allow(missing_docs)] // 字段即 CSS 变量名，逐个写文档无信息量
 

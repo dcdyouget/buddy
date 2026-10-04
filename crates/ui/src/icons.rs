@@ -11,7 +11,7 @@ use gpui::{AssetSource, Pixels, Result, SharedString, Svg, prelude::*, svg};
 use std::borrow::Cow;
 
 /// 声明图标：变体名 => 文件名（`assets/icons/<文件名>.svg`）。
-/// Lucide 图标用 `scripts/icons/lucide_svg.py <名字>` 从 v1 的 lucide-react 生成。
+/// 新增 Lucide 图标：从 lucide.dev 下载对应 SVG（24×24、`stroke="currentColor"`）放入 `assets/icons/`。
 macro_rules! icons {
     ($($(#[$doc:meta])* $variant:ident => $file:literal,)*) => {
         /// 图标名（按需增加；每项须在 `assets/icons/` 有同名文件）

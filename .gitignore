@@ -1,79 +1,22 @@
 # OS
 .DS_Store
-Thumbs.db
 
-# Dependencies
+# 依赖与构建产物（Cargo.lock 入库：应用需要可复现构建）
 node_modules/
-
-# Build outputs
+/target/
 dist/
 dist-desktop/
-src-tauri/target/
 
-# v2.0.0-gpui workspace（根 Cargo.toml）
-/target/
-# ⚠️ Cargo.lock **必须入库**（见 S01-02-7）—— 应用类项目需要可复现构建。
-#    注意不要在此处忽略它。
+# 发布产物与凭据
 .release/
 .ossutil_checkpoint/
 ossutil_output/
 *.dmg
 *.app
 *.key
-.reasonix/
-# Auto-generated icons (Tauri tauri icon command)
-src-tauri/gen/
-
-# v2.0.0-gpui 重构：Phase 00 可行性 Spike 的一次性验证产物
-# 属可弃材料，不入库（结论以 spec 的证据段为准）
-spikes/
-
-# 注意：docs/evidence/ 不要忽略 —— 它是 v1 视觉与行为基线，属不可再生的验收证据，必须入库
-src-tauri/icons/**
-# Dock / app icon PNG matrix (rasterized from buddy-app-icon.svg)
-!src-tauri/icons/icon.png
-!src-tauri/icons/16x16.png
-!src-tauri/icons/32x32.png
-!src-tauri/icons/64x64.png
-!src-tauri/icons/128x128.png
-!src-tauri/icons/128x128@2x.png
-!src-tauri/icons/256x256.png
-!src-tauri/icons/512x512.png
-!src-tauri/icons/1024x1024.png
-!src-tauri/icons/icon-1024.png
-# Menu bar / system tray icon (rasterized from buddy-menubar.svg)
-!src-tauri/icons/tray.png
-!src-tauri/icons/tray@2x.png
-# Windows ICO icon
-!src-tauri/icons/icon.ico
-# macOS ICNS icon
-!src-tauri/icons/icon.icns
-# Windows Store tiles
-!src-tauri/icons/Square30x30Logo.png
-!src-tauri/icons/Square44x44Logo.png
-!src-tauri/icons/Square71x71Logo.png
-!src-tauri/icons/Square89x89Logo.png
-!src-tauri/icons/Square107x107Logo.png
-!src-tauri/icons/Square142x142Logo.png
-!src-tauri/icons/Square150x150Logo.png
-!src-tauri/icons/Square284x284Logo.png
-!src-tauri/icons/Square310x310Logo.png
-!src-tauri/icons/StoreLogo.png
-# SVG sources (design originals; PNG matrix above is rasterized from these)
-!src-tauri/icons/*.svg
 
 # IDE
 .vscode/
 .idea/
 *.swp
-*.swo
-
-# Docs & Agent 入口 —— 全部入库
-#
-# 原策略为「code only in git」，即 `docs/**` 只留本地，仅 release-workflow.md 入库。
-# v2.0.0-gpui 重构改为 spec 驱动，文档是工作流的**必要组成**而非附属材料：
-#   - spec 注册表（docs/specs/）是唯一状态源，CI 需读取
-#   - 证据（docs/evidence/）不可再生，丢失即无法验收
-#   - agent 入口（CLAUDE.md / AGENTS.md 等）必须随仓库分发
-# 否则其他 agent、CI、克隆出来的仓库都无法工作。
-# 规则见 docs/specs/RULES.md §13。
+.reasonix/

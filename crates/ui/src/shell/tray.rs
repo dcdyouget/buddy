@@ -18,7 +18,7 @@ const AUTOSTART_ERROR_TOOLTIP: &str = "Buddy：开机自启不可用";
 const AUTOSTART_BUSY_TOOLTIP: &str = "Buddy：正在更新开机自启";
 
 // v1 已验收的 2x 菜单栏图标；模板模式由 macOS 根据浅深色自动着色。
-const TRAY_ICON_PNG: &[u8] = include_bytes!("../../../../src-tauri/icons/tray@2x.png");
+const TRAY_ICON_PNG: &[u8] = include_bytes!("../../assets/tray@2x.png");
 
 /// 托盘回调交给 GPUI 侧处理的动作。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

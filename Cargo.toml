@@ -9,10 +9,8 @@ members = [
     "crates/update",
     "apps/buddy",
 ]
-# ⚠️ 必须 exclude v1 的 Tauri 工程。
-# 否则 src-tauri/Cargo.toml 会向上找到本 workspace，因不是成员而报错，
-# 导致 v1 无法构建 —— 而 v1 在 Phase 05 之前必须保持可用（S01-05 退路）。
-exclude = ["src-tauri", "vendor/global-hotkey"]
+# vendored global-hotkey 经下方 [patch.crates-io] 使用，不是 workspace 成员
+exclude = ["vendor/global-hotkey"]
 
 [workspace.package]
 version = "0.1.2"
@@ -79,7 +77,7 @@ pulldown-cmark = { version = "0.13.0", default-features = false }
 smallvec = { version = "1.6", features = ["union", "const_new"] }
 stacksafe = "1.0"
 tempfile = "3"
-# 数据目录定位，与 v1 Tauri app_data_dir 同源（tauri 2.11 用 dirs 6）
+# 数据目录定位（与 v1 Tauri app_data_dir 同一算法，沿用 v1 数据）
 dirs = "6"
 parking_lot = "0.12"
 env_logger = "0.11"
