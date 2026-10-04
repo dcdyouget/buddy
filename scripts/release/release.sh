@@ -10,6 +10,9 @@
 #   --skip-tests                           跳过测试（仅用于重跑失败的上传 / 发布）
 #   --skip-publish                         只构建、上传版本目录，不改 channels/stable.json
 #   --yes                                  发布前不再询问确认
+#   --republish                            以线上同一版本号重新发布（覆盖制品、移动本地标签）。
+#                                          已安装该版本的客户端不会收到（版本未变高），只用于尚无用户时修正首发；
+#                                          标签已推送到远端时拒绝。
 #
 # 签名私钥密码读取顺序：环境变量 TAURI_SIGNING_PRIVATE_KEY_PASSWORD →
 #   钥匙串（security add-generic-password -s buddy-updater-key -a buddy -w）→ 终端输入。
@@ -37,6 +40,7 @@ NOTES=""
 NOTES_FILE=""
 SKIP_TESTS=false
 SKIP_PUBLISH=false
+REPUBLISH=false
 YES=false
 
 fail() { printf '\n错误：%s\n' "$*" >&2; exit 1; }
@@ -48,6 +52,7 @@ while [[ $# -gt 0 ]]; do
     --notes-file) NOTES_FILE="${2:?--notes-file 需要路径}"; shift ;;
     --skip-tests) SKIP_TESTS=true ;;
     --skip-publish) SKIP_PUBLISH=true ;;
+    --republish) REPUBLISH=true ;;
     --yes) YES=true ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     v[0-9]*|[0-9]*) VERSION="${1#v}" ;;
@@ -102,10 +107,20 @@ if [[ -z "$VERSION" ]]; then
   read -r -p "当前版本 $(workspace_version)，请输入新版本号：" VERSION
 fi
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "版本号必须是 主.次.修订：$VERSION"
-git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null && fail "标签 v$VERSION 已存在"
 PUBLISHED="$(remote_version)"
-if [[ -n "$PUBLISHED" ]]; then
-  version_gt "$VERSION" "$PUBLISHED" || fail "新版本 $VERSION 必须高于线上版本 $PUBLISHED"
+if [[ "$REPUBLISH" == true ]]; then
+  [[ "$VERSION" == "$PUBLISHED" ]] || fail "--republish 只能用于线上当前版本 ${PUBLISHED:-（无）}"
+  for remote in $(git remote); do
+    REMOTE_TAG="$(git ls-remote --tags "$remote" "refs/tags/v$VERSION" 2>/dev/null)" \
+      || fail "无法查询 $remote 的标签，不能确认 v$VERSION 未推送"
+    [[ -z "$REMOTE_TAG" ]] || fail "标签 v$VERSION 已推送到 $remote，不能重新发布同一版本"
+  done
+  echo "重新发布 $VERSION：已安装 $VERSION 的客户端不会收到此次更新，需手动重装"
+else
+  git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null && fail "标签 v$VERSION 已存在"
+  if [[ -n "$PUBLISHED" ]]; then
+    version_gt "$VERSION" "$PUBLISHED" || fail "新版本 $VERSION 必须高于线上版本 $PUBLISHED"
+  fi
 fi
 echo "线上版本：${PUBLISHED:-（尚未发布）} → 新版本：$VERSION"
 
@@ -212,7 +227,11 @@ upload "$OUT/manifest.json" "$CHANNEL_KEY" "no-cache"
 verify_public "$CHANNEL_URL" "$OUT/manifest.json"
 
 step 9/9 "打本地标签"
-git tag -a "v$VERSION" -m "Buddy v$VERSION" "$COMMIT"
+if [[ "$REPUBLISH" == true ]]; then
+  git tag -f -a "v$VERSION" -m "Buddy v$VERSION" "$COMMIT" >/dev/null
+else
+  git tag -a "v$VERSION" -m "Buddy v$VERSION" "$COMMIT"
+fi
 
 INSTALLER_URL="$(node -e 'console.log(require(process.argv[1]).platforms["darwin-aarch64"].installer.url)' "$OUT/manifest.json")"
 printf '\n发布完成：Buddy %s（commit %s，标签 v%s 仅本地）\n' "$VERSION" "$COMMIT" "$VERSION"
