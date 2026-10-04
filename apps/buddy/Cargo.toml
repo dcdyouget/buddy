@@ -12,16 +12,20 @@ name = "buddy"
 path = "src/main.rs"
 
 [dependencies]
-# ⚠️ app 只依赖两个分层 crate —— **不直接依赖 gpui / theme / ui**
+# ⚠️ app 只依赖分层 crate（ui / engine / update）—— **不直接依赖 gpui / theme / ui**
 #    理由见 crates/ui/src/lib.rs 顶部的重导出说明：
 #    「UI 层是唯一接触 zed 的地方」。
 buddy-ui.workspace = true
 buddy-engine.workspace = true
+# 启动后清理上次自更新留下的旧应用备份与下载缓存
+buddy-update.workspace = true
 
 log.workspace = true
 env_logger.workspace = true
 
 [dev-dependencies]
+# examples/update_probe.rs（S08-03）：不经界面的自更新端到端探针
+reqwest.workspace = true
 # examples/chat_bridge.rs（S02-06 驱动程序）：mock SSE 与配置构造
 tokio.workspace = true
 serde_json.workspace = true

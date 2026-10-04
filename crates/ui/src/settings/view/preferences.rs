@@ -11,6 +11,11 @@ impl SettingsView {
         &self.theme
     }
 
+    /// 软件更新区域（Router 设置重启状态、自检读取）。
+    pub fn update_control(&self) -> &gpui::Entity<super::super::update::UpdateControl> {
+        &self.update
+    }
+
     pub(super) fn sync_preferences(&self, cx: &mut Context<Self>) {
         self.hotkey.update(cx, |control, cx| {
             control.set_current_hotkey(self.config.hotkey.clone(), cx)
@@ -25,6 +30,8 @@ impl SettingsView {
         self.hotkey
             .update(cx, |control, cx| control.set_active(active, cx));
         self.theme
+            .update(cx, |control, cx| control.set_active(active, cx));
+        self.update
             .update(cx, |control, cx| control.set_active(active, cx));
     }
 

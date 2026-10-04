@@ -34,6 +34,8 @@ pub enum SettingsEvent {
     HotkeyChanged(String),
     /// 保存成功后发布浅 / 深主题。
     ThemeChanged(Theme),
+    /// 新版本已安装到磁盘，由 Router 选择重启时机。
+    UpdateReady(buddy_update::Installed),
 }
 
 /// 作为原页面上的全尺寸覆盖层，保留底层输入草稿和生成任务。
@@ -50,6 +52,7 @@ pub struct SettingsView {
     model_list: gpui::Entity<ModelListView>,
     hotkey: gpui::Entity<super::hotkey::HotkeyRecorder>,
     theme: gpui::Entity<super::theme_control::ThemeControl>,
+    update: gpui::Entity<super::update::UpdateControl>,
     provider_motion: SlideMotion,
     drag_source: DragSource,
     _subscriptions: Vec<Subscription>,
@@ -70,6 +73,7 @@ impl SettingsView {
         let model_list = cx.new(|cx| ModelListView::new(config.clone(), cx));
         let hotkey = cx.new(|cx| super::hotkey::HotkeyRecorder::new(config.hotkey.clone(), cx));
         let theme = cx.new(|cx| super::theme_control::ThemeControl::new(config.theme.clone(), cx));
+        let update = cx.new(super::update::UpdateControl::new);
         let subscriptions = vec![
             cx.subscribe(
                 &provider,
@@ -107,6 +111,10 @@ impl SettingsView {
                     }
                 },
             ),
+            // 安装由用户在本页发起，完成时设置页可能已关闭：重启事件无条件上交
+            cx.subscribe(&update, |_, _, event: &super::update::UpdateReady, cx| {
+                cx.emit(SettingsEvent::UpdateReady(event.0.clone()));
+            }),
         ];
         Self {
             config,
@@ -121,6 +129,7 @@ impl SettingsView {
             model_list,
             hotkey,
             theme,
+            update,
             provider_motion: SlideMotion::default(),
             drag_source: drag::default_drag_source(),
             _subscriptions: subscriptions,
@@ -243,6 +252,8 @@ impl SettingsView {
             self.hotkey.read(cx).button_bounds_for_test()
         } else if id.starts_with("theme-") {
             self.theme.read(cx).control_bounds(id)
+        } else if id.starts_with("update-") {
+            self.update.read(cx).control_bounds(id)
         } else {
             self.model_list.read(cx).control_bounds(id)
         };

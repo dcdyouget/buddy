@@ -13,7 +13,7 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "version:set": "node scripts/set-version.mjs",
-    "release:mac": "bash scripts/release-macos.sh",
+    "release": "bash scripts/release/release.sh",
     "test": "vitest",
     "test:run": "vitest run"
   },

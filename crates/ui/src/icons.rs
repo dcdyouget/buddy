@@ -128,6 +128,8 @@ icons! {
     ShieldCheck => "shield-check",
     /// 拒绝（lucide `shield-x`）
     ShieldX => "shield-x",
+    /// 检查更新（lucide `refresh-cw`）
+    RefreshCw => "refresh-cw",
     /// 流式四角星（Buddy 自绘，v1 `.streaming-next-star`）
     StreamingStar => "streaming-star",
 }

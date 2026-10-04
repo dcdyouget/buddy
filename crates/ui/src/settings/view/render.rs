@@ -126,6 +126,14 @@ impl Render for SettingsView {
                             .w_full()
                             .h(px(m::SPACE_3)),
                     )
+                    // v1 顺序：外观 → 快捷键 → 软件更新 → 模型
+                    .child(self.update.clone())
+                    .child(
+                        drag::region_if(&self.drag_source, interactive)
+                            .flex_none()
+                            .w_full()
+                            .h(px(m::SPACE_3)),
+                    )
                     .child(models),
             );
         let provider = self.provider_motion.present().then(|| {
@@ -175,6 +183,7 @@ impl Render for SettingsView {
                                 if let Some(focus) = this.hotkey.read(cx).focus_control(cx) {
                                     order.push(("hotkey".to_string(), focus));
                                 }
+                                order.extend(this.update.read(cx).focus_controls());
                                 order.extend(this.model_list.read(cx).focus_order(cx).into_iter());
                                 order.push(("add".to_string(), this.add.clone()));
                                 let current =

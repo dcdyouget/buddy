@@ -11,6 +11,8 @@ pub mod provider_merge;
 pub mod provider_presets;
 pub mod select;
 pub mod theme_control;
+pub mod update;
+mod update_view;
 pub mod view;
 
 pub use view::{SettingsEvent, SettingsView};

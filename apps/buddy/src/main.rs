@@ -35,6 +35,8 @@ fn main() {
             }
         }
     };
+    // 上次自更新留下的 `.Buddy.app.update-old` 与下载缓存；只涉及文件删除，放到后台线程
+    std::thread::spawn(buddy_update::cleanup_after_launch);
     // 与 v1 相同的应用数据目录；不进行历史迁移。
     let data_dir = match storage::default_data_dir() {
         Ok(path) => path,

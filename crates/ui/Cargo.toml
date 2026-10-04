@@ -20,6 +20,8 @@ buddy-markdown.workspace = true
 
 # 引擎层（MIT）—— 注意依赖方向：UI 依赖 engine，反向不允许
 buddy-engine.workspace = true
+# 自更新（MIT，零 GPUI 依赖）—— 设置页「软件更新」调用
+buddy-update.workspace = true
 
 log.workspace = true
 # chat_bridge：engine 事件通道（tokio mpsc）

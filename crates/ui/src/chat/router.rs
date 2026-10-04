@@ -146,6 +146,8 @@ pub struct PageRouter {
     config_save_state: Rc<RefCell<config_save::ConfigSaveState>>,
     /// 外壳注入系统热键事务；独立页面预览没有原生注册。
     hotkey_updater: Option<Rc<dyn Fn(&str) -> Result<(), String>>>,
+    /// 已安装但因流式回复未结束而推迟的重启。
+    pending_update: Option<buddy_update::Installed>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -192,6 +194,9 @@ impl PageRouter {
                     }
                     crate::settings::SettingsEvent::ThemeChanged(value) => {
                         this.save_preference(preferences::Preference::Theme(value.clone()), cx)
+                    }
+                    crate::settings::SettingsEvent::UpdateReady(installed) => {
+                        this.restart_for_update(installed.clone(), cx)
                     }
                 },
             ),
@@ -249,6 +254,7 @@ impl PageRouter {
             run: None,
             model_menu: None,
             config_save: None,
+            pending_update: None,
             _subscriptions: subscriptions,
         };
         this.apply_config(cx);
@@ -572,6 +578,9 @@ impl PageRouter {
         if self.was_streaming && !streaming {
             let needs_key = self.conversation.update(cx, |c, _| c.take_needs_api_key());
             self.transition(cx, |p| p.stream_finished(needs_key));
+            if let Some(installed) = self.pending_update.take() {
+                self.restart_for_update(installed, cx);
+            }
         }
         self.was_streaming = streaming;
     }
@@ -586,6 +595,8 @@ mod settings_save;
 mod preferences;
 #[path = "router_autostart.rs"]
 mod autostart_save;
+#[path = "router_update.rs"]
+mod update_restart;
 
 impl Render for PageRouter {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

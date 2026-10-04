@@ -6,6 +6,7 @@ members = [
     "crates/markdown",
     "crates/markdown/util-shim",
     "crates/syntax",
+    "crates/update",
     "apps/buddy",
 ]
 # ⚠️ 必须 exclude v1 的 Tauri 工程。
@@ -28,6 +29,7 @@ buddy-engine = { path = "crates/engine" }
 buddy-ui = { path = "crates/ui" }
 buddy-markdown = { path = "crates/markdown" }
 buddy-syntax = { path = "crates/syntax" }
+buddy-update = { path = "crates/update" }
 
 # ── GPUI 与 zed crate（S00-01 实测的组合）──
 #
@@ -95,6 +97,11 @@ block = "0.1"
 libc = "0.2"
 # 文本输入的字形 / 词边界（S05-06）；与 gpui 闭包中同一版本，不新增包
 unicode-segmentation = "1"
+# 自更新（Phase 08）：sha256 与 Ed25519 minisign 验签（公钥与 v1 Tauri Updater 同一把）
+sha2 = "0.10"
+hex = "0.4"
+semver = "1"
+minisign-verify = "0.2"
 
 # ═══════════════════════════════════════════════════════════════
 # ⚠️ 必须复制 zed 的 `[patch.crates-io]`
@@ -132,6 +139,10 @@ unicode-segmentation = "1"
 #
 # ⚠️ 到那时**必须加回来**，否则会因 API 不匹配而编译失败。见
 #    docs/evidence/s00-06/README.md §1 与 THIRD_PARTY_NOTICES.md §5。
+# 发布构建去掉符号表（实测二进制 58.5 MB → 53.8 MB，更新包 tar.gz 12.2 MB）
+[profile.release]
+strip = true
+
 [patch.crates-io]
 # S07-03: Carbon must reject conflicts, not silently register an inactive shared hotkey.
 global-hotkey = { path = "vendor/global-hotkey" }
