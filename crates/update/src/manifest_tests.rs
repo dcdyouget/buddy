@@ -17,7 +17,7 @@ fn manifest_json(version: &str) -> String {
         "notes": "修复问题\n新增功能",
         "platforms": {
             "darwin-aarch64": {
-                "update": asset("https://example.com/Buddy.app.tar.gz"),
+                "update": asset("https://example.com/Buddy.app.tar.xz"),
                 "installer": asset("https://example.com/Buddy.dmg"),
             }
         }
@@ -33,7 +33,7 @@ fn newer_version_is_selected_with_notes() {
         .unwrap();
     assert_eq!(release.version, "0.2.0");
     assert_eq!(release.notes, "修复问题\n新增功能");
-    assert!(release.update.url.ends_with(".app.tar.gz"));
+    assert!(release.update.url.ends_with(".app.tar.xz"));
 }
 
 #[test]

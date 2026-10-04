@@ -5,7 +5,9 @@ use std::fs;
 fn fake_app(dir: &Path, name: &str, id: &str, version: &str, marker: &str) -> PathBuf {
     let app = dir.join(name);
     let macos = app.join("Contents/MacOS");
+    let resources = app.join("Contents/Resources");
     fs::create_dir_all(&macos).unwrap();
+    fs::create_dir_all(&resources).unwrap();
     fs::write(
         app.join("Contents/Info.plist"),
         format!(
@@ -21,7 +23,8 @@ fn fake_app(dir: &Path, name: &str, id: &str, version: &str, marker: &str) -> Pa
     )
     .unwrap();
     fs::copy("/usr/bin/true", macos.join("buddy")).unwrap();
-    fs::write(macos.join("marker"), marker).unwrap();
+    // 非 Mach-O 文件只能放 Resources：放在 MacOS 下时签名存于扩展属性，打包更新时会丢失
+    fs::write(resources.join("marker"), marker).unwrap();
     let status = Command::new("/usr/bin/codesign")
         .args(["--force", "--deep", "-s", "-"])
         .arg(&app)
@@ -49,7 +52,7 @@ fn wrong_identity_version_or_tampering_is_rejected() {
     assert!(validate_bundle(&app, "0.3.0").is_err());
 
     // 签名后改动内容：codesign --strict 必须拒绝
-    fs::write(app.join("Contents/MacOS/marker"), "tampered").unwrap();
+    fs::write(app.join("Contents/Resources/marker"), "tampered").unwrap();
     assert!(validate_bundle(&app, "0.2.0").is_err());
 }
 
@@ -65,7 +68,7 @@ fn swap_replaces_target_and_removes_backup() {
 
     swap(&new_app, &target).unwrap();
 
-    let marker = fs::read_to_string(target.join("Contents/MacOS/marker")).unwrap();
+    let marker = fs::read_to_string(target.join("Contents/Resources/marker")).unwrap();
     assert_eq!(marker, "new");
     validate_bundle(&target, "0.2.0").unwrap();
     let leftovers: Vec<_> = fs::read_dir(&installed).unwrap().map(|e| e.unwrap().file_name()).collect();
@@ -80,6 +83,29 @@ fn single_app_requires_exactly_one_bundle() {
     assert!(single_app(dir.path()).is_ok());
     fake_app(dir.path(), "Second.app", BUNDLE_ID, "0.2.0", "b");
     assert!(single_app(dir.path()).is_err());
+}
+
+#[test]
+fn unpack_accepts_xz_and_gzip_archives() {
+    for (flag, name) in [("-cJf", "u.tar.xz"), ("-czf", "u.tar.gz")] {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        fake_app(&src, "Buddy.app", BUNDLE_ID, "0.2.0", "new");
+        let archive = dir.path().join(name);
+        let status = Command::new("/usr/bin/tar")
+            .env("COPYFILE_DISABLE", "1")
+            .arg(flag)
+            .arg(&archive)
+            .arg("-C")
+            .arg(&src)
+            .arg("Buddy.app")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let app = unpack(&archive).unwrap();
+        validate_bundle(&app, "0.2.0").unwrap();
+    }
 }
 
 #[test]

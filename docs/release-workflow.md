@@ -27,7 +27,7 @@ bucket `buddy-release`（cn-beijing）不能删除、改名或换地域；将来
   "notes": "中文更新说明",
   "platforms": {
     "darwin-aarch64": {
-      "update":    { "url": ".../Buddy_0.1.0_aarch64.app.tar.gz", "size": 0, "sha256": "…", "signature": "…" },
+      "update":    { "url": ".../Buddy_0.1.0_aarch64.app.tar.xz", "size": 0, "sha256": "…", "signature": "…" },
       "installer": { "url": ".../Buddy_0.1.0_aarch64.dmg",        "size": 0, "sha256": "…", "signature": "…" }
     }
   },
@@ -46,7 +46,7 @@ buddy/
   channels/stable.json                       ← 发布开关（no-cache），唯一会被覆盖的对象
   releases/<版本>/
     manifest.json                            ← 本版本清单存档
-    macos/aarch64/Buddy_<版本>_aarch64.app.tar.gz(.sig)   ← 应用内更新包
+    macos/aarch64/Buddy_<版本>_aarch64.app.tar.xz(.sig)   ← 应用内更新包（0.1.0 为 .tar.gz）
     macos/aarch64/Buddy_<版本>_aarch64.dmg(.sig)          ← 手动安装包
     source/buddy-<版本>-src.tar.gz           ← GPL-3.0 源码
 ```
@@ -69,7 +69,7 @@ npm run release -- 0.2.0 --notes-file notes.txt --yes
 | 2 | 写入 `Cargo.toml` 的 `[workspace.package] version` 并本地提交 `chore(release): v<版本>` | 只有本地提交；重跑会跳过 |
 | 3 | `scripts/gate.sh` 与 `cargo test --workspace --exclude buddy-markdown` | 无上传 |
 | 4 | `cargo build --release --locked`（`MACOSX_DEPLOYMENT_TARGET=12.0`） | 无上传 |
-| 5 | `bundle-macos.sh` 组装 `Buddy.app`（ad-hoc 签名）、更新包、DMG；`git archive` 源码包；签名；生成清单 | 无上传 |
+| 5 | `bundle-macos.sh` 组装 `Buddy.app`（ad-hoc 签名）、更新包（tar.xz）、DMG（ULMO）；`git archive` 源码包；签名；生成清单 | 无上传 |
 | 6 | 上传版本目录，并从公网下载回来比对 sha256 | 版本目录存在但未被引用，用户不可见 |
 | 7 | 发布确认（`--yes` 跳过） | — |
 | 8 | 覆盖 `channels/stable.json` 并公网回读比对 | **此刻起用户可见** |

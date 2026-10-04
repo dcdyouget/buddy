@@ -1,4 +1,4 @@
-//! macOS 安装：解压已验证的 `Buddy.app` → 校验 → 在原位置同目录内改名替换。
+//! macOS 安装：解压已验证的 `Buddy.app`（tar.xz / tar.gz）→ 校验 → 在原位置同目录内改名替换。
 //!
 //! 替换顺序（目录写权限足够时）：
 //!   1. `ditto` 复制新包到 `.<名称>.update-new`（与目标同目录，保证之后的 rename 是原子的）
@@ -13,6 +13,14 @@ use std::process::{Command, Stdio};
 
 pub(crate) fn install(archive: &Path, version: &str) -> Result<Installed, UpdateError> {
     let target = current_app()?;
+    let new_app = unpack(archive)?;
+    validate_bundle(&new_app, version)?;
+    swap(&new_app, &target)?;
+    Ok(Installed { app: target })
+}
+
+/// 解压到更新包旁的 `staging/`，返回其中唯一的 `.app`。
+pub(crate) fn unpack(archive: &Path) -> Result<PathBuf, UpdateError> {
     let staging = archive
         .parent()
         .ok_or_else(|| UpdateError::Install("更新包路径无效".into()))?
@@ -21,18 +29,17 @@ pub(crate) fn install(archive: &Path, version: &str) -> Result<Installed, Update
         std::fs::remove_dir_all(&staging).map_err(install_error("清理解压目录失败"))?;
     }
     std::fs::create_dir_all(&staging).map_err(install_error("创建解压目录失败"))?;
+    // 不指定压缩格式：bsdtar 解包时自动识别（0.1.0 的 tar.gz、之后的 tar.xz）。
+    // 已发布的 0.1.0 客户端使用 `-xzf`，bsdtar 在解包模式忽略 -z，同样能解 tar.xz。
     run(
         Command::new("/usr/bin/tar")
-            .arg("-xzf")
+            .arg("-xf")
             .arg(archive)
             .arg("-C")
             .arg(&staging),
         "解压更新包失败",
     )?;
-    let new_app = single_app(&staging)?;
-    validate_bundle(&new_app, version)?;
-    swap(&new_app, &target)?;
-    Ok(Installed { app: target })
+    single_app(&staging)
 }
 
 /// 当前运行的 `.app`；开发构建、从 DMG 直接运行或被系统随机化路径运行时拒绝更新。

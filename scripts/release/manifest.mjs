@@ -4,7 +4,7 @@
 //   node scripts/release/manifest.mjs --version 0.1.0 --notes-file notes.txt \
 //     --base-url https://.../buddy/releases/0.1.0 --dir .release/0.1.0 --output manifest.json
 //
-// --dir 下需要：macos/aarch64/Buddy_<v>_aarch64.{app.tar.gz,dmg} 及对应 .sig、source/buddy-<v>-src.tar.gz
+// --dir 下需要：macos/aarch64/Buddy_<v>_aarch64.{app.tar.xz,dmg} 及对应 .sig、source/buddy-<v>-src.tar.gz
 import { createHash } from "node:crypto";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -49,7 +49,7 @@ const manifest = {
   notes,
   platforms: {
     "darwin-aarch64": {
-      update: asset(`${mac}.app.tar.gz`, true),
+      update: asset(`${mac}.app.tar.xz`, true),
       installer: asset(`${mac}.dmg`, true),
     },
   },

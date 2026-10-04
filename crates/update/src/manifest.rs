@@ -25,7 +25,7 @@ pub struct Manifest {
 /// 单个平台的两个制品。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlatformRelease {
-    /// 应用内更新包（macOS：`Buddy.app` 的 tar.gz）。
+    /// 应用内更新包（macOS：`Buddy.app` 的 tar.xz；0.1.0 为 tar.gz）。
     pub update: Asset,
     /// 新用户手动安装包（macOS：DMG）。
     pub installer: Asset,

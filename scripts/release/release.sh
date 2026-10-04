@@ -173,7 +173,7 @@ scripts/release/bundle-macos.sh "$VERSION" "$ROOT/target/release/buddy" "$MAC_DI
 [[ "$(plutil -extract CFBundleShortVersionString raw -o - "$MAC_DIR/Buddy.app/Contents/Info.plist")" == "$VERSION" ]] \
   || fail "Info.plist 版本与 $VERSION 不一致"
 git archive --format=tar.gz --prefix="buddy-$VERSION/" -o "$OUT/source/buddy-$VERSION-src.tar.gz" HEAD
-UPDATE="$MAC_DIR/Buddy_${VERSION}_aarch64.app.tar.gz"
+UPDATE="$MAC_DIR/Buddy_${VERSION}_aarch64.app.tar.xz"
 INSTALLER="$MAC_DIR/Buddy_${VERSION}_aarch64.dmg"
 sign "$UPDATE"
 sign "$INSTALLER"

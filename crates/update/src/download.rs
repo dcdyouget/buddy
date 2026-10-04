@@ -100,7 +100,7 @@ fn archive_name(url: &str) -> PathBuf {
         && last
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
-    PathBuf::from(if safe { last } else { "update.tar.gz" })
+    PathBuf::from(if safe { last } else { "update.tar" })
 }
 
 #[cfg(test)]
@@ -133,10 +133,10 @@ mod tests {
     #[test]
     fn archive_name_rejects_path_tricks() {
         assert_eq!(
-            archive_name("https://x/releases/0.1.0/Buddy_0.1.0_aarch64.app.tar.gz"),
-            PathBuf::from("Buddy_0.1.0_aarch64.app.tar.gz")
+            archive_name("https://x/releases/0.1.1/Buddy_0.1.1_aarch64.app.tar.xz"),
+            PathBuf::from("Buddy_0.1.1_aarch64.app.tar.xz")
         );
-        assert_eq!(archive_name("https://x/a%2F..%2Fb"), PathBuf::from("update.tar.gz"));
-        assert_eq!(archive_name("https://x/"), PathBuf::from("update.tar.gz"));
+        assert_eq!(archive_name("https://x/a%2F..%2Fb"), PathBuf::from("update.tar"));
+        assert_eq!(archive_name("https://x/"), PathBuf::from("update.tar"));
     }
 }
