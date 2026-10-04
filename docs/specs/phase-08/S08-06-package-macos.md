@@ -41,6 +41,7 @@
 | DMG | `hdiutil verify` → `checksum … is VALID`；只读挂载可见 `Applications -> /Applications` 与 `Buddy.app`，Resources 含 4 个许可文件与 icon.icns，`codesign --verify --deep --strict` 通过 |
 | 体积 | 二进制 58,520,112 B（未 strip）→ 53,757,328 B（strip）。0.1.0 发布时为 gzip 更新包 12.2 MB / UDZO DMG 14.6 MB |
 | 体积构成 | strip 后 53.5 MB 中 `__TEXT,__const` 30.15 MB、`__text` 17.41 MB。未 strip 符号聚合：tree-sitter 语法表 28.41 MB + 词法代码 1.90 MB。按语法静态库：C# 5.33、Swift 3.75、Kotlin 3.45、C++ 3.44、TypeScript+TSX 2.86、SQL 2.43、Ruby 2.11、PHP 2.06、Bash 1.37、Rust 1.12 MB，其余 16 个合计约 3.8 MB，总计 31.75 MB |
+| 内置语法缩减 | 用户 2026-10-04 决定只内置 Python / Shell / SQL 语法，其余语言改用 `buddy_syntax::generic` 通用高亮：`cargo tree -p buddy-app -e normal` 只剩 tree-sitter-bash / python / sequel；release 二进制 53,757,328 → 27,252,176 B，更新包 tar.xz 6,198,068 B，DMG（ULMO）7,003,519 B |
 | 压缩 | 同一 0.1.0 Buddy.app 实测：tar.gz 12,208,540 → tar.xz（bsdtar `xz:compression-level=9`）7,614,524 B；DMG UDZO 14,624,731 → ULFO 12,212,905 / UDBZ 12,467,174 / **ULMO 9,448,714 B**。`unpack_accepts_xz_and_gzip_archives` 单测确认安装器两种格式均可解；已发布 0.1.0 使用的 `tar -xzf` 实测可解 tar.xz（bsdtar 解包模式忽略 -z）并通过 `codesign --verify --strict` |
 
 ## 决策记录
@@ -61,5 +62,4 @@
 
 ## 备注
 
-改用 xz / ULMO 后安装包 9.4 MB，满足 AGENTS.md 的 `< 10 MB` 目标；下一次发布生效（线上 0.1.0 仍为 14.6 MB）。
-进一步缩减的主要手段是减少内置语法（S04-02 的取舍；被移除的语言代码块将无高亮），需用户决定。
+改用 xz / ULMO 并只内置三种语法后安装包 7.0 MB，满足 AGENTS.md 的 `< 10 MB` 目标；下一次发布生效（线上 0.1.0 仍为 14.6 MB）。

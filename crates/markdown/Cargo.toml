@@ -34,8 +34,8 @@ pulldown-cmark.workspace = true
 smallvec.workspace = true
 stacksafe.workspace = true
 # 语法高亮（S04-02；MIT，移植自 Comet）—— 替代 zed `language` 的高亮能力
-# extra-languages：用户决定（2026-09-27）启用 v1 之外的 10 种语言（约 +12 MB，见 S04-03 测量）
-buddy-syntax = { workspace = true, features = ["extra-languages"] }
+# 只编译 Python / Shell / SQL 语法；其余语言走 buddy-syntax 的通用高亮（用户 2026-10-04 决定，S08-06 体积分析）
+buddy-syntax.workspace = true
 # ⚠️ 与 zed 原 Cargo.toml 的差异：移除 language / settings / theme_settings / mermaid_render
 #    （由 src/{language_stub,theme_settings_shim,mermaid}.rs 替代，理由见各文件头与 S00-06）
 

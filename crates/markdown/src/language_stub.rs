@@ -181,46 +181,64 @@ fn category_of(kind: buddy_syntax::HighlightKind) -> Option<usize> {
     })
 }
 
-/// 代码块围栏标签 → 语言。
+/// 代码块围栏标签 → 高亮方式。
 ///
-/// v1 的集合取自 `prism-react-renderer` 2.4.1 运行时注册（`node -e` 实测）：
-/// c cpp css go graphql html/markup/xml/svg json js/jsx/flow kotlin markdown objc python reason
-/// regex rust sql swift ts/tsx yaml（+ actionscript / coffeescript）。
-/// 其中 tree-sitter 无对应语法的（objc / graphql / reason / regex / actionscript / coffeescript）按纯文本。
+/// 用户决定（2026-10-04，S08-06 体积分析）：只内置 Python / Shell / SQL 的 tree-sitter 语法；
+/// 其余任何带标签的代码块（rust、ts、java、objc、graphql…）都用 `buddy_syntax::generic` 通用高亮。
+/// 纯文本类标签（[`PLAIN_TAGS`]）与无标签代码块不着色。
 ///
-/// S04-02 起只放行上述 v1 集合；**用户决定（2026-09-27）另外启用** Comet 支持而 v1 无高亮的
-/// bash / toml / java / ruby / php / c# / lua / nix / make / dockerfile / jsonc
-/// （`buddy-syntax` 的 `extra-languages` feature，由本 crate 的 Cargo.toml 打开）。
-fn v1_language(tag: &str) -> Option<buddy_syntax::LanguageId> {
+/// 此前（S04-02 / 2026-09-27）按 v1 prism 集合 + 额外 10 种语言内置全部语法，约占发布二进制 30 MB。
+fn resolve(tag: &str) -> Option<Highlighter> {
     use buddy_syntax::LanguageId as L;
     let tag = tag.trim().split_ascii_whitespace().next()?.to_ascii_lowercase();
-    Some(match tag.as_str() {
+    if PLAIN_TAGS.contains(&tag.as_str()) {
+        return None;
+    }
+    let id = match tag.as_str() {
         // prism 把这些都归入 markup
-        "markup" | "xml" | "svg" | "mathml" | "ssml" | "rss" | "atom" => L::Html,
-        "flow" => L::JavaScript,
-        other => buddy_syntax::language_for_alias(other)?,
+        "markup" | "xml" | "svg" | "mathml" | "ssml" | "rss" | "atom" => Some(L::Html),
+        "flow" => Some(L::JavaScript),
+        other => buddy_syntax::language_for_alias(other),
+    };
+    Some(match id {
+        Some(id) if buddy_syntax::supports_language(id) => Highlighter::Grammar(id),
+        _ => Highlighter::Generic,
     })
+}
+
+/// 不着色的围栏标签：输出、日志、差异等非代码内容。
+const PLAIN_TAGS: &[&str] = &[
+    "text", "plain", "plaintext", "txt", "log", "logs", "output", "diff", "patch", "csv", "tsv",
+];
+
+/// 代码块的高亮方式
+#[derive(Clone, Copy, Debug)]
+enum Highlighter {
+    /// 内置 tree-sitter 语法（Python / Shell / SQL）
+    Grammar(buddy_syntax::LanguageId),
+    /// 通用词法高亮
+    Generic,
 }
 
 /// 语言句柄
 #[derive(Clone, Debug)]
 pub struct Language {
     scope: LanguageScope,
-    id: Option<buddy_syntax::LanguageId>,
+    highlighter: Option<Highlighter>,
 }
 
 impl Language {
     pub fn new(scope: &'static str) -> Self {
         Self {
             scope: LanguageScope(scope),
-            id: None,
+            highlighter: None,
         }
     }
 
-    fn highlighted(id: buddy_syntax::LanguageId) -> Self {
+    fn highlighted(highlighter: Highlighter) -> Self {
         Self {
             scope: LanguageScope("source"),
-            id: Some(id),
+            highlighter: Some(highlighter),
         }
     }
 
@@ -232,29 +250,33 @@ impl Language {
         self.scope
     }
 
-    /// tree-sitter 高亮（Comet `buddy_syntax`），返回按 [`SYNTAX_CATEGORIES`] 编号的区间。
+    /// 语法高亮（tree-sitter 或通用词法），返回按 [`SYNTAX_CATEGORIES`] 编号的区间。
     ///
     /// 签名与 zed 一致：**不返回 `Result`**（`markdown.rs` 直接使用返回值）；
     /// 失败（超限、未知语言等）返回空结果，消费点据此按纯文本渲染。
     pub fn highlight_text_resolved(&self, rope: &Rope, range: Range<usize>) -> ResolvedHighlights {
-        let Some(id) = self.id else {
+        let Some(highlighter) = self.highlighter else {
             return ResolvedHighlights::default();
         };
         let Some(source) = rope.as_str().get(range.clone()) else {
             return ResolvedHighlights::default();
         };
-        let request = buddy_syntax::HighlightRequest {
-            source,
-            path: None,
-            fence_tag: Some(language_tag(id)),
+        let lines = match highlighter {
+            Highlighter::Grammar(id) => buddy_syntax::highlight(buddy_syntax::HighlightRequest {
+                source,
+                path: None,
+                fence_tag: Some(language_tag(id)),
+            })
+            .map(|doc| doc.lines),
+            Highlighter::Generic => buddy_syntax::generic::highlight(source),
         };
-        let Ok(doc) = buddy_syntax::highlight(request) else {
+        let Ok(lines) = lines else {
             return ResolvedHighlights::default();
         };
         // Comet 输出为「按行、行内字节偏移」；换算为相对 range.start 的绝对偏移
         let mut runs = Vec::new();
         let mut line_start = 0usize;
-        for (line, spans) in source.split_inclusive('\n').zip(doc.lines.iter()) {
+        for (line, spans) in source.split_inclusive('\n').zip(lines.iter()) {
             for span in spans {
                 if let Some(cat) = category_of(span.kind) {
                     runs.push((
@@ -294,7 +316,6 @@ fn language_tag(id: buddy_syntax::LanguageId) -> &'static str {
         L::Kotlin => "kotlin",
         L::Swift => "swift",
         L::Sql => "sql",
-        // 用户决定（2026-09-27）启用的语言
         L::Jsonc => "jsonc",
         L::Bash => "bash",
         L::Toml => "toml",
@@ -309,12 +330,12 @@ fn language_tag(id: buddy_syntax::LanguageId) -> &'static str {
     }
 }
 
-/// 按围栏标签同步取语言（见 [`v1_language`]）；注册表的 async 方法亦基于它
+/// 按围栏标签同步取语言（见 [`resolve`]）；注册表的 async 方法亦基于它
 pub fn language_for_tag(tag: &str) -> Option<Arc<Language>> {
-    v1_language(tag).map(|id| Arc::new(Language::highlighted(id)))
+    resolve(tag).map(|h| Arc::new(Language::highlighted(h)))
 }
 
-/// 语言注册表：按围栏标签 / 文件路径查语言（只放行 v1 语言集）
+/// 语言注册表：按围栏标签 / 文件路径查语言
 #[derive(Default, Clone, Debug)]
 pub struct LanguageRegistry;
 

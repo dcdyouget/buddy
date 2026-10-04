@@ -11,40 +11,53 @@ description = "tree-sitter 语法高亮（移植自 Comet 的 zeron-syntax，MIT
 thiserror.workspace = true
 tree-sitter = "=0.26.11"
 tree-sitter-highlight = "=0.26.11"
-tree-sitter-rust = "=0.24.2"
-tree-sitter-javascript = "=0.25.0"
-tree-sitter-typescript = "=0.23.2"
+# 内置语法只保留 Python / Shell / SQL（用户 2026-10-04 决定）；其余语言由 `generic` 通用高亮承接。
+# 全部语法表约 30 MB（占发布二进制一半以上），其余语法包移入 `full-languages`（仅测试打开）。
 tree-sitter-python = "=0.25.0"
-tree-sitter-go = "=0.25.0"
-tree-sitter-json = "=0.24.8"
-tree-sitter-bash = { version = "=0.25.1", optional = true }
+tree-sitter-bash = "=0.25.1"
+tree-sitter-sequel = "=0.3.11"
+tree-sitter-rust = { version = "=0.24.2", optional = true }
+tree-sitter-javascript = { version = "=0.25.0", optional = true }
+tree-sitter-typescript = { version = "=0.23.2", optional = true }
+tree-sitter-go = { version = "=0.25.0", optional = true }
+tree-sitter-json = { version = "=0.24.8", optional = true }
 tree-sitter-toml-ng = { version = "=0.7.0", optional = true }
-tree-sitter-md = "=0.5.3"
-tree-sitter-html = "=0.23.2"
-tree-sitter-css = "=0.25.0"
-tree-sitter-yaml = "=0.7.2"
-tree-sitter-c = "=0.24.2"
-tree-sitter-cpp = "=0.23.4"
+tree-sitter-md = { version = "=0.5.3", optional = true }
+tree-sitter-html = { version = "=0.23.2", optional = true }
+tree-sitter-css = { version = "=0.25.0", optional = true }
+tree-sitter-yaml = { version = "=0.7.2", optional = true }
+tree-sitter-c = { version = "=0.24.2", optional = true }
+tree-sitter-cpp = { version = "=0.23.4", optional = true }
 tree-sitter-c-sharp = { version = "=0.23.5", optional = true }
 tree-sitter-java = { version = "=0.23.5", optional = true }
-tree-sitter-kotlin-ng = "=1.1.0"
-tree-sitter-swift = "=0.7.3"
+tree-sitter-kotlin-ng = { version = "=1.1.0", optional = true }
+tree-sitter-swift = { version = "=0.7.3", optional = true }
 tree-sitter-ruby = { version = "=0.23.1", optional = true }
 tree-sitter-php = { version = "=0.24.2", optional = true }
-tree-sitter-sequel = "=0.3.11"
 tree-sitter-lua = { version = "=0.5.0", optional = true }
 tree-sitter-nix = { version = "=0.3.0", optional = true }
 tree-sitter-make = { version = "=1.1.1", optional = true }
 tree-sitter-containerfile = { version = "=0.9.2", optional = true }
 
 [features]
-# v1 无高亮的 10 种语言（S04-03：静态解析表约 12 MB，AGENTS.md 安装包目标 < 10 MB）。
-# 2026-09-27 用户决定启用：buddy-markdown 打开本 feature，language_stub 已放行对应语言。
-extra-languages = [
-    "dep:tree-sitter-bash",
+# Comet 原有的全部语法（产品不启用；测试打开以保持 Comet 原测试集不缩水）。
+full-languages = [
+    "dep:tree-sitter-rust",
+    "dep:tree-sitter-javascript",
+    "dep:tree-sitter-typescript",
+    "dep:tree-sitter-go",
+    "dep:tree-sitter-json",
     "dep:tree-sitter-toml-ng",
+    "dep:tree-sitter-md",
+    "dep:tree-sitter-html",
+    "dep:tree-sitter-css",
+    "dep:tree-sitter-yaml",
+    "dep:tree-sitter-c",
+    "dep:tree-sitter-cpp",
     "dep:tree-sitter-c-sharp",
     "dep:tree-sitter-java",
+    "dep:tree-sitter-kotlin-ng",
+    "dep:tree-sitter-swift",
     "dep:tree-sitter-ruby",
     "dep:tree-sitter-php",
     "dep:tree-sitter-lua",
@@ -54,5 +67,5 @@ extra-languages = [
 ]
 
 [dev-dependencies]
-# Comet 原有测试覆盖全部语言 → 测试构建时打开 extra-languages，保持原测试集不缩水
-buddy-syntax = { path = ".", features = ["extra-languages"] }
+# Comet 原有测试覆盖全部语言 → 测试构建时打开 full-languages，保持原测试集不缩水
+buddy-syntax = { path = ".", features = ["full-languages"] }

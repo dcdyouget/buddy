@@ -1,8 +1,8 @@
 // 移植自 Comet（~/Project/comet，crates/syntax，commit a4781608，crate 名 zeron-syntax），MIT 许可证，
 // 原文见本 crate 的 LICENSE-MIT-comet。Buddy 的改动：crate 更名为 buddy-syntax（测试文件 1 行 use 路径）；
-// S04-03 起 10 种 v1 无高亮的语言（bash / toml / c# / java / ruby / php / lua / nix / make / dockerfile）
-// 的语法包移入 `extra-languages` feature（默认关闭，`configuration` / `supports_language` 相应条件编译）。
-// 2026-09-27 起 buddy-markdown 打开该 feature（用户决定启用这些语言）；TOML 查询改写一处，见 `toml_highlights_query`。
+// 2026-10-04 起只默认编译 Python / Bash / SQL 语法（用户决定；全部语法表约 30 MB），其余语法包移入
+// `full-languages` feature（仅测试打开），未编译的语言由 `generic` 模块的通用词法高亮承接。
+// TOML 查询改写一处，见 `toml_highlights_query`。
 //! Syntax-highlighting contracts shared by Zeron's desktop surfaces.
 //!
 //! This crate intentionally has no UI, RPC, or engine dependencies. Public
@@ -11,6 +11,8 @@
 use std::{collections::BTreeSet, ops::Range, path::Path, sync::atomic::AtomicUsize};
 
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
+
+pub mod generic;
 
 pub const DEFAULT_MAX_SOURCE_BYTES: usize = 1024 * 1024;
 pub const DEFAULT_MAX_SPANS: usize = 200_000;
@@ -172,6 +174,19 @@ impl HighlightedDocument {
         source: &str,
         spans: impl IntoIterator<Item = HighlightSpan>,
     ) -> Result<Self, HighlightError> {
+        Ok(Self {
+            language,
+            lines: split_lines(source, spans)?,
+        })
+    }
+}
+
+/// Validate, split, and normalize absolute source spans into line-relative spans.
+pub(crate) fn split_lines(
+    source: &str,
+    spans: impl IntoIterator<Item = HighlightSpan>,
+) -> Result<Vec<Vec<HighlightSpan>>, HighlightError> {
+    {
         let starts = line_starts(source);
         let mut lines = vec![Vec::new(); starts.len()];
         for span in spans {
@@ -205,7 +220,7 @@ impl HighlightedDocument {
         for line in &mut lines {
             *line = normalize_line(std::mem::take(line));
         }
-        Ok(Self { language, lines })
+        Ok(lines)
     }
 }
 
@@ -302,25 +317,9 @@ fn line_starts(source: &str) -> Vec<usize> {
 
 /// Whether this build contains a parser and compatible highlight queries.
 pub const fn supports_language(language: LanguageId) -> bool {
-    // Buddy（S04-03）：extra-languages 关闭时，这 10 种语言的语法包不参与编译
-    #[cfg(not(feature = "extra-languages"))]
-    if matches!(
-        language,
-        LanguageId::Bash
-            | LanguageId::Toml
-            | LanguageId::CSharp
-            | LanguageId::Java
-            | LanguageId::Ruby
-            | LanguageId::Php
-            | LanguageId::Lua
-            | LanguageId::Nix
-            | LanguageId::Make
-            | LanguageId::Dockerfile
-    ) {
-        return false;
-    }
-    let _ = language;
-    true
+    // Buddy：产品构建只编译这三种语法，其余由 [`generic`] 承接
+    cfg!(feature = "full-languages")
+        || matches!(language, LanguageId::Python | LanguageId::Bash | LanguageId::Sql)
 }
 
 /// Highlight a complete document with the default resource limits.
@@ -349,11 +348,14 @@ pub fn highlight_with_limits(
 
     let primary_configuration = cached_configuration(language)?;
     let injected = injected_languages(language);
+    #[cfg(feature = "full-languages")]
     let markdown_inline = if language == LanguageId::Markdown {
         Some(cached_markdown_inline_configuration()?)
     } else {
         None
     };
+    #[cfg(not(feature = "full-languages"))]
+    let markdown_inline: Option<&'static HighlightConfiguration> = None;
     let mut highlighter = Highlighter::new();
     let events = highlighter
         .highlight(
@@ -440,6 +442,7 @@ fn cached_configuration(
     )
 }
 
+#[cfg(feature = "full-languages")]
 fn cached_markdown_inline_configuration() -> Result<&'static HighlightConfiguration, HighlightError>
 {
     static CONFIG: std::sync::OnceLock<Result<HighlightConfiguration, HighlightError>> =
@@ -454,6 +457,7 @@ fn cached_markdown_inline_configuration() -> Result<&'static HighlightConfigurat
         .map_err(Clone::clone)
 }
 
+#[cfg(feature = "full-languages")]
 fn rust_configuration() -> Result<HighlightConfiguration, HighlightError> {
     // The upstream Rust query groups numbers and booleans as
     // `constant.builtin`. Zeron preserves those structural roles separately.
@@ -480,6 +484,7 @@ fn rust_configuration() -> Result<HighlightConfiguration, HighlightError> {
     .map_err(|error| HighlightError::Parser(error.to_string()))
 }
 
+#[cfg(feature = "full-languages")]
 fn markdown_configuration() -> Result<HighlightConfiguration, HighlightError> {
     // tree-sitter-highlight excludes child ranges from injections by default.
     // The Markdown block grammar's `inline` node owns anonymous children that
@@ -497,6 +502,7 @@ fn markdown_configuration() -> Result<HighlightConfiguration, HighlightError> {
     )
 }
 
+#[cfg(feature = "full-languages")]
 fn markdown_inline_configuration() -> Result<HighlightConfiguration, HighlightError> {
     make_configuration(
         tree_sitter_md::INLINE_LANGUAGE.into(),
@@ -518,6 +524,7 @@ fn make_configuration(
         .map_err(|error| HighlightError::Parser(error.to_string()))
 }
 
+#[cfg(feature = "full-languages")]
 fn javascript_family_highlights(language: LanguageId) -> String {
     use LanguageId::*;
 
@@ -541,6 +548,7 @@ fn javascript_family_highlights(language: LanguageId) -> String {
     queries.join("\n")
 }
 
+#[cfg(feature = "full-languages")]
 fn javascript_family_configuration(
     language: LanguageId,
 ) -> Result<HighlightConfiguration, HighlightError> {
@@ -579,7 +587,7 @@ fn javascript_family_configuration(
 
 /// Buddy：上游 TOML 查询以 `(pair (bare_key)) @property` 捕获**整个键值对**；本 crate 的优先级中
 /// property（85）高于 string / number（60），于是值被一并染成属性色。改为只捕获键本身。
-#[cfg(feature = "extra-languages")]
+#[cfg(feature = "full-languages")]
 fn toml_highlights_query() -> String {
     const WHOLE_PAIR: &str = "(pair\n  (bare_key)) @property";
     const KEY_ONLY: &str = "(pair\n  (bare_key) @property)";
@@ -591,12 +599,14 @@ fn toml_highlights_query() -> String {
 fn configuration(language: LanguageId) -> Result<HighlightConfiguration, HighlightError> {
     use LanguageId::*;
     match language {
+        // Buddy：未编译语法的语言返回 GrammarUnavailable（调用方改用通用高亮）
+        #[cfg(not(feature = "full-languages"))]
+        Rust | JavaScript | Jsx | TypeScript | Tsx | Go | Json | Jsonc | Toml | Markdown | Html
+        | Css | Yaml | C | Cpp | CSharp | Java | Kotlin | Swift | Ruby | Php | Lua | Dockerfile
+        | Nix | Make => Err(HighlightError::GrammarUnavailable(language)),
+        #[cfg(feature = "full-languages")]
         Rust => rust_configuration(),
-        // Buddy（S04-03）：v1 无高亮的语言默认不编译语法包（约 12 MB 静态解析表），返回 GrammarUnavailable
-        #[cfg(not(feature = "extra-languages"))]
-        Bash | Toml | CSharp | Java | Ruby | Php | Lua | Nix | Make | Dockerfile => {
-            Err(HighlightError::GrammarUnavailable(language))
-        }
+        #[cfg(feature = "full-languages")]
         JavaScript | Jsx | TypeScript | Tsx => javascript_family_configuration(language),
         Python => make_configuration(
             tree_sitter_python::LANGUAGE.into(),
@@ -605,6 +615,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             "",
         ),
+        #[cfg(feature = "full-languages")]
         Go => make_configuration(
             tree_sitter_go::LANGUAGE.into(),
             "go",
@@ -612,6 +623,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             "",
         ),
+        #[cfg(feature = "full-languages")]
         Json | Jsonc => make_configuration(
             tree_sitter_json::LANGUAGE.into(),
             "json",
@@ -619,7 +631,6 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             "",
         ),
-        #[cfg(feature = "extra-languages")]
         Bash => make_configuration(
             tree_sitter_bash::LANGUAGE.into(),
             "bash",
@@ -627,7 +638,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             "",
         ),
-        #[cfg(feature = "extra-languages")]
+        #[cfg(feature = "full-languages")]
         Toml => make_configuration(
             tree_sitter_toml_ng::LANGUAGE.into(),
             "toml",
@@ -635,7 +646,9 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             "",
         ),
+        #[cfg(feature = "full-languages")]
         Markdown => markdown_configuration(),
+        #[cfg(feature = "full-languages")]
         Html => make_configuration(
             tree_sitter_html::LANGUAGE.into(),
             "html",
@@ -643,6 +656,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             tree_sitter_html::INJECTIONS_QUERY,
             "",
         ),
+        #[cfg(feature = "full-languages")]
         Css => make_configuration(
             tree_sitter_css::LANGUAGE.into(),
             "css",
@@ -650,6 +664,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             "",
         ),
+        #[cfg(feature = "full-languages")]
         Yaml => make_configuration(
             tree_sitter_yaml::LANGUAGE.into(),
             "yaml",
@@ -657,6 +672,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             "",
         ),
+        #[cfg(feature = "full-languages")]
         C => make_configuration(
             tree_sitter_c::LANGUAGE.into(),
             "c",
@@ -664,6 +680,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             "",
         ),
+        #[cfg(feature = "full-languages")]
         Cpp => make_configuration(
             tree_sitter_cpp::LANGUAGE.into(),
             "cpp",
@@ -675,7 +692,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             "",
         ),
-        #[cfg(feature = "extra-languages")]
+        #[cfg(feature = "full-languages")]
         CSharp => make_configuration(
             tree_sitter_c_sharp::LANGUAGE.into(),
             "csharp",
@@ -683,7 +700,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             "",
         ),
-        #[cfg(feature = "extra-languages")]
+        #[cfg(feature = "full-languages")]
         Java => make_configuration(
             tree_sitter_java::LANGUAGE.into(),
             "java",
@@ -691,6 +708,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             "",
         ),
+        #[cfg(feature = "full-languages")]
         Kotlin => make_configuration(
             tree_sitter_kotlin_ng::LANGUAGE.into(),
             "kotlin",
@@ -698,6 +716,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             "",
         ),
+        #[cfg(feature = "full-languages")]
         Swift => make_configuration(
             tree_sitter_swift::LANGUAGE.into(),
             "swift",
@@ -705,7 +724,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             tree_sitter_swift::LOCALS_QUERY,
         ),
-        #[cfg(feature = "extra-languages")]
+        #[cfg(feature = "full-languages")]
         Ruby => make_configuration(
             tree_sitter_ruby::LANGUAGE.into(),
             "ruby",
@@ -713,7 +732,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             tree_sitter_ruby::LOCALS_QUERY,
         ),
-        #[cfg(feature = "extra-languages")]
+        #[cfg(feature = "full-languages")]
         Php => make_configuration(
             tree_sitter_php::LANGUAGE_PHP.into(),
             "php",
@@ -728,7 +747,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             "",
         ),
-        #[cfg(feature = "extra-languages")]
+        #[cfg(feature = "full-languages")]
         Lua => make_configuration(
             tree_sitter_lua::LANGUAGE.into(),
             "lua",
@@ -736,7 +755,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             tree_sitter_lua::LOCALS_QUERY,
         ),
-        #[cfg(feature = "extra-languages")]
+        #[cfg(feature = "full-languages")]
         Nix => make_configuration(
             tree_sitter_nix::LANGUAGE.into(),
             "nix",
@@ -744,7 +763,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             "",
         ),
-        #[cfg(feature = "extra-languages")]
+        #[cfg(feature = "full-languages")]
         Make => make_configuration(
             tree_sitter_make::LANGUAGE.into(),
             "make",
@@ -752,7 +771,7 @@ fn configuration(language: LanguageId) -> Result<HighlightConfiguration, Highlig
             "",
             "",
         ),
-        #[cfg(feature = "extra-languages")]
+        #[cfg(feature = "full-languages")]
         Dockerfile => make_configuration(
             tree_sitter_containerfile::LANGUAGE.into(),
             "dockerfile",

@@ -199,7 +199,7 @@
 | S08-05 | 静默检查与空闲调度 | S08-01 | `done` | `phase-08/S08-05-check-schedule.md` |
 | S08-06 | 打包脚本（macOS app + dmg） | S08-03 | `done` | `phase-08/S08-06-package-macos.md` |
 | S08-07 | 打包脚本（Windows） | S08-04, S08-09 | `todo` | `phase-08/S08-07-package-windows.md` |
-| S08-08 | 签名与公证 | S08-06 | `todo` | `phase-08/S08-08-codesign-notarize.md` |
+| S08-08 | 签名与公证 | S08-06 | `dropped` | `phase-08/S08-08-codesign-notarize.md` |
 | S08-09 | CI 流水线与版本一致性守卫 | S08-06 | `done` | `phase-08/S08-09-release-pipeline.md` |
 | S08-10 | GPL 合规产出（源码链接 / 随包许可 / patch 归档） | S01-03 | `todo` | `phase-08/S08-10-gpl-artifacts.md` |
 | S08-11 | 更新设置界面与手动检查入口 | S08-05, S06-01 | `done` | `phase-08/S08-11-update-settings-ui.md` |
@@ -419,3 +419,6 @@
 | 2026-10-04 | S08-11 | `todo` → `doing` → `blocked` | 设置页「软件更新」区域已实现、门禁与单测通过；等待用户目检 |
 | 2026-10-04 | S08-11 | `blocked` → `done` | 用户目检「软件更新」区域通过。Phase 08 6→7，合计 83→84；「发现新版本」卡片未在界面实走，同一调用链由 S08-03 探针覆盖 |
 | 2026-10-04 | S08-06 | 仍 `done`（补充） | 体积分析：53.5 MB 二进制中 tree-sitter 语法约 30 MB；改用 tar.xz（12.2→7.6 MB）与 ULMO DMG（14.6→9.4 MB），已发布 0.1.0 客户端的 `tar -xzf` 实测兼容 |
+| 2026-10-04 | S08-08 | `todo` → `dropped` | 用户决定不做 Developer ID 签名与公证，继续 ad-hoc 签名；新用户首次打开 DMG 中的应用需手动允许 |
+| 2026-10-04 | S08-06 | 仍 `done`（补充） | 用户决定只内置 Python / Shell / SQL 语法，其余语言走新增的 `buddy_syntax::generic` 通用词法高亮（纯文本 / 日志类标签不着色）；二进制 53.8→27.3 MB，DMG 7.0 MB、更新包 6.2 MB。S04-02 / 2026-09-27 的「内置全部语法」决定被取代；GPL patch 已重新生成 |
+| 2026-10-04 | S08-04 / S08-07 | 仍 `todo` | 用户决定 Windows 打包暂不处理 |

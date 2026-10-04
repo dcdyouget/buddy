@@ -188,7 +188,7 @@ mod tests {
     }
 
     #[test]
-    fn rust_code_gets_v1_categories() {
+    fn rust_code_gets_v1_categories_via_generic_highlighting() {
         let runs = categories("rust", "fn main() {\n    let x = 42; // hi\n}\n");
         let has = |text: &str, cat: &str| runs.iter().any(|(t, c)| t == text && *c == cat);
         assert!(has("fn", "keyword"), "{runs:?}");
@@ -205,26 +205,38 @@ mod tests {
 
     #[test]
     fn highlighted_languages() {
-        for tag in ["rust", "ts", "tsx", "python", "go", "json", "yaml", "cpp", "css", "html", "xml", "svg", "flow", "kotlin", "swift", "sql", "markdown"] {
-            assert!(language_for_tag(tag).is_some(), "v1 有高亮的 {tag} 应被识别");
+        // 内置语法（2026-10-04 用户决定只保留 Python / Shell / SQL）与通用高亮都会着色
+        for tag in ["python", "py", "bash", "sh", "shell", "zsh", "sql", "rust", "ts", "tsx", "go", "json", "yaml", "cpp", "java", "kotlin", "swift", "xml", "objc", "graphql", "haskell"] {
+            assert!(language_for_tag(tag).is_some(), "{tag} 应着色");
         }
-        // 用户决定（2026-09-27）另外启用的语言（v1 无高亮）
-        for tag in ["bash", "sh", "toml", "java", "ruby", "php", "lua", "csharp", "nix", "makefile", "dockerfile", "jsonc"] {
-            assert!(language_for_tag(tag).is_some(), "{tag} 应已启用");
-        }
-        // 纯文本与无语法的语言保持不高亮
-        for tag in ["text", "plain", "objc", "graphql"] {
+        // 输出 / 日志 / 纯文本不着色
+        for tag in ["text", "plain", "plaintext", "txt", "log", "output", "diff"] {
             assert!(language_for_tag(tag).is_none(), "{tag} 不应高亮");
         }
     }
 
     #[test]
-    fn extra_languages_get_categories() {
+    fn builtin_grammars_get_categories() {
         let runs = categories("bash", "echo \"hi\" # c\n");
         assert!(runs.iter().any(|(t, c)| t == "# c" && *c == "comment"), "{runs:?}");
         assert!(runs.iter().any(|(_, c)| *c == "string"), "{runs:?}");
-        let runs = categories("toml", "[pkg]\nname = \"x\"\n");
-        assert!(runs.iter().any(|(_, c)| *c == "string"), "{runs:?}");
+        let runs = categories("python", "def f(x):\n    return 'a'  # n\n");
+        assert!(runs.iter().any(|(t, c)| t == "def" && *c == "keyword"), "{runs:?}");
+        assert!(runs.iter().any(|(t, c)| t == "# n" && *c == "comment"), "{runs:?}");
+        let runs = categories("sql", "SELECT id FROM t WHERE n = 42;\n");
+        assert!(runs.iter().any(|(t, c)| t.eq_ignore_ascii_case("select") && *c == "keyword"), "{runs:?}");
+        // tree-sitter-sequel 把数字归入 literal（字符串色），沿用 S04-02 起的现状
+        assert!(runs.iter().any(|(t, _)| t == "42"), "{runs:?}");
+    }
+
+    #[test]
+    fn generic_highlighting_covers_other_languages() {
+        let runs = categories("toml", "[pkg]\nname = \"x\" # c\n");
+        assert!(runs.iter().any(|(t, c)| t == "\"x\"" && *c == "string"), "{runs:?}");
+        assert!(runs.iter().any(|(t, c)| t == "# c" && *c == "comment"), "{runs:?}");
+        let runs = categories("java", "public class A { String s = \"q\"; }\n");
+        assert!(runs.iter().any(|(t, c)| t == "class" && *c == "keyword"), "{runs:?}");
+        assert!(runs.iter().any(|(t, c)| t == "String" && *c == "function"), "{runs:?}");
     }
 
     #[test]

@@ -108,5 +108,5 @@ npm run release -- 0.2.0 --notes-file notes.txt --yes
 
 | 项 | spec |
 |---|---|
-| Developer ID 签名与公证（当前 ad-hoc：新用户首次打开 DMG 中的应用会被 Gatekeeper 拦截，需右键「打开」或在系统设置中允许） | S08-08 |
-| Windows 安装包与安装流程 | S08-04 / S08-07（Phase 09） |
+| Developer ID 签名与公证：用户决定不做（S08-08 dropped）。当前 ad-hoc 签名，新用户首次打开 DMG 中的应用会被 Gatekeeper 拦截，需右键「打开」或在系统设置中允许 | — |
+| Windows 安装包与安装流程（暂不处理） | S08-04 / S08-07 |
