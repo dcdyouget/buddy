@@ -81,3 +81,5 @@
 - 修复：补丁后 `makeFirstResponder:` 恢复 GPUI 视图；`NativeWindowSnapshot` 新增 `view_is_first_responder`，S07-12 自检 T12-01 要求其为真。
 - 证据：HID 键盘事件（`CGEventPost`，ABC 布局）输入 `asd` 上屏；微信输入法拼音 `nihao` 显示带下划线的组字与候选框，空格上屏「你好」；
   Esc 隐藏后再唤起仍可输入。产品自检 `--selfcheck-window` rc=0（`文字输入=true`）；删除修复行后同一自检 rc=1（T12-01 FAIL），恢复后通过。
+- 发布验证：以 `--republish` 重新发布 0.1.0（`b7b2f6c`）后，从 OSS 下载 DMG 安装：二进制与发布构建 sha256 同为 `28ba70c1ea321a2d…`；
+  安装包自检 T12-01「文字输入=true」PASS；ABC 输入 `hello`、微信输入法 `nihao` 组字与候选框正常、空格上屏「hello 你好」。测试副本已删除，输入法已恢复为微信拼音。
