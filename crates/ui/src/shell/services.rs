@@ -4,8 +4,13 @@ use super::{
     runtime,
     tray::{MenuAction, TrayService},
 };
-use gpui::{App, AsyncApp, Global, Task};
+use gpui::{App, AsyncApp, Global, KeyBinding, Menu, MenuItem, Task, WindowHandle};
 use std::rc::Rc;
+
+gpui::actions!(buddy_shell, [
+    /// 退出 Buddy（应用菜单「退出 Buddy」/ ⌘Q）
+    Quit
+]);
 
 struct Services {
     tray: TrayService,
@@ -43,6 +48,15 @@ pub fn install_with_backend(
         .map_err(Clone::clone)
         .and_then(|b| b.query());
     let (tray, mut events) = TrayService::new(initial)?;
+    // v1（Tauri 2）在 macOS 自动提供含「退出」的应用菜单，⌘Q 由它的快捷键实现；GPUI 不建默认菜单，需显式设置。
+    cx.update(|cx| {
+        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+        cx.on_action(move |_: &Quit, cx: &mut App| {
+            cx.spawn(async move |cx: &mut AsyncApp| quit_after_save(handle, cx).await)
+                .detach();
+        });
+        cx.set_menus(vec![Menu::new("Buddy").items([MenuItem::action("退出 Buddy", Quit)])]);
+    });
     let task = cx.update(|cx| {
         cx.spawn(async move |cx| {
             while let Some(action) = events.recv().await {
@@ -90,14 +104,7 @@ pub fn install_with_backend(
                         result
                     }
                     MenuAction::Quit => {
-                        if let Ok(Some(work)) = handle.update(cx, |shell, _, cx| {
-                            shell
-                                .router()
-                                .update(cx, |router, _| router.take_config_save())
-                        }) {
-                            work.await;
-                        }
-                        cx.update(|cx| cx.quit());
+                        quit_after_save(handle, cx).await;
                         return;
                     }
                 };
@@ -114,4 +121,16 @@ pub fn install_with_backend(
         })
     });
     Ok(())
+}
+
+/// 托盘「退出」与 ⌘Q 共用：等进行中的配置保存写盘后再退出。
+async fn quit_after_save(handle: WindowHandle<super::AppShell>, cx: &mut AsyncApp) {
+    if let Ok(Some(work)) = handle.update(cx, |shell, _, cx| {
+        shell
+            .router()
+            .update(cx, |router, _| router.take_config_save())
+    }) {
+        work.await;
+    }
+    cx.update(|cx| cx.quit());
 }
