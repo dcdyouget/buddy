@@ -9,7 +9,9 @@
 
 ## 1. 当前进度入口
 
-2026-10-03 用户限定后续范围：完成 Phase 07 后进行 macOS 整体验收；Phase 08 等待用户重新设计方案，Phase 09 由用户在 Windows 环境执行。本轮不把更新发布或 Windows 记作完成。
+2026-10-03 用户限定后续范围：完成 Phase 07 后进行 macOS 整体验收；Phase 09 由用户在 Windows 环境执行。
+
+2026-10-04 Phase 08 按用户新方案实现 macOS 部分并发布 0.1.0（固定地址与发版命令见 `docs/release-workflow.md`）；S08-11 待用户目检，Windows / 公证 / 应用内源码链接仍为 todo。
 
 当前 spec 状态、Phase 计数与状态变更记录以 [`README.md`](./README.md) 为准；本文只保留交接边界与验收操作。
 

@@ -114,7 +114,7 @@ Buddy is a cross-platform (macOS / Windows) AI chat tool. Press a global hotkey 
 | `docs/specs/design-deletions.md` | 设计文档退役台账 | 删除设计文档时 |
 | `docs/evidence/v1-baseline/` | **v1 基线**：页面×状态目检清单、令牌实测值、性能、长会话样本（S01-06 产出；不含截图，视觉验收由用户对照运行中的 v1 目检） | 做验收时 |
 | `docs/design/overview.md` | Architecture overview & key decisions | When needing context |
-| `docs/release-workflow.md` | macOS ARM64 / Windows release, environment checks, OSS updater flow | When implementing or executing releases |
+| `docs/release-workflow.md` | v2 发布手册：固定清单地址、`npm run release` 一键发版、签名凭据、客户端更新行为 | When implementing or executing releases |
 | `docs/CONVENTIONS.md` | Coding rules for ALL agents | **Always** — read once, follow always |
 
 > **已移除的失效索引**（经审计确认路径从未存在）：`docs/design/prototypes/`、`docs/design/colors_and_type.css`。
