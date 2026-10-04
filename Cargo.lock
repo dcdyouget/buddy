@@ -766,7 +766,7 @@ dependencies = [
 
 [[package]]
 name = "buddy-app"
-version = "2.0.0"
+version = "0.1.0"
 dependencies = [
  "buddy-engine",
  "buddy-ui",
@@ -781,7 +781,7 @@ dependencies = [
 
 [[package]]
 name = "buddy-engine"
-version = "2.0.0"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -801,7 +801,7 @@ dependencies = [
 
 [[package]]
 name = "buddy-markdown"
-version = "2.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -823,14 +823,14 @@ dependencies = [
 
 [[package]]
 name = "buddy-md-util"
-version = "2.0.0"
+version = "0.1.0"
 dependencies = [
  "gpui_util",
 ]
 
 [[package]]
 name = "buddy-syntax"
-version = "2.0.0"
+version = "0.1.0"
 dependencies = [
  "buddy-syntax",
  "thiserror 1.0.69",
@@ -865,7 +865,7 @@ dependencies = [
 
 [[package]]
 name = "buddy-ui"
-version = "2.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "auto-launch",
@@ -895,7 +895,7 @@ dependencies = [
 
 [[package]]
 name = "buddy-update"
-version = "2.0.0"
+version = "0.1.0"
 dependencies = [
  "base64",
  "dirs",
