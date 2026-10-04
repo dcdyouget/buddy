@@ -23,9 +23,10 @@ use std::path::{Path, PathBuf};
 pub const MANIFEST_URL: &str =
     "https://buddy-release.oss-cn-beijing.aliyuncs.com/buddy/channels/stable.json";
 
-/// 更新包签名公钥（minisign Ed25519，外层 base64，与 v1 `src-tauri/tauri.conf.json` 同一把）。
-/// 私钥只在发布机 `~/.tauri/buddy.key`；丢失后已发布客户端无法再验证任何新包。
-pub const PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhGQzA1NkE1MEE5NUU2NDMKUldSRDVwVUtwVmJBajQrUldZVjhOZm5ZbUkwdlh4T1h0eWx4Z2dSKzZEZit0andnOXptWERYWkcK";
+/// 更新包签名公钥（minisign Ed25519，外层 base64；私钥为发布机 `~/.tauri/buddy-v2.key`）。
+/// v1 的 `buddy.key` 密码遗失，v2 首发前（2026-10-04）换用新密钥对；v1 客户端不再接收更新。
+/// 私钥丢失后已发布客户端无法再验证任何新包，必须离线备份私钥与密码。
+pub const PUBLIC_KEY: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI2QzEwNEIwNzI0OEE3RjcKUldUM3AwaHlzQVRCdHVOdXZ4cTQ0bVRIMGQwendGVHc3ZlBhT2xxZDNvZCtTL21hWGIreHp5RGUK";
 
 /// 与 Info.plist `CFBundleIdentifier` 一致；安装前校验新包，避免装入其他应用。
 pub const BUNDLE_ID: &str = "com.buddy.chat";

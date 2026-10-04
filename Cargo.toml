@@ -97,7 +97,7 @@ block = "0.1"
 libc = "0.2"
 # 文本输入的字形 / 词边界（S05-06）；与 gpui 闭包中同一版本，不新增包
 unicode-segmentation = "1"
-# 自更新（Phase 08）：sha256 与 Ed25519 minisign 验签（公钥与 v1 Tauri Updater 同一把）
+# 自更新（Phase 08）：sha256 与 Ed25519 minisign 验签（与 Tauri signer 产出的签名格式兼容）
 sha2 = "0.10"
 hex = "0.4"
 semver = "1"

@@ -1,7 +1,7 @@
 //! 完整性（sha256）与来源（minisign Ed25519）校验。
 //!
-//! 签名与公钥都沿用 Tauri 的外层 base64 编码：发布机继续用 `tauri signer sign` 和
-//! 同一把私钥签名，客户端在这里解开外层后交给 `minisign-verify`。
+//! 签名与公钥都沿用 Tauri 的外层 base64 编码：发布机用 `tauri signer sign` 签名，
+//! 客户端在这里解开外层后交给 `minisign-verify`。
 
 use crate::UpdateError;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -56,6 +56,14 @@ mod tests {
         // 产品公钥验证测试密钥的签名必须失败：证明公钥确实参与了校验。
         let err = verify_signature(FIXTURE, TEST_SIG, crate::PUBLIC_KEY).unwrap_err();
         assert!(matches!(err, UpdateError::Signature(_)));
+    }
+
+    /// 发布私钥 `~/.tauri/buddy-v2.key` 对 b"probe\n" 的真实签名：证明内置公钥与发布私钥配对。
+    const PRODUCT_SIG: &str = "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUM3AwaHlzQVRCdHAzY1VuZFM4K3lRWjFKQUJ4UTdLWUpzNTdwOEVsZnR5ejgwRGVGcUltS2hmbEJWc2x5TUMzWHEyTk83d1ZnZk93VUlnTDV4TXVmcjNZUy9KMkE3NUFvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxMDgzNTI2CWZpbGU6cHJvYmUyLnR4dAoxcVkvb0dSdTdrZVFUM3loaVd6N0tSY3d2UXZ6NEFyR3IxalFNYnRDK1hFVUFlQ0lFR0EvZ2drZU1FRlBWVUdUZ2hkQWJ2MmRub2RkaVhCbGZNTUJBUT09Cg==";
+
+    #[test]
+    fn product_key_verifies_release_signature() {
+        verify_signature(b"probe\n", PRODUCT_SIG, crate::PUBLIC_KEY).unwrap();
     }
 
     #[test]

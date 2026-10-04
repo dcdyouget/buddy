@@ -13,6 +13,7 @@
 #
 # 签名私钥密码读取顺序：环境变量 TAURI_SIGNING_PRIVATE_KEY_PASSWORD →
 #   钥匙串（security add-generic-password -s buddy-updater-key -a buddy -w）→ 终端输入。
+# 签名私钥：~/.tauri/buddy-v2.key（公钥内置于 crates/update/src/lib.rs）。
 #
 # 只有最后一步「覆盖 channels/stable.json」会让用户看到新版本；之前任何一步失败都不影响用户。
 set -euo pipefail
@@ -27,7 +28,7 @@ PREFIX="buddy"
 # 与 crates/update/src/lib.rs 的 MANIFEST_URL 一致
 CHANNEL_KEY="$PREFIX/channels/stable.json"
 CHANNEL_URL="$PUBLIC_BASE/$CHANNEL_KEY"
-KEY_PATH="${TAURI_SIGNING_PRIVATE_KEY_PATH:-$HOME/.tauri/buddy.key}"
+KEY_PATH="${TAURI_SIGNING_PRIVATE_KEY_PATH:-$HOME/.tauri/buddy-v2.key}"
 TAURI="$ROOT/node_modules/.bin/tauri"
 IMMUTABLE="public,max-age=31536000,immutable"
 
