@@ -38,6 +38,7 @@
 | 失败停止 | 首次运行（旧私钥）在第 1 步试签失败：`错误：签名失败 …（检查私钥密码）`，无提交、无上传，`stable.json` 仍为 404 |
 | 0.1.0 发布 | `npm run release -- 0.1.0 --notes … --yes` rc=0：提交 `78f10d2 chore(release): v0.1.0`，门禁「全部通过」，测试日志 18 组 `test result: ok`，上传并回读 sha256，覆盖 `channels/stable.json`，本地标签 `v0.1.0` |
 | 线上读回 | `curl …/buddy/channels/stable.json`：HTTP 200、`Content-Type: application/json`、`Cache-Control: no-cache`，`version` 0.1.0、`notes` 与输入一致，`update` / `installer` / `source` 三个地址；DMG `HEAD` 200、`Content-Length: 14624731`、`Cache-Control: public,max-age=31536000,immutable` |
+| 同版本重发 | `npm run release -- 0.1.0 --republish --notes … --yes` rc=0：版本相同且 `git ls-remote --tags origin refs/tags/v0.1.0` 为空才放行；清单 `pub_date` 2026-10-04T15:17:04Z、更新包改为 `.app.tar.xz`，本地标签 `v0.1.0` 移至 `d415140` |
 | 凭据 | 密码只经钥匙串 `buddy-updater-key` 传入子进程环境变量；脚本仅输出「读取自钥匙串」 |
 
 ## 决策记录
@@ -52,5 +53,5 @@
 ## 完成记录
 
 - 日期：2026-10-04
-- commit：`11c84bd`、`ea4c8f9`、`78f10d2`
+- commit：`11c84bd`、`ea4c8f9`、`78f10d2`、`d415140`
 - 设计文档处置：`docs/release-workflow.md` 按 v2 流程重写（非设计文档，为执行手册）

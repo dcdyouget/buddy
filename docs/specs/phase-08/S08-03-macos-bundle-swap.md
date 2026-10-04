@@ -39,6 +39,7 @@
 | 单测 | `macos_tests.rs` 6 项：合法包通过；`com.example.other`、版本 0.3.0 ≠ 0.2.0、签名后改写 `marker` 均被拒；`swap` 后 marker 为 new 且目录只剩 `Buddy.app`；单 `.app` 约束；单引号路径转义；`cargo test` 可执行文件 `current_app()` 返回开发构建错误 |
 | 真实升级 | 在临时 worktree 以 `0.0.9` 构建 `examples/update_probe.rs`，用 `bundle-macos.sh` 装为 `~/BuddyUpdateTest/Buddy.app`（0.0.9）。运行输出：读取线上 `stable.json` → 发现 0.1.0（12208540 字节）及说明 → 下载 25/50/75/100% → 「sha256 + 签名校验通过」→「安装完成」。读回：Info.plist 0.1.0，`codesign --verify --deep --strict` 通过，`Contents/MacOS/buddy` 与发布构建 sha256 同为 `a7ee66aba065a198…`，目录内仅 `Buddy.app` |
 | 真实重启 | 重新装回 0.0.9 后以 `--relaunch` 运行：探针退出后 `pgrep -x buddy` 得到 `~/BuddyUpdateTest/Buddy.app/Contents/MacOS/buddy`（真实 0.1.0 产品），6 秒后仍在运行；`~/Library/Caches/com.buddy.chat/updates` 已被启动清理删除；之后以 Apple Event 退出。测试目录、worktree 与构建目录已删除 |
+| 重发后复测 | 0.1.0 以 tar.xz 重新发布后，同样以 0.0.9 探针运行：发现 0.1.0（6196696 字节）→ 下载 100% →「sha256 + 签名校验通过」→ 安装完成；Info.plist 0.1.0、`codesign --strict` 通过、二进制 sha256 与发布构建同为 `bfdcd7619bc2be30…`、目录只剩 `Buddy.app`。测试资源已清理 |
 | 证据边界 | 未在 root 拥有的 `/Applications` 实测管理员授权分支；未实测「新包改名失败」的回滚分支（无法在不改代码的情况下制造该失败）。两者只有代码路径，无独立证据 |
 
 ## 决策记录
