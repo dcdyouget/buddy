@@ -10,15 +10,13 @@
 #   --skip-tests                           跳过测试（仅用于重跑失败的上传 / 发布）
 #   --skip-publish                         只构建、上传版本目录，不改 channels/stable.json
 #   --yes                                  发布前不再询问确认
-#   --republish                            以线上同一版本号重新发布（覆盖制品、移动本地标签）。
-#                                          已安装该版本的客户端不会收到（版本未变高），只用于尚无用户时修正首发；
-#                                          标签已推送到远端时拒绝。
 #
 # 签名私钥密码读取顺序：环境变量 TAURI_SIGNING_PRIVATE_KEY_PASSWORD →
 #   钥匙串（security add-generic-password -s buddy-updater-key -a buddy -w）→ 终端输入。
 # 签名私钥：~/.tauri/buddy-v2.key（公钥内置于 crates/update/src/lib.rs）。
 #
-# 只有最后一步「覆盖 channels/stable.json」会让用户看到新版本；之前任何一步失败都不影响用户。
+# 「覆盖 channels/stable.json」让应用内更新看到新版本；之前任何一步失败都不影响用户。
+# 之后推送 main 与版本标签到 GitHub，并创建附带 DMG 的 GitHub Release（源码即该标签）。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -34,15 +32,14 @@ CHANNEL_URL="$PUBLIC_BASE/$CHANNEL_KEY"
 KEY_PATH="${TAURI_SIGNING_PRIVATE_KEY_PATH:-$HOME/.tauri/buddy-v2.key}"
 TAURI="$ROOT/node_modules/.bin/tauri"
 # 制品也用 no-cache：浏览器每次向 OSS 校验 ETag（未变化时 304，不重复下载）。
-# 曾用 immutable 一年缓存，0.1.0 重新发布后用户浏览器仍拿到旧安装包。
 ARTIFACT_CACHE="no-cache"
+GITHUB_REPO="dcdyouget/buddy"
 
 VERSION=""
 NOTES=""
 NOTES_FILE=""
 SKIP_TESTS=false
 SKIP_PUBLISH=false
-REPUBLISH=false
 YES=false
 
 fail() { printf '\n错误：%s\n' "$*" >&2; exit 1; }
@@ -54,7 +51,6 @@ while [[ $# -gt 0 ]]; do
     --notes-file) NOTES_FILE="${2:?--notes-file 需要路径}"; shift ;;
     --skip-tests) SKIP_TESTS=true ;;
     --skip-publish) SKIP_PUBLISH=true ;;
-    --republish) REPUBLISH=true ;;
     --yes) YES=true ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     v[0-9]*|[0-9]*) VERSION="${1#v}" ;;
@@ -94,15 +90,19 @@ verify_public() { # 公开URL 本地文件：公网下载回来逐字节比对 s
 }
 
 # ── 1. 环境与输入 ─────────────────────────────────────────────
-step 1/9 "环境与仓库检查"
+step 1/10 "环境与仓库检查"
 [[ "$(uname -s)/$(uname -m)" == "Darwin/arm64" ]] || fail "只能在 Apple Silicon Mac 上发布"
-for c in git node cargo ossutil curl codesign hdiutil plutil shasum security; do
+for c in git gh node cargo ossutil curl codesign hdiutil plutil shasum security; do
   command -v "$c" >/dev/null || fail "缺少命令：$c"
 done
 [[ -x "$TAURI" ]] || fail "缺少签名工具 $TAURI（先执行 npm install）"
 [[ -f "$KEY_PATH" ]] || fail "缺少签名私钥：$KEY_PATH"
 [[ "$(git branch --show-current)" == "main" ]] || fail "请在 main 分支发布"
 [[ -z "$(git status --porcelain)" ]] || fail "工作区有未提交改动，请先提交或清理"
+gh auth status >/dev/null 2>&1 || fail "gh 未登录 GitHub（gh auth login）"
+# GitHub 上的 main 必须是本地 main 的祖先，否则发布后推送会失败
+git fetch -q origin main || fail "无法从 GitHub 拉取 main"
+git merge-base --is-ancestor origin/main HEAD || fail "GitHub 上的 main 有本地没有的提交，请先同步"
 
 if [[ -z "$VERSION" ]]; then
   [[ -t 0 ]] || fail "非交互模式必须给出版本号"
@@ -110,19 +110,9 @@ if [[ -z "$VERSION" ]]; then
 fi
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "版本号必须是 主.次.修订：$VERSION"
 PUBLISHED="$(remote_version)"
-if [[ "$REPUBLISH" == true ]]; then
-  [[ "$VERSION" == "$PUBLISHED" ]] || fail "--republish 只能用于线上当前版本 ${PUBLISHED:-（无）}"
-  for remote in $(git remote); do
-    REMOTE_TAG="$(git ls-remote --tags "$remote" "refs/tags/v$VERSION" 2>/dev/null)" \
-      || fail "无法查询 $remote 的标签，不能确认 v$VERSION 未推送"
-    [[ -z "$REMOTE_TAG" ]] || fail "标签 v$VERSION 已推送到 $remote，不能重新发布同一版本"
-  done
-  echo "重新发布 $VERSION：已安装 $VERSION 的客户端不会收到此次更新，需手动重装"
-else
-  git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null && fail "标签 v$VERSION 已存在"
-  if [[ -n "$PUBLISHED" ]]; then
-    version_gt "$VERSION" "$PUBLISHED" || fail "新版本 $VERSION 必须高于线上版本 $PUBLISHED"
-  fi
+git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null && fail "标签 v$VERSION 已存在"
+if [[ -n "$PUBLISHED" ]]; then
+  version_gt "$VERSION" "$PUBLISHED" || fail "新版本 $VERSION 必须高于线上版本 $PUBLISHED"
 fi
 echo "线上版本：${PUBLISHED:-（尚未发布）} → 新版本：$VERSION"
 
@@ -155,7 +145,7 @@ sign() { "$TAURI" signer sign -f "$KEY_PATH" "$1" </dev/null >/dev/null 2>&1 || 
 PROBE="$(mktemp)"; sign "$PROBE"; rm -f "$PROBE" "$PROBE.sig"
 
 # ── 2. 版本号 ─────────────────────────────────────────────────
-step 2/9 "写入版本号并提交"
+step 2/10 "写入版本号并提交"
 if [[ "$(workspace_version)" != "$VERSION" ]]; then
   node scripts/set-version.mjs "$VERSION"
   cargo metadata --format-version 1 >/dev/null # 同步 Cargo.lock 中的 workspace 版本
@@ -168,7 +158,7 @@ fi
 COMMIT="$(git rev-parse --short HEAD)"
 
 # ── 3. 测试 ───────────────────────────────────────────────────
-step 3/9 "提交门禁与测试"
+step 3/10 "提交门禁与测试"
 if [[ "$SKIP_TESTS" == true ]]; then
   echo "已跳过（--skip-tests）"
 else
@@ -179,31 +169,30 @@ else
 fi
 
 # ── 4-5. 构建、组装、签名 ─────────────────────────────────────
-step 4/9 "构建 release 二进制"
+step 4/10 "构建 release 二进制"
 MACOSX_DEPLOYMENT_TARGET=12.0 cargo build --release --locked -p buddy-app --bin buddy >"$OUT/build.log" 2>&1 \
   || { tail -30 "$OUT/build.log"; fail "构建失败（日志：$OUT/build.log）"; }
 
-step 5/9 "组装 Buddy.app / 更新包 / 安装包 / 源码包并签名"
+step 5/10 "组装 Buddy.app / 更新包 / 安装包并签名"
 MAC_DIR="$OUT/macos/aarch64"
-mkdir -p "$MAC_DIR" "$OUT/source"
+mkdir -p "$MAC_DIR"
 scripts/release/bundle-macos.sh "$VERSION" "$ROOT/target/release/buddy" "$MAC_DIR"
 [[ "$(plutil -extract CFBundleShortVersionString raw -o - "$MAC_DIR/Buddy.app/Contents/Info.plist")" == "$VERSION" ]] \
   || fail "Info.plist 版本与 $VERSION 不一致"
-git archive --format=tar.gz --prefix="buddy-$VERSION/" -o "$OUT/source/buddy-$VERSION-src.tar.gz" HEAD
 UPDATE="$MAC_DIR/Buddy_${VERSION}_aarch64.app.tar.xz"
 INSTALLER="$MAC_DIR/Buddy_${VERSION}_aarch64.dmg"
 sign "$UPDATE"
 sign "$INSTALLER"
 REMOTE_DIR="$PREFIX/releases/$VERSION"
 node scripts/release/manifest.mjs --version "$VERSION" --notes-file "$OUT/notes.txt" \
-  --base-url "$PUBLIC_BASE/$REMOTE_DIR" --dir "$OUT" --output "$OUT/manifest.json"
+  --base-url "$PUBLIC_BASE/$REMOTE_DIR" --source-url "https://github.com/$GITHUB_REPO/tree/v$VERSION" \
+  --dir "$OUT" --output "$OUT/manifest.json"
 
 # ── 6. 上传版本目录 ───────────────────────────────────────────
-step 6/9 "上传到 OSS 并公网回读校验"
+step 6/10 "上传到 OSS 并公网回读校验"
 for f in "$UPDATE" "$UPDATE.sig" "$INSTALLER" "$INSTALLER.sig"; do
   upload "$f" "$REMOTE_DIR/macos/aarch64/$(basename "$f")" "$ARTIFACT_CACHE"
 done
-upload "$OUT/source/buddy-$VERSION-src.tar.gz" "$REMOTE_DIR/source/buddy-$VERSION-src.tar.gz" "$ARTIFACT_CACHE"
 upload "$OUT/manifest.json" "$REMOTE_DIR/manifest.json" "no-cache"
 for f in "$UPDATE" "$INSTALLER"; do
   verify_public "$PUBLIC_BASE/$REMOTE_DIR/macos/aarch64/$(basename "$f")" "$f"
@@ -217,25 +206,31 @@ if [[ "$SKIP_PUBLISH" == true ]]; then
 fi
 
 # ── 7. 确认并发布 ─────────────────────────────────────────────
-step 7/9 "发布确认"
+step 7/10 "发布确认"
 if [[ "$YES" != true ]]; then
   [[ -t 0 ]] || fail "非交互模式发布需要 --yes"
   read -r -p "即将正式发布 $VERSION，用户将能看到此更新。确认？(y/N) " answer
   [[ "$answer" == "y" || "$answer" == "Y" ]] || fail "已取消；版本目录已上传但未发布"
 fi
 
-step 8/9 "更新固定地址 channels/stable.json"
+step 8/10 "更新固定地址 channels/stable.json"
 upload "$OUT/manifest.json" "$CHANNEL_KEY" "no-cache"
 verify_public "$CHANNEL_URL" "$OUT/manifest.json"
 
-step 9/9 "打本地标签"
-if [[ "$REPUBLISH" == true ]]; then
-  git tag -f -a "v$VERSION" -m "Buddy v$VERSION" "$COMMIT" >/dev/null
-else
-  git tag -a "v$VERSION" -m "Buddy v$VERSION" "$COMMIT"
-fi
+step 9/10 "打标签并推送到 GitHub"
+git tag -a "v$VERSION" -m "Buddy v$VERSION" "$COMMIT"
+# 此时应用内更新已上线；推送失败时按提示手动补做，不影响用户
+git push -q origin main "v$VERSION" \
+  || fail "推送失败（OSS 已发布）。手动执行：git push origin main v$VERSION，再重跑 gh release create"
+
+step 10/10 "创建 GitHub Release"
+{ cat "$OUT/notes.txt"; printf '\n安装：下载 `%s`，打开后把 Buddy 拖进「应用程序」。仅支持 Apple Silicon，macOS 12 及以上；首次打开若被系统拦截，请右键「打开」。\n' "$(basename "$INSTALLER")"; } >"$OUT/github-notes.md"
+gh release create "v$VERSION" "$INSTALLER" --repo "$GITHUB_REPO" --verify-tag --latest \
+  --title "Buddy $VERSION" --notes-file "$OUT/github-notes.md" >/dev/null \
+  || fail "创建 GitHub Release 失败（OSS 已发布、标签已推送）。手动执行：gh release create v$VERSION $INSTALLER --title \"Buddy $VERSION\" --notes-file $OUT/github-notes.md"
 
 INSTALLER_URL="$(node -e 'console.log(require(process.argv[1]).platforms["darwin-aarch64"].installer.url)' "$OUT/manifest.json")"
-printf '\n发布完成：Buddy %s（commit %s，标签 v%s 仅本地）\n' "$VERSION" "$COMMIT" "$VERSION"
+printf '\n发布完成：Buddy %s（commit %s，标签 v%s 已推送）\n' "$VERSION" "$COMMIT" "$VERSION"
 printf '  版本信息（固定地址）：%s\n' "$CHANNEL_URL"
-printf '  安装包下载：%s\n' "$INSTALLER_URL"
+printf '  安装包下载（OSS）：%s\n' "$INSTALLER_URL"
+printf '  GitHub Release：https://github.com/%s/releases/tag/v%s\n' "$GITHUB_REPO" "$VERSION"

@@ -23,7 +23,7 @@ cargo run -p buddy-app                              # 开发运行
 cargo test --workspace --exclude buddy-markdown     # 全部测试
 scripts/gate.sh >/tmp/gate.log 2>&1; echo $?        # 提交前门禁（不要接管道，会吞掉退出码）
 target/debug/buddy --selfcheck-window               # 原生窗口行为自检（需桌面已解锁）
-npm run release -- <版本号> --notes "更新说明"        # 发版
+npm run release -- <版本号> --notes "更新说明"        # 发版（OSS + 推送 GitHub + GitHub Release）
 ```
 
 ## 需要知道的事
@@ -32,4 +32,4 @@ npm run release -- <版本号> --notes "更新说明"        # 发版
 - 修改 `crates/markdown/src` 后必须按 `VENDOR.md` 重新生成 patch，否则门禁失败（GPL 要求记录修改）。
 - 数据目录 `~/Library/Application Support/com.buddy.chat`，与 v1 共用（标识 `com.buddy.chat` 不要改）；API Key 明文存在 `config.json`。
 - 主窗口在显示前用 AppKit 改样式（无标题栏、无阴影、圆角）；改完必须让 GPUI 视图重新成为第一响应者，否则无法输入文字。自检 T12-01 会检查。
-- v1（Tauri + React）已从仓库移除，可从本地标签 `v1-final` 找回。
+- v1（Tauri + React）已从仓库移除，可从标签 `v1-final` 找回。

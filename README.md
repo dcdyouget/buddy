@@ -9,7 +9,8 @@ macOS 上的 AI 对话小工具：按全局快捷键（默认 ⌘J）呼出一�
 ## 下载
 
 最新版本信息：`https://buddy-release.oss-cn-beijing.aliyuncs.com/buddy/channels/stable.json`
-（其中 `platforms["darwin-aarch64"].installer.url` 为最新安装包）。仅支持 Apple Silicon，macOS 12 及以上。
+（其中 `platforms["darwin-aarch64"].installer.url` 为最新安装包），
+也可以从 [GitHub Releases](https://github.com/dcdyouget/buddy/releases) 下载。仅支持 Apple Silicon，macOS 12 及以上。
 
 ## 开发
 

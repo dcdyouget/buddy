@@ -1,10 +1,11 @@
 // 生成版本清单（客户端 crates/update/src/manifest.rs 解析同一格式；schema 变更须两边同步）。
 //
 // 用法：
-//   node scripts/release/manifest.mjs --version 0.1.0 --notes-file notes.txt \
-//     --base-url https://.../buddy/releases/0.1.0 --dir .release/0.1.0 --output manifest.json
+//   node scripts/release/manifest.mjs --version 0.2.0 --notes-file notes.txt \
+//     --base-url https://.../buddy/releases/0.2.0 --source-url https://github.com/.../tree/v0.2.0 \
+//     --dir .release/0.2.0 --output manifest.json
 //
-// --dir 下需要：macos/aarch64/Buddy_<v>_aarch64.{app.tar.xz,dmg} 及对应 .sig、source/buddy-<v>-src.tar.gz
+// --dir 下需要：macos/aarch64/Buddy_<v>_aarch64.{app.tar.xz,dmg} 及对应 .sig
 import { createHash } from "node:crypto";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -17,7 +18,7 @@ for (let i = 0; i < argv.length; i += 2) {
   }
   args[argv[i].slice(2)] = argv[i + 1];
 }
-for (const key of ["version", "notes-file", "base-url", "dir", "output"]) {
+for (const key of ["version", "notes-file", "base-url", "source-url", "dir", "output"]) {
   if (!args[key]) throw new Error(`缺少参数：--${key}`);
 }
 
@@ -53,8 +54,8 @@ const manifest = {
       installer: asset(`${mac}.dmg`, true),
     },
   },
-  // GPL-3.0：每个发布版本提供对应源码
-  source: asset(`source/buddy-${version}-src.tar.gz`, false),
+  // GPL-3.0：每个发布版本提供对应源码（GitHub 上的版本标签）
+  source: { url: args["source-url"] },
 };
 
 writeFileSync(args.output, `${JSON.stringify(manifest, null, 2)}\n`);

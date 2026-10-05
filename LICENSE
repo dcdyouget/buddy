@@ -9,7 +9,7 @@ Buddy — 许可证说明
 | `crates/ui/`、`crates/markdown/`、`apps/buddy/` | GPL-3.0-or-later（依赖 zed 的 GPL 组件） |
 
 可执行程序与发布产物整体受 GPL-3.0-or-later 约束：分发时须提供对应源码
-（每个发布版本的源码包随发布上传，地址见版本清单的 `source.url`），
+（每个发布版本对应 GitHub 上的版本标签：https://github.com/dcdyouget/buddy ），
 且不能上架 Mac App Store。
 
 许可证全文：`LICENSE-GPL-3.0-or-later`、`LICENSE-APACHE-2.0`；第三方声明：`THIRD_PARTY_NOTICES.md`。
