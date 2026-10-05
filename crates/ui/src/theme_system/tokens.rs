@@ -637,7 +637,7 @@ pub mod motion {
     pub const EASE_STANDARD: [f32; 4] = [0.2, 0.0, 0.0, 1.0];
 }
 
-/// 字体栈（原样保留 CSS 顺序，含通用族名；平台映射见 ）
+/// 字体栈（原样保留 CSS 顺序，含通用族名；平台映射见 `theme_system::fonts`）
 pub mod fonts {
     /// `--font-mono: 'Fira Code', 'JetBrains Mono', 'SF Mono', 'Menlo', 'Consolas', monospace`
     pub const FONT_MONO: &[&str] = &["Fira Code", "JetBrains Mono", "SF Mono", "Menlo", "Consolas", "monospace"];

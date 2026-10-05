@@ -32,11 +32,11 @@ for f in LICENSE LICENSE-GPL-3.0-or-later LICENSE-APACHE-2.0 THIRD_PARTY_NOTICES
   cp "$ROOT/$f" "$APP/Contents/Resources/$f"
 done
 
-# Ad-hoc 签名：Apple Silicon 必须有签名才能运行；正式 Developer ID 签名与公证见 。
+# Ad-hoc 签名：Apple Silicon 必须有签名才能运行（未做 Developer ID 签名与公证）。
 codesign --force --deep --sign - "$APP"
 codesign --verify --deep --strict "$APP"
 
-# 更新包：xz（系统 bsdtar 原生支持，53 MB 二进制中约 30 MB 为 tree-sitter 语法表，xz 比 gzip 小约 38%）。
+# 更新包：xz（系统 bsdtar 原生支持，比 gzip 小得多）。
 # COPYFILE_DISABLE 防止 macOS tar 写入 ._ 资源分叉文件，破坏签名校验
 COPYFILE_DISABLE=1 /usr/bin/tar -cJf "$BASE.app.tar.xz" --options xz:compression-level=9 -C "$OUT" Buddy.app
 

@@ -305,7 +305,7 @@ impl Transcript {
         cx.notify();
     }
 
-    /// 正文行的 markdown 实体：新行创建，内容变化时替换（规范化见 ）
+    /// 正文行的 markdown 实体：新行创建，内容变化时替换（规范化见 [`crate::markdown::normalize`]）
     fn update_markdown(&mut self, cx: &mut Context<Self>) {
         let state = &self.conversation.read(cx).state;
         // (行 id, 源文本, 版本, 是否纯文本)
