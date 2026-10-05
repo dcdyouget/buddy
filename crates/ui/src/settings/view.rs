@@ -21,6 +21,17 @@ use gpui::{
 };
 use std::{cell::Cell, rc::Rc, sync::Arc};
 
+/// 偏好设置项；保存中 / 失败状态按项回传到对应控件。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreferenceKind {
+    /// 呼出快捷键。
+    Hotkey,
+    /// 浅 / 深外观。
+    Theme,
+    /// 对话正文字号。
+    FontSize,
+}
+
 /// 设置页向路由器发出的事件。
 #[derive(Clone, Debug)]
 pub enum SettingsEvent {
@@ -34,6 +45,8 @@ pub enum SettingsEvent {
     HotkeyChanged(String),
     /// 保存成功后发布浅 / 深主题。
     ThemeChanged(Theme),
+    /// 保存成功后发布对话正文字号（px）。
+    FontSizeChanged(u32),
     /// 新版本已安装到磁盘，由 Router 选择重启时机。
     UpdateReady(buddy_update::Installed),
 }
@@ -52,6 +65,7 @@ pub struct SettingsView {
     model_list: gpui::Entity<ModelListView>,
     hotkey: gpui::Entity<super::hotkey::HotkeyRecorder>,
     theme: gpui::Entity<super::theme_control::ThemeControl>,
+    font_size: gpui::Entity<super::font_size_control::FontSizeControl>,
     update: gpui::Entity<super::update::UpdateControl>,
     provider_motion: SlideMotion,
     drag_source: DragSource,
@@ -73,6 +87,7 @@ impl SettingsView {
         let model_list = cx.new(|cx| ModelListView::new(config.clone(), cx));
         let hotkey = cx.new(|cx| super::hotkey::HotkeyRecorder::new(config.hotkey.clone(), cx));
         let theme = cx.new(|cx| super::theme_control::ThemeControl::new(config.theme.clone(), cx));
+        let font_size = cx.new(|cx| super::font_size_control::FontSizeControl::new(config.font_size, cx));
         let update = cx.new(super::update::UpdateControl::new);
         let subscriptions = vec![
             cx.subscribe(
@@ -111,6 +126,14 @@ impl SettingsView {
                     }
                 },
             ),
+            cx.subscribe(
+                &font_size,
+                |this, _, event: &super::font_size_control::FontSizeChanged, cx| {
+                    if this.active && !this.provider_motion.interactive() {
+                        cx.emit(SettingsEvent::FontSizeChanged(event.0));
+                    }
+                },
+            ),
             // 安装由用户在本页发起，完成时设置页可能已关闭：重启事件无条件上交
             cx.subscribe(&update, |_, _, event: &super::update::UpdateReady, cx| {
                 cx.emit(SettingsEvent::UpdateReady(event.0.clone()));
@@ -129,6 +152,7 @@ impl SettingsView {
             model_list,
             hotkey,
             theme,
+            font_size,
             update,
             provider_motion: SlideMotion::default(),
             drag_source: drag::default_drag_source(),

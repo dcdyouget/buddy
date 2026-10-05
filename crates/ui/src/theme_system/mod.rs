@@ -158,6 +158,34 @@ pub fn set_appearance(appearance: Appearance, cx: &mut App) {
     cx.refresh_windows();
 }
 
+/// 对话正文字号（设置页「字体大小」）。代码块、思考块、表格等次级正文随之按差值缩放。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextScale(f32);
+
+impl Global for TextScale {}
+
+impl TextScale {
+    /// 当前对话正文字号（逻辑像素）；未安装时为默认 14px。
+    pub fn body(cx: &App) -> f32 {
+        cx.try_global::<Self>().map_or(models::DEFAULT_FONT_SIZE as f32, |scale| scale.0)
+    }
+
+    /// 次级正文（代码 / 思考 / 表格）字号：比正文小 1px，与默认 14 / 13 的令牌关系一致。
+    pub fn secondary(cx: &App) -> f32 {
+        Self::body(cx) - (tokens::metrics::FONT_SIZE_MD - tokens::metrics::FONT_SIZE_BASE)
+    }
+}
+
+/// 运行时切换正文字号（钳到允许范围）；字号未变时不刷新窗口。
+pub fn set_font_size(size: u32, cx: &mut App) {
+    let size = size.clamp(*models::FONT_SIZE_RANGE.start(), *models::FONT_SIZE_RANGE.end()) as f32;
+    if TextScale::body(cx) == size && cx.has_global::<TextScale>() {
+        return;
+    }
+    cx.set_global(TextScale(size));
+    cx.refresh_windows();
+}
+
 /// 读取 Buddy 主题：`cx.buddy_theme()`
 pub trait BuddyTheme {
     /// 当前主题（未安装时 panic —— 启动序列必须先 [`Theme::install`]）

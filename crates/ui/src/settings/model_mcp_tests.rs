@@ -76,6 +76,7 @@ fn provider(id: &str, enabled_model_ids: &[&str]) -> ProviderConfig {
 
 fn config_with_mcp() -> AppConfig {
     AppConfig {
+        font_size: 14,
         theme: Theme::Dark,
         hotkey: "CmdOrCtrl+J".to_string(),
         providers: vec![provider("openai", &["openai::alpha"])],

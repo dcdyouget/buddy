@@ -167,6 +167,7 @@ impl PageRouter {
             offset,
         } = loaded;
         crate::theme_system::set_appearance(config.theme.clone().into(), cx);
+        crate::theme_system::set_font_size(config.font_size, cx);
         let conversation = cx.new(|_| {
             Conversation::with_history_page(history, offset, history_loader(engine.clone()))
         });
@@ -194,6 +195,9 @@ impl PageRouter {
                     }
                     crate::settings::SettingsEvent::ThemeChanged(value) => {
                         this.save_preference(preferences::Preference::Theme(value.clone()), cx)
+                    }
+                    crate::settings::SettingsEvent::FontSizeChanged(value) => {
+                        this.save_preference(preferences::Preference::FontSize(*value), cx)
                     }
                     crate::settings::SettingsEvent::UpdateReady(installed) => {
                         this.restart_for_update(installed.clone(), cx)
@@ -360,6 +364,7 @@ impl PageRouter {
         if cx.buddy_theme().appearance != config.theme.clone().into() {
             crate::theme_system::set_appearance(config.theme.clone().into(), cx);
         }
+        crate::theme_system::set_font_size(config.font_size, cx);
         self.config = config;
         self.settings
             .update(cx, |view, cx| view.set_config(self.config.clone(), cx));

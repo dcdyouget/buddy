@@ -122,6 +122,7 @@ mod tests {
     #[test]
     fn scopes_same_raw_model_for_each_provider_and_keeps_settings() {
         let mut config = AppConfig {
+            font_size: 14,
             theme: Theme::Light,
             hotkey: "CmdOrCtrl+J".to_string(),
             providers: vec![
@@ -149,6 +150,7 @@ mod tests {
     #[test]
     fn normalization_is_idempotent() {
         let mut config = AppConfig {
+            font_size: 14,
             theme: Theme::Light,
             hotkey: "CmdOrCtrl+J".to_string(),
             providers: vec![provider("openai", vec!["openai::gpt-4o"])],
@@ -170,6 +172,7 @@ mod tests {
     fn preserves_raw_model_ids_that_look_like_scoped_ids() {
         let raw_id = "openai::special";
         let mut config = AppConfig {
+            font_size: 14,
             theme: Theme::Light,
             hotkey: "CmdOrCtrl+J".to_string(),
             providers: vec![provider("openai", vec![raw_id])],

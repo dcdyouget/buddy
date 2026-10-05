@@ -101,6 +101,42 @@ impl PreparedVisibility {
         #[cfg(not(target_os = "macos"))]
         { let _ = alpha; Err(VisibilityError::UnsupportedPlatform) }
     }
+    /// 播放呼入动效（缩放 + 淡入）；须在 `set_alpha(1.0)` 之前调用。
+    pub(crate) fn summon(&self) -> Result<(), VisibilityError> {
+        #[cfg(target_os = "macos")]
+        {
+            ensure_main_thread()?;
+            super::window_motion::summon(*self.native);
+            Ok(())
+        }
+        #[cfg(not(target_os = "macos"))]
+        { Err(VisibilityError::UnsupportedPlatform) }
+    }
+
+    /// 播放呼出动效（收缩 + 淡出），停在透明终帧等待 [`Self::hide`]。
+    pub(crate) fn dismiss(&self) -> Result<(), VisibilityError> {
+        #[cfg(target_os = "macos")]
+        {
+            ensure_main_thread()?;
+            super::window_motion::dismiss(*self.native);
+            Ok(())
+        }
+        #[cfg(not(target_os = "macos"))]
+        { Err(VisibilityError::UnsupportedPlatform) }
+    }
+
+    /// 清除呼入 / 呼出动画，图层回到原尺寸、不透明。
+    pub(crate) fn settle(&self) -> Result<(), VisibilityError> {
+        #[cfg(target_os = "macos")]
+        {
+            ensure_main_thread()?;
+            super::window_motion::settle(*self.native);
+            Ok(())
+        }
+        #[cfg(not(target_os = "macos"))]
+        { Err(VisibilityError::UnsupportedPlatform) }
+    }
+
     /// 隐藏窗口但保留 Router、页面状态与 engine 流式任务。
     pub(crate) fn hide(&self) -> Result<VisibilitySnapshot, VisibilityError> {
         #[cfg(target_os = "macos")]

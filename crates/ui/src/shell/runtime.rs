@@ -84,7 +84,7 @@ pub async fn install(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Resul
     if let Err(error) = &registration {
         let settings = router.read_with(cx, |router, _| router.settings_view().clone());
         settings.update(cx, |view, cx| {
-            view.preference_failed(true, error.clone(), cx)
+            view.preference_failed(crate::settings::PreferenceKind::Hotkey, error.clone(), cx)
         });
     }
     registration
@@ -162,6 +162,7 @@ pub async fn hide(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Result<(
         return Ok(());
     };
     if animate {
+        prepare(handle, cx)?.dismiss().map_err(|e| e.to_string())?;
         cx.background_executor()
             .timer(super::entrance::EntranceMotion::exit_duration())
             .await;
@@ -176,12 +177,15 @@ pub async fn hide(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Result<(
     }
     let prepared = prepare(handle, cx)?;
     if !prepared.probe().map_err(|e| e.to_string())?.is_visible {
+        let _ = prepared.settle();
         handle
             .update(cx, |shell, _, cx| shell.reset_entrance(cx))
             .map_err(|e| e.to_string())?;
         return Ok(());
     }
     let result = prepared.hide().map_err(|e| e.to_string());
+    // 透明终帧已随 orderOut 收起；清掉动画，下次呼入从干净的图层开始。
+    let _ = prepared.settle();
     if result.is_ok() {
         let _ = handle.update(cx, |shell, _, cx| {
             if shell.is_current_visibility_generation(generation) {
@@ -256,8 +260,8 @@ async fn show_on_screen(
         return Err(error.to_string());
     }
     if !was_visible {
-        // First callback requests a transparent frame; the second runs after
-        // that frame has been presented. Never expose the old cached drawable.
+        // First callback requests a fresh frame; the second runs after that
+        // frame has been presented. Never expose the old cached drawable.
         let (ready, rendered) = tokio::sync::oneshot::channel();
         handle.update(cx, |_, window, _| {
             window.on_next_frame(move |window, _| {
@@ -270,13 +274,17 @@ async fn show_on_screen(
     if !handle.read_with(cx, |shell, _| shell.is_current_visibility_generation(generation)).map_err(|e| e.to_string())? {
         return Ok(());
     }
+    let animate = handle
+        .update(cx, |shell, _, cx| (!was_visible || resume_exit).then(|| shell.play_entrance(cx)))
+        .map_err(|e| e.to_string())?;
+    // 动画须在窗口变为可见之前提交，否则会先闪出一帧完整窗口。
+    match animate {
+        Some(true) => prepared.summon().map_err(|e| e.to_string())?,
+        Some(false) => prepared.settle().map_err(|e| e.to_string())?,
+        None => {}
+    }
     prepared.set_alpha(1.0).map_err(|e| e.to_string())?;
-    handle.update(cx, |shell, window, cx| {
-        if !was_visible || resume_exit {
-            shell.play_entrance(cx);
-        }
-        window.refresh();
-    }).map_err(|e| e.to_string())
+    handle.update(cx, |_, window, _| window.refresh()).map_err(|e| e.to_string())
 }
 
 fn record_invocation(cx: &mut AsyncApp) -> bool {
@@ -334,7 +342,7 @@ pub async fn resume_after_wake(
         let _ = handle.update(cx, |shell, _, cx| {
             let settings = shell.router().read(cx).settings_view().clone();
             settings.update(cx, |view, cx| {
-                view.preference_failed(true, error.clone(), cx)
+                view.preference_failed(crate::settings::PreferenceKind::Hotkey, error.clone(), cx)
             });
         });
     }

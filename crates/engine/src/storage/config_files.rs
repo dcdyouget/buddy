@@ -98,6 +98,7 @@ mod tests {
     fn mcp_servers_roundtrip_through_disk_without_losing_fields() {
         let directory = tempfile::tempdir().unwrap();
         let config = AppConfig {
+            font_size: 14,
             hotkey: "mcp-roundtrip".into(),
             mcp_servers: vec![
                 McpServerConfig {

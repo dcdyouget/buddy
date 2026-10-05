@@ -1,11 +1,13 @@
-//! 外观与热键按字段增量复用配置队列，保存成功后才发布（与当前 v1 一致）。
+//! 外观、字号与热键按字段增量复用配置队列，保存成功后才发布（与当前 v1 一致）。
 use super::*;
+use crate::settings::PreferenceKind;
 use buddy_engine::models::Theme;
 
 #[derive(Clone)]
 pub(super) enum Preference {
     Hotkey(String),
     Theme(Theme),
+    FontSize(u32),
 }
 
 impl Preference {
@@ -13,11 +15,20 @@ impl Preference {
         matches!(self, Self::Hotkey(_))
     }
 
+    fn kind(&self) -> PreferenceKind {
+        match self {
+            Self::Hotkey(_) => PreferenceKind::Hotkey,
+            Self::Theme(_) => PreferenceKind::Theme,
+            Self::FontSize(_) => PreferenceKind::FontSize,
+        }
+    }
+
     fn apply(&self, config: &AppConfig) -> AppConfig {
         let mut next = config.clone();
         match self {
             Self::Hotkey(value) => next.hotkey = value.clone(),
             Self::Theme(value) => next.theme = value.clone(),
+            Self::FontSize(value) => next.font_size = *value,
         }
         next
     }
@@ -27,7 +38,7 @@ impl PageRouter {
     pub(super) fn save_preference(&mut self, edit: Preference, cx: &mut Context<Self>) {
         let settings = self.settings.clone();
         settings.update(cx, |view, cx| {
-            view.set_preference_saving(edit.is_hotkey(), true, cx)
+            view.set_preference_saving(edit.kind(), true, cx)
         });
         let previous = self.config_save.take();
         let state = self.config_save_state.clone();
@@ -52,7 +63,7 @@ impl PageRouter {
                 Ok(())
             };
             if let Err(error) = registration {
-                let _ = settings.update(cx, |view, cx| view.preference_failed(true, error, cx));
+                let _ = settings.update(cx, |view, cx| view.preference_failed(PreferenceKind::Hotkey, error, cx));
                 let _ = completed.send(());
                 return;
             }
@@ -64,7 +75,7 @@ impl PageRouter {
                     let visible = state.borrow_mut().complete(sequence, candidate);
                     let _ = router.update(cx, |router, cx| router.publish_config(visible, cx));
                     let _ = settings.update(cx, |view, cx| {
-                        view.set_preference_saving(edit.is_hotkey(), false, cx)
+                        view.set_preference_saving(edit.kind(), false, cx)
                     });
                 }
                 Err(error) => {
@@ -81,7 +92,7 @@ impl PageRouter {
                         Err(rollback) => format!("{error}；旧快捷键恢复失败：{rollback}"),
                     };
                     let _ = settings.update(cx, |view, cx| {
-                        view.preference_failed(edit.is_hotkey(), error, cx)
+                        view.preference_failed(edit.kind(), error, cx)
                     });
                 }
             }
@@ -106,8 +117,10 @@ mod tests {
         config.auto_start = true;
         let dark = Preference::Theme(Theme::Dark).apply(&config);
         let hotkey = Preference::Hotkey("CmdOrCtrl+Shift+K".into()).apply(&dark);
+        let hotkey = Preference::FontSize(16).apply(&hotkey);
         let mut expected = config;
         expected.theme = Theme::Dark;
+        expected.font_size = 16;
         expected.hotkey = "CmdOrCtrl+Shift+K".into();
         assert_eq!(
             serde_json::to_value(hotkey).unwrap(),

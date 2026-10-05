@@ -34,6 +34,8 @@ pub struct AppConfig {
     pub selected_model_id: String, // UI 当前选中的模型 ID
     #[serde(default)]
     pub auto_start: bool, // 开机自启动
+    #[serde(default = "default_font_size")]
+    pub font_size: u32, // 对话正文字号（px），见 FONT_SIZE_RANGE
 
     // ── Tool / MCP 相关字段 ──
     // 缺省时使用 vec![] —— 老 config.json 无这些字段也能正常加载
@@ -50,6 +52,16 @@ fn default_theme() -> Theme {
     Theme::Light
 }
 
+/// 对话正文字号的可选范围（px）。
+pub const FONT_SIZE_RANGE: std::ops::RangeInclusive<u32> = 12..=20;
+
+/// 对话正文默认字号（px）。
+pub const DEFAULT_FONT_SIZE: u32 = 14;
+
+fn default_font_size() -> u32 {
+    DEFAULT_FONT_SIZE
+}
+
 fn default_hotkey() -> String {
     "CmdOrCtrl+J".to_string()
 }
@@ -64,6 +76,7 @@ impl Default for AppConfig {
             models: vec![],
             selected_model_id: String::new(),
             auto_start: false,
+            font_size: DEFAULT_FONT_SIZE,
             allowed_paths: vec![],
             mcp_servers: vec![],
         }

@@ -73,6 +73,7 @@ mod tests {
 
     fn config() -> AppConfig {
         AppConfig {
+            font_size: 14,
             theme: Theme::Light,
             hotkey: "CmdOrCtrl+J".to_string(),
             providers: vec![ProviderConfig {

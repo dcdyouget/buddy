@@ -54,6 +54,8 @@ use std::time::{Duration, Instant};
 
 /// 预渲染区（视口上下额外布局的高度）。取 Comet `OVERDRAW_PX`
 pub const OVERDRAW_PX: f32 = 320.0;
+/// 「回到问题」平滑滚动时长（毫秒）
+const SCROLL_TO_ROW_MS: u64 = 360;
 /// 距顶多近时加载更早历史（v1 `el.scrollTop <= 56`）
 pub const LOAD_OLDER_THRESHOLD_PX: f32 = 56.0;
 
@@ -141,6 +143,8 @@ pub struct Transcript {
     /// 复制提示词的短暂反馈状态。
     copy_states: CopyStates,
     _observe: Subscription,
+    /// 设置页调整字号后所有行高都会变化，须整表重测。
+    _text_scale: Subscription,
 }
 
 impl Transcript {
@@ -157,6 +161,10 @@ impl Transcript {
             });
         });
         let observe = cx.observe(&conversation, |this: &mut Self, _, cx| this.sync(cx));
+        let text_scale = cx.observe_global::<crate::theme_system::TextScale>(|this: &mut Self, cx| {
+            this.list.remeasure();
+            cx.notify();
+        });
         let mut this = Self {
             conversation,
             list,
@@ -192,6 +200,7 @@ impl Transcript {
             download_states: Default::default(),
             copy_states: Default::default(),
             _observe: observe,
+            _text_scale: text_scale,
         };
         this.sync(cx);
         this.list.scroll_to_end();
@@ -851,6 +860,8 @@ impl Transcript {
 
     /// 接管列表区域的滚轮：换算成像素、累加目标、逐帧缓动（v1 `useSmoothWheelScroll`）
     fn on_wheel(&mut self, delta: Pixels, cx: &mut Context<Self>) {
+        // 用户滚轮优先：中止「回到问题 / 回到底部」的程序化滚动
+        self.scroll_animation = None;
         let current = self.scroll_offset();
         let max = self.list.max_offset_for_scrollbar().y;
         // 已到边缘且继续同向：停止动画（v1）
@@ -993,15 +1004,55 @@ impl Transcript {
         cx.notify();
     }
 
-    /// 回到问题：把该行滚到视口顶部，并脱离跟随（v1 `scrollIntoView({ block: 'start' })`）
+    /// 回到问题：把该行平滑滚到视口顶部，并脱离跟随（v1 `scrollIntoView({ block: 'start', behavior: 'smooth' })`）
     pub fn scroll_to_row(&mut self, row_id: &str, cx: &mut Context<Self>) {
-        if let Some(ix) = self.rows.iter().position(|r| r.id == row_id) {
-            self.list.scroll_to(gpui::ListOffset {
-                item_ix: ix,
-                offset_in_item: px(0.),
-            });
+        let Some(ix) = self.rows.iter().position(|r| r.id == row_id) else {
+            return;
+        };
+        let target = gpui::ListOffset {
+            item_ix: ix,
+            offset_in_item: px(0.),
+        };
+        if crate::accessibility::prefers_reduced_motion() {
+            self.scroll_animation = None;
+            self.list.scroll_to(target);
             cx.notify();
+            return;
         }
+        // 目标的像素偏移：先定位到目标读出，再还原起点，由动画逐帧走完这段距离。
+        let origin = self.list.logical_scroll_top();
+        let start = -self.list.scroll_px_offset_for_scrollbar().y;
+        self.list.scroll_to(target);
+        let end = -self.list.scroll_px_offset_for_scrollbar().y;
+        self.list.scroll_to(origin);
+        let list = self.list.clone();
+        self.scroll_animation = Some(cx.spawn(async move |this, cx| {
+            let ease = crate::theme_system::easing::cubic_bezier(
+                crate::theme_system::tokens::motion::EASE_STANDARD,
+            );
+            let duration = Duration::from_millis(SCROLL_TO_ROW_MS);
+            let started = Instant::now();
+            loop {
+                let t = (started.elapsed().as_secs_f32() / duration.as_secs_f32()).min(1.0);
+                if t >= 1.0 {
+                    break;
+                }
+                let desired = start + (end - start) * ease(t);
+                list.scroll_by(desired + list.scroll_px_offset_for_scrollbar().y);
+                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                    return;
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(8))
+                    .await;
+            }
+            // 未测量行会让估算距离有偏差；最后按行精确落位。
+            let _ = this.update(cx, |this, cx| {
+                this.list.scroll_to(target);
+                this.scroll_animation = None;
+                cx.notify();
+            });
+        }));
     }
 
     /// 设置工具卡片展开（用户点击）：记住用户选择并重测该行

@@ -30,6 +30,7 @@ fn provider(id: &str, provider_type: &str, enabled_model_ids: &[&str]) -> Provid
 
 fn config() -> AppConfig {
     AppConfig {
+        font_size: 14,
         theme: Theme::Dark,
         hotkey: "CmdOrCtrl+J".to_string(),
         providers: vec![

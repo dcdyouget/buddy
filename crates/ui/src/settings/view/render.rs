@@ -115,6 +115,18 @@ impl Render for SettingsView {
                             .h(px(m::SPACE_3)),
                     )
                     .child(crate::settings::controls::section(
+                        "字体大小",
+                        "调整对话内容的文字大小",
+                        self.font_size.clone(),
+                        cx,
+                    ))
+                    .child(
+                        drag::region_if(&self.drag_source, interactive)
+                            .flex_none()
+                            .w_full()
+                            .h(px(m::SPACE_3)),
+                    )
+                    .child(crate::settings::controls::section(
                         "呼出快捷键",
                         "在任意应用中快速打开 Buddy",
                         self.hotkey.clone(),
@@ -180,6 +192,7 @@ impl Render for SettingsView {
                                 // 与可见页面顺序一致；录制期间 Tab 本身是候选主键。
                                 let mut order = vec![("back".to_string(), this.back.clone())];
                                 order.extend(this.theme.read(cx).focus_controls());
+                                order.extend(this.font_size.read(cx).focus_controls());
                                 if let Some(focus) = this.hotkey.read(cx).focus_control(cx) {
                                     order.push(("hotkey".to_string(), focus));
                                 }

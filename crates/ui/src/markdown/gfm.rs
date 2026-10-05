@@ -60,11 +60,11 @@ fn over(top: Rgba, bottom: Rgba) -> Rgba {
 /// 助手消息的 GFM 装饰
 ///
 /// 闭包捕获构造时的配色；消息样式每帧按当前主题重建（[`super::message_style`]），切换主题无需额外处理。
-pub fn decorations(theme: &Theme) -> MarkdownDecorations {
+pub fn decorations(theme: &Theme, body: f32) -> MarkdownDecorations {
     let c = theme.colors;
     MarkdownDecorations {
         heading: Some(Arc::new(move |heading: Div, level, _| {
-            let em = m::FONT_SIZE_MD * heading_scale(level);
+            let em = body * heading_scale(level);
             let heading = heading.relative().mt(px(m::SPACE_3)).mb(px(m::SPACE_2)).text_size(px(em));
             if level > 3 {
                 return heading;
@@ -91,7 +91,10 @@ pub fn decorations(theme: &Theme) -> MarkdownDecorations {
             heading.pb(px(m::SPACE_2)).child(underline)
         })),
         block_quote: Some(Arc::new(move |quote: Div, _| {
-            let tint = over(c.markdown_accent_soft, c.bg_sunken);
+            // 半透明令牌须先落到不透明的正文底色上再叠色；直接把 `bg_sunken`（深色下为
+            // 低 alpha 白）当不透明底会得到近白色块。
+            let sunken = over(c.bg_sunken, c.bg_surface);
+            let tint = over(c.markdown_accent_soft, sunken);
             let left_bar = div()
                 .absolute()
                 .left(px(-3.))
@@ -116,14 +119,14 @@ pub fn decorations(theme: &Theme) -> MarkdownDecorations {
                 .rounded_bl(px(m::RADIUS_SM))
                 .rounded_tr(px(m::RADIUS_MD))
                 .rounded_br(px(m::RADIUS_MD))
-                .bg(linear_gradient(135., linear_color_stop(tint, 0.), linear_color_stop(c.bg_sunken, 0.7)))
+                .bg(linear_gradient(135., linear_color_stop(tint, 0.), linear_color_stop(sunken, 0.7)))
                 .child(left_bar)
         })),
         list: Some(Arc::new(move |list: Div, top_level, _| {
             let list = list.pl_0();
             if top_level { list.mt(px(m::SPACE_2)).mb(px(m::SPACE_2)) } else { list.mt(px(m::SPACE_1)) }
         })),
-        list_bullet: Some(Arc::new(move |kind, cx| bullet(kind, c, cx))),
+        list_bullet: Some(Arc::new(move |kind, cx| bullet(kind, c, body, cx))),
         table: Some(Arc::new(move |table: Div, _| {
             table
                 .w_full()
@@ -134,7 +137,7 @@ pub fn decorations(theme: &Theme) -> MarkdownDecorations {
                 .rounded(px(m::RADIUS_MD))
                 .overflow_hidden()
                 .bg(c.bg_elevated)
-                .text_size(px(m::FONT_SIZE_BASE))
+                .text_size(px(body - (m::FONT_SIZE_MD - m::FONT_SIZE_BASE)))
         })),
         table_cell: Some(Arc::new(move |cell: Div, info: TableCellInfo, _| {
             let cell = cell.px(px(m::SPACE_3)).py(px(m::SPACE_2)).border_color(c.border_subtle);
@@ -172,8 +175,8 @@ pub fn decorations(theme: &Theme) -> MarkdownDecorations {
     }
 }
 
-fn bullet(kind: ListBulletKind, c: &'static Palette, cx: &App) -> AnyElement {
-    let line = m::FONT_SIZE_MD; // 1em
+fn bullet(kind: ListBulletKind, c: &'static Palette, body: f32, cx: &App) -> AnyElement {
+    let line = body; // 1em
     let column = div().flex_none().w(px(BULLET_COLUMN)).relative();
     match kind {
         ListBulletKind::Unordered => column

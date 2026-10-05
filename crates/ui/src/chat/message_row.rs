@@ -103,7 +103,7 @@ pub fn user_text_style(window: &gpui::Window, cx: &App) -> MarkdownStyle {
     base_text_style.refine(&TextStyleRefinement {
         font_family: Some(fonts::ui_font(cx).family),
         font_features: Some(fonts::ui_font(cx).features),
-        font_size: Some(px(m::FONT_SIZE_MD).into()),
+        font_size: Some(px(crate::theme_system::TextScale::body(cx)).into()),
         font_weight: Some(FontWeight(m::FONT_WEIGHT_REGULAR)),
         color: Some(c.text_primary.into()),
         line_height: Some(relative(USER_LINE_HEIGHT)),
@@ -169,7 +169,7 @@ pub fn user_row_with_drag(text: impl IntoElement, cx: &App, source: DragSource) 
                 .border_color(c.user_bubble_border)
                 .shadow(box_shadows(theme.shadows.shadow_static))
                 .text_color(c.text_primary)
-                .text_size(px(m::FONT_SIZE_MD))
+                .text_size(px(crate::theme_system::TextScale::body(cx)))
                 .line_height(relative(USER_LINE_HEIGHT))
                 .child(text)
                 // Measurement only: no hitbox and no layout contribution.

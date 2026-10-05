@@ -25,7 +25,7 @@ pub mod copy;
 pub mod gfm;
 pub use zed_markdown;
 
-use crate::theme_system::{BuddyTheme, Theme, fonts, tokens::metrics};
+use crate::theme_system::{BuddyTheme, TextScale, Theme, fonts, tokens::metrics};
 use gpui::{App, FontStyle, FontWeight, HighlightStyle, Hsla, Refineable, TextStyleRefinement, Window, px, relative};
 use zed_markdown::{HeadingLevelStyles, MarkdownStyle};
 use std::sync::Arc;
@@ -56,11 +56,12 @@ pub fn init(cx: &mut App) {
 pub fn message_style(window: &Window, cx: &App) -> MarkdownStyle {
     let theme = *cx.buddy_theme();
     let c = theme.colors;
+    let body = TextScale::body(cx);
     let mut base_text_style = window.text_style();
     base_text_style.refine(&TextStyleRefinement {
         font_family: Some(fonts::ui_font(cx).family),
         font_features: Some(fonts::ui_font(cx).features),
-        font_size: Some(px(metrics::FONT_SIZE_MD).into()),
+        font_size: Some(px(body).into()),
         font_weight: Some(FontWeight(metrics::FONT_WEIGHT_REGULAR)),
         color: Some(c.text_primary.into()),
         // v1 `MessageBubble.tsx:234-235` 写死 1.6（非令牌）
@@ -69,7 +70,7 @@ pub fn message_style(window: &Window, cx: &App) -> MarkdownStyle {
     });
     let heading = |level: u8| {
         Some(TextStyleRefinement {
-            font_size: Some(px(metrics::FONT_SIZE_MD * gfm::heading_scale(level)).into()),
+            font_size: Some(px(body * gfm::heading_scale(level)).into()),
             font_weight: Some(FontWeight(gfm::heading_weight(level))),
             line_height: Some(relative(metrics::LINE_HEIGHT_TIGHT)),
             ..Default::default()
@@ -107,7 +108,7 @@ pub fn message_style(window: &Window, cx: &App) -> MarkdownStyle {
         paragraph_spacing: px(metrics::SPACE_2),
         paragraph_line_height: relative(ASSISTANT_LINE_HEIGHT),
         table_columns_min_size: true,
-        decorations: gfm::decorations(&theme),
+        decorations: gfm::decorations(&theme, body),
         ..Default::default()
     }
 }
@@ -130,7 +131,7 @@ pub fn tool_detail_style(window: &Window, cx: &App) -> MarkdownStyle {
 pub fn thinking_style(window: &Window, cx: &App) -> MarkdownStyle {
     let c = cx.buddy_theme().colors;
     let mut style = message_style(window, cx);
-    style.base_text_style.font_size = px(metrics::FONT_SIZE_BASE).into();
+    style.base_text_style.font_size = px(TextScale::secondary(cx)).into();
     style.base_text_style.color = c.text_muted.into();
     style
 }

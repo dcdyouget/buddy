@@ -426,8 +426,10 @@ pub const DARK: Palette = Palette {
     tool_ui_flow_secondary: Rgba { r: 0.126275, g: 0.468549, b: 0.719529, a: 1.000000 }, // #2077B7FF
     user_bubble: Rgba { r: 0.356863, g: 0.372549, b: 0.913725, a: 0.190000 }, // #5B5FE930
     user_bubble_border: Rgba { r: 0.662745, g: 0.670588, b: 0.952941, a: 0.220000 }, // #A9ABF338
-    window_inner_highlight: Rgba { r: 1.000000, g: 1.000000, b: 1.000000, a: 0.120000 }, // #FFFFFF1F
-    window_outline: Rgba { r: 0.885333, g: 0.877333, b: 0.866667, a: 1.000000 }, // #E2E0DDFF
+    // 深色窗口边只比表面亮一级（≈ 白 10% 叠在 bg_surface 上）；原值为近白不透明色，
+    // 在深色桌面上形成一圈白边。
+    window_inner_highlight: Rgba { r: 1.000000, g: 1.000000, b: 1.000000, a: 0.050000 }, // #FFFFFF0D
+    window_outline: Rgba { r: 0.200000, g: 0.196078, b: 0.211765, a: 1.000000 }, // #333236FF
 };
 
 /// 阴影与发光（`box-shadow` / `filter: drop-shadow` 的逐层数据）
@@ -599,14 +601,20 @@ pub mod metrics {
 
 /// 动效：时长 / 延迟为毫秒（延迟可为负）；缓动为 cubic-bezier 四参数
 pub mod motion {
-    /// Open: establish the background before revealing foreground controls.
-    pub const DURATION_ENTER_SURFACE: u64 = 90;
-    /// Duration of the subsequent unified foreground reveal.
-    pub const DURATION_ENTER_FOREGROUND: u64 = 110;
-    /// Close: foreground dissolves into the surface before the surface fades out.
-    pub const DURATION_EXIT_FOREGROUND: u64 = 100;
-    /// Duration of the second, background-only close phase.
-    pub const DURATION_EXIT_SURFACE: u64 = 90;
+    /// 呼入：窗口从该缩放比例弹簧放大到原尺寸（macOS 26 聚焦搜索式）。
+    pub const SUMMON_START_SCALE: f32 = 0.94;
+    /// 呼入弹簧刚度（质量 1）。
+    pub const SUMMON_STIFFNESS: f32 = 420.0;
+    /// 呼入弹簧阻尼比：略低于临界阻尼，落点干脆且几乎无回弹（回弹会被窗口边界裁切）。
+    pub const SUMMON_DAMPING_RATIO: f32 = 0.86;
+    /// 呼入淡入时长（毫秒），短于弹簧，先看清再落定。
+    pub const DURATION_SUMMON_FADE: u64 = 180;
+    /// 呼入视为落定的时长（毫秒）；弹簧尾段肉眼不可见。
+    pub const DURATION_SUMMON: u64 = 320;
+    /// 呼出：向中心收缩到该比例并淡出。
+    pub const DISMISS_END_SCALE: f32 = 0.96;
+    /// 呼出时长（毫秒）。
+    pub const DURATION_DISMISS: u64 = 150;
     /// Tonal press feedback shared by compact controls.
     pub const BUTTON_PRESS_OPACITY: f32 = 0.88;
     /// Initial opacity for the first settled portion of streaming text.

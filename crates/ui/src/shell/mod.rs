@@ -20,6 +20,8 @@ pub mod services;
 pub mod sizing;
 pub mod tray;
 mod visibility;
+#[cfg(target_os = "macos")]
+mod window_motion;
 pub mod workspaces;
 
 use crate::chat::page_state::Page;
@@ -29,7 +31,7 @@ use crate::theme_system::BuddyTheme;
 use buddy_engine::chat::ChatEngine;
 use config::ShellConfig;
 use gpui::{
-    App, AppContext, AsyncApp, Context, Entity, Hsla, KeyDownEvent, Render, Subscription, Task,
+    App, AppContext, AsyncApp, Context, Entity, Hsla, Render, Subscription, Task,
     Window, WindowHandle, div, linear_color_stop, linear_gradient, prelude::*, px, relative,
 };
 use std::sync::Arc;
@@ -40,13 +42,13 @@ pub struct AppShell {
     entrance: entrance::EntranceMotion,
     dialog_motion: entrance::DialogMotion,
     visibility_generation: u64,
-    last_entrance_frame: Option<entrance::EntranceFrame>,
     _page_subscription: Subscription,
     positions: positioning::PositionMemory,
     pending_position_save: Option<Task<()>>,
     pending_resize: Option<Task<()>>,
     _position_subscriptions: [Subscription; 2],
     _focus_order_subscription: Subscription,
+    _escape_subscription: Subscription,
     focus_order_task: Option<Task<()>>,
 }
 
@@ -71,18 +73,30 @@ impl AppShell {
             },
         );
         let position_subscriptions = positioning_controller::observe(window, cx);
+        // Esc 与再按一次呼出快捷键等效。用按键观察者而不是根元素的 key_down：焦点元素
+        // 不在本帧（虚拟列表滚出视口的消息、流式中被替换的 Markdown）时 GPUI 只派发给
+        // 根节点，元素监听收不到。观察者只在没有子层（菜单、审批、设置页）消费时才触发。
+        let escape_subscription = cx.observe_keystrokes(|_, event, window, cx| {
+            let keystroke = &event.keystroke;
+            if keystroke.key == "escape"
+                && keystroke.modifiers.number_of_modifiers() == 0
+                && let Some(handle) = window.window_handle().downcast::<AppShell>()
+            {
+                runtime::request_hide(handle, cx);
+            }
+        });
         Self {
             router,
             entrance: entrance::EntranceMotion::default(),
             dialog_motion: entrance::DialogMotion::default(),
             visibility_generation: 0,
-            last_entrance_frame: None,
             _page_subscription: subscription,
             positions: positioning::PositionMemory::default(),
             pending_position_save: None,
             pending_resize: None,
             _position_subscriptions: position_subscriptions,
             _focus_order_subscription: focus_order::observe(window, cx),
+            _escape_subscription: escape_subscription,
             focus_order_task: None,
         }
     }
@@ -92,9 +106,9 @@ impl AppShell {
         self.router.clone()
     }
 
-    /// 最近一次真实 render 采样的入场 / 退出参数；稳定态为 `None`。
-    pub fn last_entrance_frame(&self) -> Option<entrance::EntranceFrame> {
-        self.last_entrance_frame
+    /// 当前呼入 / 呼出阶段。
+    pub fn entrance_phase(&self) -> entrance::EntrancePhase {
+        self.entrance.phase()
     }
 
     /// 隐藏时立即重置入场外壳。
@@ -104,7 +118,7 @@ impl AppShell {
         cx.notify();
     }
 
-    /// 开始关闭前的流光，返回是否需要等待动画完成。
+    /// 进入呼出阶段，返回本次可见性世代与是否播放原生呼出动画。
     pub(crate) fn begin_exit(&mut self, cx: &mut Context<Self>) -> Option<(u64, bool)> {
         if self.entrance.is_exiting() {
             return None;
@@ -130,11 +144,12 @@ impl AppShell {
         (self.visibility_generation, resume_exit)
     }
 
-    /// 显示完成后开始页面入场。
-    pub(crate) fn play_entrance(&mut self, cx: &mut Context<Self>) {
+    /// 显示完成后进入呼入阶段，返回是否播放原生呼入动画。
+    pub(crate) fn play_entrance(&mut self, cx: &mut Context<Self>) -> bool {
         self.visibility_generation = self.visibility_generation.wrapping_add(1);
-        self.entrance.play();
+        let animate = self.entrance.play();
         cx.notify();
+        animate
     }
 
     fn play_dialog_transition(&mut self, cx: &mut Context<Self>) {
@@ -145,58 +160,22 @@ impl AppShell {
 
 impl Render for AppShell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let page = self.router.read(cx).page();
-        let compact = page.is_compact();
-        let frame = self.entrance.frame(compact);
+        // 呼入 / 呼出由原生图层合成（见 `window_motion`），内容始终按静态帧绘制。
         let dialog_frame = self.dialog_motion.frame();
-        self.last_entrance_frame = frame;
-        if self.entrance.animating() || self.dialog_motion.animating() {
+        if self.dialog_motion.animating() {
             window.request_animation_frame();
         }
         let c = cx.buddy_theme().colors;
-        let mut root = div().size_full().relative().overflow_hidden();
-        let mut content = div()
+        div()
             .size_full()
-            .on_key_down(cx.listener(|_, event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape"
-                    && let Some(handle) = window.window_handle().downcast::<AppShell>()
-                {
-                    cx.stop_propagation();
-                    runtime::request_hide(handle, cx);
-                }
-            }))
-            .child(self.router.clone());
-        if let Some(frame) = frame {
-            // Once foreground has dissolved, do not paint it underneath the
-            // fading cover: primitive opacity would otherwise reveal it again.
-            content = content.opacity(if frame.foreground_cover_opacity >= 1.0 { 0.0 } else { frame.content_opacity });
-        }
-        root = root.child(content);
-        if let Some(frame) = frame.filter(|frame| frame.foreground_cover_opacity > 0.0) {
-            let bubble = page == Page::Empty;
-            let surface = if bubble { c.composer_surface } else { c.bg_surface };
-            let border = if page == Page::NoApiKey { c.border_default } else { c.window_outline };
-            // One paint-only cover composites every foreground component into
-            // the existing surface uniformly, including text, buttons and input.
-            root = root.child(
-                div().absolute().top_0().left_0().size_full()
-                    .rounded(px(crate::theme_system::tokens::metrics::RADIUS_XL))
-                    .overflow_hidden().border_1().border_color(border).bg(surface)
-                    .opacity(frame.foreground_cover_opacity * frame.content_opacity)
-                    .child(div().absolute().top_0().left_0().size_full().bg(linear_gradient(
-                        if bubble { 180.0 } else { 145.0 },
-                        linear_color_stop(c.surface_highlight, 0.0),
-                        linear_color_stop(Hsla::from(c.surface_highlight).opacity(0.0), if bubble { 1.0 } else { 0.38 }),
-                    ))),
-            );
-        }
-        if let Some(frame) = frame {
-            root = root.child(sheen(frame.sheen_x, frame.sheen_opacity, c.buddy_primary));
-        }
-        if let Some(frame) = dialog_frame.filter(|_| !self.entrance.is_exiting()) {
-            root = root.child(sheen(frame.sheen_x, frame.sheen_opacity, c.buddy_primary));
-        }
-        root
+            .relative()
+            .overflow_hidden()
+            .child(div().size_full().child(self.router.clone()))
+            .children(
+                dialog_frame
+                    .filter(|_| !self.entrance.is_exiting())
+                    .map(|frame| sheen(frame.sheen_x, frame.sheen_opacity, c.buddy_primary)),
+            )
     }
 }
 

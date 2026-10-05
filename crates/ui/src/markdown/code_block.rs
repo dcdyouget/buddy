@@ -118,7 +118,7 @@ pub fn code_area_style(theme: &Theme, cx: &App) -> StyleRefinement {
     style.text = TextStyleRefinement {
         font_family: Some(fonts::mono_font(cx).family),
         font_features: Some(fonts::mono_font(cx).features),
-        font_size: Some(px(m::FONT_SIZE_BASE).into()),
+        font_size: Some(px(crate::theme_system::TextScale::secondary(cx)).into()),
         color: Some(c.code_text.into()),
         ..Default::default()
     };
