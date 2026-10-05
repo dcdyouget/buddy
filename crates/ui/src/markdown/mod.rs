@@ -26,7 +26,7 @@ pub mod gfm;
 pub use zed_markdown;
 
 use crate::theme_system::{BuddyTheme, TextScale, Theme, fonts, tokens::metrics};
-use gpui::{App, FontStyle, FontWeight, HighlightStyle, Hsla, Refineable, TextStyleRefinement, Window, px, relative};
+use gpui::{App, FontStyle, FontWeight, HighlightStyle, Hsla, Refineable, StyleRefinement, TextStyleRefinement, Window, px, relative};
 use zed_markdown::{HeadingLevelStyles, MarkdownStyle};
 use std::sync::Arc;
 use theme::SyntaxTheme;
@@ -78,6 +78,9 @@ pub fn message_style(window: &Window, cx: &App) -> MarkdownStyle {
     };
     MarkdownStyle {
         base_text_style,
+        // 段落文字（`StyledText`）的字号取自外层元素继承的文本样式，`base_text_style`
+        // 只决定字体与颜色；字号必须经根容器下发，否则设置页调整字号对正文无效。
+        container_style: text_size_container(body),
         code_block: code_block::code_area_style(&theme, cx),
         code_block_overflow_x_scroll: true,
         // v1 `.markdown-inline-code`：淡色底 + 主色字、等宽。上游以圆角色块绘制底色
@@ -113,6 +116,13 @@ pub fn message_style(window: &Window, cx: &App) -> MarkdownStyle {
     }
 }
 
+/// 只携带字号的根容器样式，见 [`message_style`]。
+fn text_size_container(size: f32) -> StyleRefinement {
+    let mut style = StyleRefinement::default();
+    style.text.font_size = Some(px(size).into());
+    style
+}
+
 /// 复制快捷键（macOS Cmd+C；Windows Ctrl+C）
 pub const COPY_KEYSTROKE: &str = if cfg!(target_os = "macos") { "cmd-c" } else { "ctrl-c" };
 
@@ -131,7 +141,9 @@ pub fn tool_detail_style(window: &Window, cx: &App) -> MarkdownStyle {
 pub fn thinking_style(window: &Window, cx: &App) -> MarkdownStyle {
     let c = cx.buddy_theme().colors;
     let mut style = message_style(window, cx);
-    style.base_text_style.font_size = px(TextScale::secondary(cx)).into();
+    let secondary = TextScale::secondary(cx);
+    style.base_text_style.font_size = px(secondary).into();
+    style.container_style = text_size_container(secondary);
     style.base_text_style.color = c.text_muted.into();
     style
 }
