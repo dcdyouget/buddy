@@ -90,6 +90,17 @@ pub(crate) fn prepare(window: &Window) -> Result<PreparedVisibility, VisibilityE
 }
 
 impl PreparedVisibility {
+    /// Gate a hidden window's stale drawable until GPUI has presented its first frame.
+    pub(crate) fn set_alpha(&self, alpha: f64) -> Result<(), VisibilityError> {
+        #[cfg(target_os = "macos")]
+        {
+            ensure_main_thread()?;
+            unsafe { let _: () = objc::msg_send![*self.native, setAlphaValue: alpha]; }
+            Ok(())
+        }
+        #[cfg(not(target_os = "macos"))]
+        { let _ = alpha; Err(VisibilityError::UnsupportedPlatform) }
+    }
     /// 隐藏窗口但保留 Router、页面状态与 engine 流式任务。
     pub(crate) fn hide(&self) -> Result<VisibilitySnapshot, VisibilityError> {
         #[cfg(target_os = "macos")]
@@ -150,7 +161,6 @@ impl PreparedVisibility {
                 }
                 let _: () = objc::msg_send![app, activateIgnoringOtherApps: objc::runtime::YES];
                 self.restore_normal_level()?;
-                let _: () = objc::msg_send![*self.native, orderFrontRegardless];
                 let _: () = objc::msg_send![
                     *self.native,
                     makeKeyAndOrderFront: std::ptr::null_mut::<objc::runtime::Object>()

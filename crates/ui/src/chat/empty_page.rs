@@ -174,6 +174,8 @@ impl Render for EmptyPage {
                     .bg(bg)
                     .shadow(box_shadows(theme.shadows.shadow_static))
                     .cursor_pointer()
+                    .overflow_hidden()
+                    .active(|s| s.bg(c.composer_surface).text_color(c.buddy_primary).opacity(crate::theme_system::tokens::motion::BUTTON_PRESS_OPACITY))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                         this.expand_hovered = *hovered;
@@ -182,6 +184,7 @@ impl Render for EmptyPage {
                     .tooltip(|_, cx| TextTooltip::view("展开对话", cx))
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(EmptyPageEvent::Expand)))
                     .child(icon(IconName::ChevronUp, px(14.0)).text_color(fg))
+                    .when(self.expand_hovered, |d| d.child(crate::motion_effects::surface_sheen("expand-sheen", c.buddy_primary, false)))
                     .child(gpui::canvas(move |bounds, _, _| expand_bounds.set(Some(bounds)), |_, _, _, _| {})
                         .absolute().top_0().left_0().size_full()),
             )

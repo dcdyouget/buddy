@@ -94,6 +94,7 @@ impl Render for ChatPage {
             composer.set_drag_source(drag_source.clone());
         });
         let error = self.conversation.read(cx).state.error.clone();
+        let streaming = self.conversation.read(cx).state.is_streaming();
         let approval = self.conversation.read(cx).state.approval.clone();
         if approval.is_some() && !self.focus.is_focused(window) {
             window.focus(&self.focus, cx);
@@ -130,6 +131,7 @@ impl Render for ChatPage {
             .child(div().flex_1().min_h_0().child(self.transcript.clone()))
             .when_some(error, |d, error| d.child(error_banner(&error, move |_, cx| conversation.update(cx, |c, cx| c.dismiss_error(cx)), cx)))
             .child(self.composer.clone())
+            .child(crate::motion_effects::surface_sheen(("conversation-sheen", streaming as usize), c.buddy_primary, streaming))
             .children(drag_strips(&self.drag))
             .children(approval.map(|a| approval_panel(&a, self.actions.decide.clone(), window, cx)))
     }

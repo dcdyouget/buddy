@@ -1,12 +1,9 @@
 //! 流式显示—— 逐项移植 v1 的三部分行为（`v1-final`）
 //!
-//! 1. **节奏**（[`Pacer`]，v1 `useSmoothTextRenderer.ts`）：后端增量先入缓冲，按约 50 字/秒、
-//!    每秒最多 25 次小批量放出；积压多时追赶（每批至多 16 字）；窗口隐藏时立即放出全部，
-//!    重新显示后 600ms 内保持立即放出（清理补发事件），之后恢复逐字速度。
-//! 2. **落定**（[`tail`] + [`settle_progress`]，v1 `createStreamingEffectPlugin` 与 `.streaming-char-settle`）：
-//!    流式中「不稳定尾段」（最后一个空行之后、未闭合围栏之前）的最后 9 个可见字符（不含代码、空白）
-//!    从星光白、不透明度 0.58 在 260ms 内过渡到正常样式；越旧的字符动画越靠后（每级提前 32ms）；
-//!    每批新字符到达时整体重新开始。
+//! 1. **节奏**（[`Pacer`]）：网络文本进入 FIFO 队列，前台固定每秒约 60 个字素逐个放出，
+//!    不随积压加速；后台立即同步，恢复显示后的新文本仍正常排队。
+//! 2. **落定**：字符首次呈现时间由 `reveal::RevealTimeline` 维护；每个新字独立渐显，
+//!    后续批次不会重播旧字的动画。此模块保留尾段定位和星标装饰。
 //! 3. **星标**（[`Star`]，v1 `.streaming-next-star`）：紧跟最后一个落定字符；尾段为空时单独成行；
 //!    围栏未闭合时不显示。呼吸：1.1s 循环，不透明度 0.72↔1、缩放 0.74↔1.16，每批重新开始。
 //!
@@ -19,93 +16,97 @@ use std::ops::Range;
 
 // ── 1. 节奏 ──────────────────────────────────────────────────────
 
-/// 基础速度：字/秒（v1 `STREAMING_CHARACTERS_PER_SECOND`）
-pub const CHARACTERS_PER_SECOND: usize = 50;
-/// 每秒最多放出次数（v1 `STREAMING_UPDATES_PER_SECOND`）
-pub const UPDATES_PER_SECOND: usize = 25;
-/// 放出间隔（毫秒）
+/// 固定显示速度：每秒 60 个 Unicode 字素（一个汉字或完整 emoji 算一个）。
+pub const CHARACTERS_PER_SECOND: usize = 60;
+/// 每个呈现时隙最多出队一个字素，不随积压量加速。
+pub const UPDATES_PER_SECOND: usize = CHARACTERS_PER_SECOND;
+/// 放出间隔（毫秒）。
 pub const UPDATE_INTERVAL_MS: f64 = 1000.0 / UPDATES_PER_SECOND as f64;
-/// 每批最少字数：`ceil(50 / 25)`
-pub const BASE_CHARACTERS_PER_UPDATE: usize = CHARACTERS_PER_SECOND.div_ceil(UPDATES_PER_SECOND);
-/// 每批最多字数（v1 `MAX_CHARACTERS_PER_UPDATE`）
-pub const MAX_CHARACTERS_PER_UPDATE: usize = 16;
-/// 重新显示后保持立即放出的时长（毫秒，v1 `RESUME_CATCH_UP_DURATION`）
-pub const RESUME_CATCH_UP_MS: f64 = 600.0;
 
-/// 流式文本的放出节奏。时间一律为毫秒（调用方提供单调时钟）。
+/// FIFO 文本队列；消费游标避免每出一个字都搬移整段积压文本。
+/// 时间由调用方提供单调毫秒时钟，空队列不积攒可突发消费的额度。
 #[derive(Debug, Default)]
 pub struct Pacer {
     pending: String,
+    head: usize,
     next_reveal_at: Option<f64>,
     hidden: bool,
-    resume_until: Option<f64>,
 }
 
 impl Pacer {
-    /// 新建（窗口可见）
+    /// 新建（窗口可见）。
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// 缓冲中尚未放出的文本
+    /// 队列中尚未呈现的文本。
     pub fn pending(&self) -> &str {
-        &self.pending
+        &self.pending[self.head..]
     }
 
-    fn immediate(&self, now: f64) -> bool {
-        self.hidden || self.resume_until.is_some_and(|until| now < until)
-    }
-
-    /// 收到增量。隐藏或刚恢复显示时立即返回全部待放出文本，否则等 [`Self::tick`]。
+    /// 网络增量只入队；后台窗口不播放逐字动画，直接保留完整内容。
     pub fn push(&mut self, delta: &str, now: f64) -> Option<String> {
+        if self.head >= 4096 && self.head >= self.pending.len() / 2 {
+            self.pending.drain(..self.head);
+            self.head = 0;
+        }
         self.pending.push_str(delta);
-        if self.immediate(now) { self.flush() } else { None }
+        if self.hidden {
+            self.flush()
+        } else {
+            self.next_reveal_at.get_or_insert(now);
+            None
+        }
     }
 
-    /// 每帧调用；到点则返回本批放出的文本
+    /// 每帧调用；固定时隙出队一个完整字素。卡顿后不一次性补出多字。
     pub fn tick(&mut self, now: f64) -> Option<String> {
-        if self.resume_until.is_some_and(|until| now >= until) {
-            self.resume_until = None;
-            self.next_reveal_at = None;
-        }
-        if self.immediate(now) {
+        use unicode_segmentation::UnicodeSegmentation;
+        if self.hidden {
             return self.flush();
         }
-        if self.pending.is_empty() {
-            self.next_reveal_at = None;
+        if self.pending().is_empty() {
             return None;
         }
         let next = *self.next_reveal_at.get_or_insert(now);
-        if now < next {
+        if now + 1e-6 < next {
             return None;
         }
-        // v1 以 UTF-16 长度估算积压量、以 Unicode 字符为单位放出
-        let backlog = self.pending.encode_utf16().count();
-        let count = backlog.div_ceil(UPDATES_PER_SECOND).clamp(BASE_CHARACTERS_PER_UPDATE, MAX_CHARACTERS_PER_UPDATE);
-        let split = self.pending.char_indices().nth(count).map_or(self.pending.len(), |(i, _)| i);
-        let batch: String = self.pending.drain(..split).collect();
-        let scheduled = next + UPDATE_INTERVAL_MS;
-        self.next_reveal_at = Some(if now - scheduled > UPDATE_INTERVAL_MS { now + UPDATE_INTERVAL_MS } else { scheduled });
-        Some(batch)
+        let grapheme = self.pending().graphemes(true).next()?.to_owned();
+        self.head += grapheme.len();
+        if self.head == self.pending.len() {
+            self.pending.clear();
+            self.head = 0;
+        }
+        self.next_reveal_at = Some(if now - next >= UPDATE_INTERVAL_MS {
+            now + UPDATE_INTERVAL_MS
+        } else {
+            next + UPDATE_INTERVAL_MS
+        });
+        Some(grapheme)
     }
 
-    /// 放出全部缓冲（结束 / 出错前调用，防止丢字）
+    /// 立即放出全部队列（用户停止、出错或后台时）；正常 Done 等队列自然排空。
     pub fn flush(&mut self) -> Option<String> {
         self.next_reveal_at = None;
-        (!self.pending.is_empty()).then(|| std::mem::take(&mut self.pending))
+        if self.pending().is_empty() {
+            return None;
+        }
+        let text = self.pending()[..].to_owned();
+        self.pending.clear();
+        self.head = 0;
+        Some(text)
     }
 
-    /// 窗口隐藏 / 失焦：立即放出，之后到达的也立即放出
+    /// 窗口隐藏：更新完整内容，无需保持不可见的打字动画。
     pub fn hide(&mut self) -> Option<String> {
         self.hidden = true;
-        self.resume_until = None;
         self.flush()
     }
 
-    /// 窗口重新显示：放出积压，并在 600ms 内保持立即放出
-    pub fn show(&mut self, now: f64) -> Option<String> {
+    /// 恢复显示时只同步已有积压；此后新到达的字立即恢复固定速率。
+    pub fn show(&mut self, _now: f64) -> Option<String> {
         self.hidden = false;
-        self.resume_until = Some(now + RESUME_CATCH_UP_MS);
         self.flush()
     }
 }
@@ -115,7 +116,7 @@ impl Pacer {
 /// 参与落定效果的字符数（v1 `STREAM_SETTLE_TRAIL_LENGTH`）
 pub const SETTLE_TRAIL_LENGTH: usize = 9;
 /// 落定起始不透明度（v1 关键帧 0%）
-pub const SETTLE_START_OPACITY: f32 = 0.58;
+pub const SETTLE_START_OPACITY: f32 = motion::STREAMING_SETTLE_START_OPACITY;
 /// 星标呼吸：不透明度与缩放的两端（v1 关键帧 0%/100% 与 50%）
 pub const STAR_OPACITY: (f32, f32) = (0.72, 1.0);
 /// 星标呼吸缩放
@@ -268,81 +269,83 @@ pub fn star_breath(since_batch_ms: f64) -> (f32, f32) {
 mod tests {
     use super::*;
 
-    // ── 节奏：v1 useSmoothTextRenderer.test.tsx 的 5 个用例 + 速率 ──
-
     #[test]
-    fn visible_reveals_in_small_batches() {
-        // v1「窗口可见时按低频小批量消费」：入队后等动画帧，第一帧即放出（2 字 ≤ 每批最少 2 字）
-        let mut p = Pacer::new();
-        assert_eq!(p.push("正常", 0.0), None);
-        assert_eq!(p.pending(), "正常");
-        assert_eq!(p.tick(0.0).as_deref(), Some("正常"));
-        assert_eq!(p.pending(), "");
-    }
-
-    #[test]
-    fn hidden_reveals_immediately() {
-        // v1「Esc 隐藏后立即消费后续缓冲，不依赖动画帧」。v1 用例含 emoji 测 UTF-16 代理对；
-        // 源码不放 emoji，改用同为代理对的 CJK 扩展 B 字「𠮷」（U+20BB7）
-        let mut p = Pacer::new();
-        assert_eq!(p.hide(), None);
-        assert_eq!(p.push("后台继续𠮷", 0.0).as_deref(), Some("后台继续𠮷"));
-        assert_eq!("𠮷".encode_utf16().count(), 2);
-        assert_eq!(p.pending(), "");
-    }
-
-    #[test]
-    fn hidden_handles_many_fragments() {
-        // v1「后台立即消费大量碎片正文，不发生递归堆栈或遗留队列」
-        let mut p = Pacer::new();
-        p.hide();
-        let mut out = String::new();
-        for _ in 0..4000 {
-            out.push_str(&p.push("字", 0.0).unwrap());
+    fn fixed_rate_does_not_accelerate_with_backlog() {
+        for count in [2, 60, 4000] {
+            let mut p = Pacer::new();
+            assert_eq!(p.push(&"字".repeat(count), 0.0), None);
+            assert_eq!(p.tick(0.0).as_deref(), Some("字"));
+            assert_eq!(p.tick(1.0), None);
+            assert_eq!(p.tick(UPDATE_INTERVAL_MS).as_deref(), Some("字"));
+            assert_eq!(p.pending().chars().count(), count - 2);
         }
-        assert_eq!(out.chars().count(), 4000);
-        assert_eq!(p.pending(), "");
     }
 
     #[test]
-    fn resume_catches_up_then_returns_to_pacing() {
-        // v1「重新显示时清理补发事件，随后恢复逐字速度」
+    fn steady_clock_consumes_sixty_graphemes_in_one_second() {
         let mut p = Pacer::new();
-        p.hide();
-        p.show(0.0);
-        assert_eq!(p.push("积压", 10.0).as_deref(), Some("积压"));
-        assert_eq!(p.tick(600.0), None); // 600ms 后恢复逐字
-        assert_eq!(p.push("新字", 601.0), None);
-        assert_eq!(p.pending(), "新字");
+        p.push(&"文".repeat(120), 0.0);
+        let output: String = (0..1000).filter_map(|ms| p.tick(ms as f64)).collect();
+        assert_eq!(output.chars().count(), CHARACTERS_PER_SECOND);
     }
 
     #[test]
-    fn show_after_hidden_start_still_paces_later() {
-        // v1「隐藏窗口丢失旧动画帧后，恢复时仍能启动正文渲染」：隐藏状态启动 → 显示 → 600ms 后正文照常放出
-        let mut p = Pacer::new();
-        p.hide();
-        p.show(0.0);
-        assert_eq!(p.tick(600.0), None);
-        assert_eq!(p.push("正文", 700.0), None);
-        assert_eq!(p.tick(700.0).as_deref(), Some("正文"));
+    fn packet_boundaries_do_not_change_rate_or_order() {
+        let mut whole = Pacer::new();
+        let mut fragments = Pacer::new();
+        whole.push("流畅输出中文abcdef", 0.0);
+        for fragment in ["流", "畅输", "出中文", "a", "bcdef"] {
+            fragments.push(fragment, 0.0);
+        }
+        for tick in 0..20 {
+            let now = tick as f64 * UPDATE_INTERVAL_MS;
+            assert_eq!(whole.tick(now), fragments.tick(now));
+        }
     }
 
     #[test]
-    fn rate_is_50_per_second_and_catches_up() {
+    fn empty_queue_and_delayed_frames_do_not_create_bursts() {
         let mut p = Pacer::new();
-        // 少量积压：每 40ms 放 2 字 → 50 字/秒
-        p.push(&"字".repeat(10), 0.0);
-        let sizes: Vec<usize> = (0..5).filter_map(|i| p.tick(i as f64 * 40.0)).map(|b| b.chars().count()).collect();
-        assert_eq!(sizes, vec![2; 5]);
-        // 大量积压：ceil(400/25)=16（上限）
-        p.push(&"字".repeat(400), 200.0);
-        assert_eq!(p.tick(200.0).unwrap().chars().count(), 16);
-        // 未到下一次放出时刻不放
-        assert_eq!(p.tick(210.0), None);
-        // 严重落后（卡顿）后不补放多批，而是从当前时刻重新排期
-        assert!(p.tick(1000.0).is_some());
+        p.push("甲", 0.0);
+        assert_eq!(p.tick(0.0).as_deref(), Some("甲"));
+        assert_eq!(p.tick(1.0), None);
+        p.push("乙丙丁", 2.0);
+        assert_eq!(p.tick(2.0), None);
+        assert_eq!(p.tick(1000.0).as_deref(), Some("乙"));
         assert_eq!(p.tick(1001.0), None);
-        assert!(p.tick(1040.0).is_some());
+        assert_eq!(p.tick(1000.0 + UPDATE_INTERVAL_MS).as_deref(), Some("丙"));
+    }
+
+    #[test]
+    fn complex_graphemes_and_fifo_survive_compaction() {
+        let mut p = Pacer::new();
+        let prefix = "字".repeat(1500);
+        p.push(&prefix, 0.0);
+        let mut rendered = String::new();
+        for i in 0..1400 {
+            rendered.push_str(&p.tick(i as f64 * UPDATE_INTERVAL_MS).unwrap());
+        }
+        p.push("👩‍💻e\u{301}🇨🇳", 1400.0 * UPDATE_INTERVAL_MS);
+        for i in 1400..1500 {
+            rendered.push_str(&p.tick(i as f64 * UPDATE_INTERVAL_MS).unwrap());
+        }
+        assert_eq!(rendered, prefix);
+        for (i, expected) in ["👩‍💻", "e\u{301}", "🇨🇳"].iter().enumerate() {
+            assert_eq!(p.tick((1500 + i) as f64 * UPDATE_INTERVAL_MS).as_deref(), Some(*expected));
+        }
+        assert!(p.pending().is_empty());
+    }
+
+    #[test]
+    fn hiding_flushes_but_showing_does_not_bypass_pacing() {
+        let mut p = Pacer::new();
+        p.push("已有积压", 0.0);
+        assert_eq!(p.hide().as_deref(), Some("已有积压"));
+        assert_eq!(p.push("后台继续𠮷", 1.0).as_deref(), Some("后台继续𠮷"));
+        p.show(2.0);
+        assert_eq!(p.push("新字", 3.0), None);
+        assert_eq!(p.tick(3.0).as_deref(), Some("新"));
+        assert_eq!(p.pending(), "字");
     }
 
     // ── 尾段：v1 StreamingMarkdown.test.tsx 的流式用例 ──

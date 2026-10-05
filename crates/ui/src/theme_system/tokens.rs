@@ -599,6 +599,32 @@ pub mod metrics {
 
 /// 动效：时长 / 延迟为毫秒（延迟可为负）；缓动为 cubic-bezier 四参数
 pub mod motion {
+    /// Open: establish the background before revealing foreground controls.
+    pub const DURATION_ENTER_SURFACE: u64 = 90;
+    /// Duration of the subsequent unified foreground reveal.
+    pub const DURATION_ENTER_FOREGROUND: u64 = 110;
+    /// Close: foreground dissolves into the surface before the surface fades out.
+    pub const DURATION_EXIT_FOREGROUND: u64 = 100;
+    /// Duration of the second, background-only close phase.
+    pub const DURATION_EXIT_SURFACE: u64 = 90;
+    /// Tonal press feedback shared by compact controls.
+    pub const BUTTON_PRESS_OPACITY: f32 = 0.88;
+    /// Initial opacity for the first settled portion of streaming text.
+    pub const STREAMING_SETTLE_START_OPACITY: f32 = 0.66;
+    /// Each newly revealed character keeps its own short fade clock.
+    pub const DURATION_STREAMING_REVEAL: i32 = 200;
+    /// Soft brand-tinted text settles into the normal foreground colour.
+    pub const STREAMING_REVEAL_START_OPACITY: f32 = 0.32;
+    /// Surface edge light: one quiet pass on interaction, slower while generating.
+    pub const DURATION_SURFACE_SHEEN: u64 = 1400;
+    /// Repeating surface light period in milliseconds.
+    pub const DURATION_SURFACE_FLOW: u64 = 3600;
+    /// Fraction of the surface width occupied by the soft edge light.
+    pub const SURFACE_SHEEN_WIDTH: f32 = 0.36;
+    /// Maximum brand tint opacity along the edge.
+    pub const SURFACE_SHEEN_OPACITY: f32 = 0.28;
+    /// Soft light falls off within this many pixels of the edge.
+    pub const SURFACE_SHEEN_DEPTH: f32 = 10.0;
     /// `--delay-streaming-char-age-1: -32ms`
     pub const DELAY_STREAMING_CHAR_AGE_1: i32 = -32;
     /// `--delay-streaming-char-age-2: -64ms`

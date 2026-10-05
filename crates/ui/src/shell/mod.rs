@@ -3,8 +3,8 @@
 //! PageRouter 只负责内容，尺寸由外壳订阅页面变更决定。
 //! 原生外观在首个可见帧之前应用；页面展开固定底边并裁剪到当前屏幕工作区。
 
-pub mod config;
 pub mod autostart;
+pub mod config;
 pub mod entrance;
 mod focus_order;
 pub mod hotkey;
@@ -16,21 +16,21 @@ pub mod positioning_native;
 pub mod runtime;
 pub mod selection;
 pub mod selfcheck;
+pub mod services;
 pub mod sizing;
 pub mod tray;
-pub mod services;
 mod visibility;
 pub mod workspaces;
 
 use crate::chat::page_state::Page;
 use crate::chat::router::{PageRouter, RouterEvent, preload};
 use crate::chat_bridge::spawn_engine;
-use crate::theme_system::{BuddyTheme, box_shadows};
+use crate::theme_system::BuddyTheme;
 use buddy_engine::chat::ChatEngine;
 use config::ShellConfig;
 use gpui::{
     App, AppContext, AsyncApp, Context, Entity, Hsla, KeyDownEvent, Render, Subscription, Task,
-    Window, WindowHandle, div, prelude::*, px, relative,
+    Window, WindowHandle, div, linear_color_stop, linear_gradient, prelude::*, px, relative,
 };
 use std::sync::Arc;
 
@@ -38,6 +38,8 @@ use std::sync::Arc;
 pub struct AppShell {
     router: Entity<PageRouter>,
     entrance: entrance::EntranceMotion,
+    dialog_motion: entrance::DialogMotion,
+    visibility_generation: u64,
     last_entrance_frame: Option<entrance::EntranceFrame>,
     _page_subscription: Subscription,
     positions: positioning::PositionMemory,
@@ -56,6 +58,9 @@ impl AppShell {
             window,
             move |shell, _, event: &RouterEvent, window, cx| {
                 let RouterEvent::PageChanged { from, to } = *event;
+                if from.is_compact() && !to.is_compact() {
+                    shell.play_dialog_transition(cx);
+                }
                 let target = sizing::resize_target(from, to, settings_origin);
                 if to == Page::Settings {
                     settings_origin = Some(from);
@@ -69,6 +74,8 @@ impl AppShell {
         Self {
             router,
             entrance: entrance::EntranceMotion::default(),
+            dialog_motion: entrance::DialogMotion::default(),
+            visibility_generation: 0,
             last_entrance_frame: None,
             _page_subscription: subscription,
             positions: positioning::PositionMemory::default(),
@@ -85,68 +92,130 @@ impl AppShell {
         self.router.clone()
     }
 
-    /// 最近一次真实 render 采样的 underlay 参数；稳定态或展开页为 `None`。
+    /// 最近一次真实 render 采样的入场 / 退出参数；稳定态为 `None`。
     pub fn last_entrance_frame(&self) -> Option<entrance::EntranceFrame> {
         self.last_entrance_frame
     }
 
     /// 隐藏时立即重置入场外壳。
     pub(crate) fn reset_entrance(&mut self, cx: &mut Context<Self>) {
+        self.visibility_generation = self.visibility_generation.wrapping_add(1);
         self.entrance.reset();
         cx.notify();
     }
 
-    /// 显示完成后开始紧凑页入场外壳。
-    pub(crate) fn play_entrance(&mut self, cx: &mut Context<Self>) {
-        if self.router.read(cx).page().is_compact() {
-            self.entrance.play();
-        } else {
-            self.entrance.settle();
+    /// 开始关闭前的流光，返回是否需要等待动画完成。
+    pub(crate) fn begin_exit(&mut self, cx: &mut Context<Self>) -> Option<(u64, bool)> {
+        if self.entrance.is_exiting() {
+            return None;
         }
+        self.visibility_generation = self.visibility_generation.wrapping_add(1);
+        let animate = self.entrance.begin_exit();
+        cx.notify();
+        Some((self.visibility_generation, animate))
+    }
+
+    pub(crate) fn is_current_visibility_generation(&self, generation: u64) -> bool {
+        self.visibility_generation == generation
+    }
+
+    /// Invalidate any delayed hide before awaiting positioning or first-frame work.
+    pub(crate) fn prepare_show(&mut self, visible: bool, cx: &mut Context<Self>) -> (u64, bool) {
+        let resume_exit = self.entrance.is_exiting();
+        self.visibility_generation = self.visibility_generation.wrapping_add(1);
+        if !visible {
+            self.entrance.reset();
+        }
+        cx.notify();
+        (self.visibility_generation, resume_exit)
+    }
+
+    /// 显示完成后开始页面入场。
+    pub(crate) fn play_entrance(&mut self, cx: &mut Context<Self>) {
+        self.visibility_generation = self.visibility_generation.wrapping_add(1);
+        self.entrance.play();
+        cx.notify();
+    }
+
+    fn play_dialog_transition(&mut self, cx: &mut Context<Self>) {
+        self.dialog_motion.play();
         cx.notify();
     }
 }
 
 impl Render for AppShell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let compact = self.router.read(cx).page().is_compact();
+        let page = self.router.read(cx).page();
+        let compact = page.is_compact();
         let frame = self.entrance.frame(compact);
+        let dialog_frame = self.dialog_motion.frame();
         self.last_entrance_frame = frame;
-        if self.entrance.animating() {
+        if self.entrance.animating() || self.dialog_motion.animating() {
             window.request_animation_frame();
         }
-        let theme = *cx.buddy_theme();
+        let c = cx.buddy_theme().colors;
         let mut root = div().size_full().relative().overflow_hidden();
+        let mut content = div()
+            .size_full()
+            .on_key_down(cx.listener(|_, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape"
+                    && let Some(handle) = window.window_handle().downcast::<AppShell>()
+                {
+                    cx.stop_propagation();
+                    runtime::request_hide(handle, cx);
+                }
+            }))
+            .child(self.router.clone());
         if let Some(frame) = frame {
-            let c = theme.colors;
+            // Once foreground has dissolved, do not paint it underneath the
+            // fading cover: primitive opacity would otherwise reveal it again.
+            content = content.opacity(if frame.foreground_cover_opacity >= 1.0 { 0.0 } else { frame.content_opacity });
+        }
+        root = root.child(content);
+        if let Some(frame) = frame.filter(|frame| frame.foreground_cover_opacity > 0.0) {
+            let bubble = page == Page::Empty;
+            let surface = if bubble { c.composer_surface } else { c.bg_surface };
+            let border = if page == Page::NoApiKey { c.border_default } else { c.window_outline };
+            // One paint-only cover composites every foreground component into
+            // the existing surface uniformly, including text, buttons and input.
             root = root.child(
-                div()
-                    .absolute()
-                    .left(relative((1.0 - frame.scale_x) / 2.0))
-                    .top(relative((1.0 - frame.scale_y) / 2.0))
-                    .w(relative(frame.scale_x))
-                    .h(relative(frame.scale_y))
-                    .rounded(px(frame.radius))
-                    .overflow_hidden()
-                    .bg(Hsla::from(c.bg_surface.blend(c.buddy_primary.alpha(0.04))))
-                    .opacity(frame.opacity)
-                    .shadow(box_shadows(theme.shadows.shadow_floating_md)),
+                div().absolute().top_0().left_0().size_full()
+                    .rounded(px(crate::theme_system::tokens::metrics::RADIUS_XL))
+                    .overflow_hidden().border_1().border_color(border).bg(surface)
+                    .opacity(frame.foreground_cover_opacity * frame.content_opacity)
+                    .child(div().absolute().top_0().left_0().size_full().bg(linear_gradient(
+                        if bubble { 180.0 } else { 145.0 },
+                        linear_color_stop(c.surface_highlight, 0.0),
+                        linear_color_stop(Hsla::from(c.surface_highlight).opacity(0.0), if bubble { 1.0 } else { 0.38 }),
+                    ))),
             );
         }
-        root.child(
-            div()
-                .size_full()
-                .on_key_down(cx.listener(|_, event: &KeyDownEvent, window, cx| {
-                    if event.keystroke.key == "escape"
-                        && let Some(handle) = window.window_handle().downcast::<AppShell>()
-                    {
-                        cx.stop_propagation();
-                        runtime::request_hide(handle, cx);
-                    }
-                }))
-                .child(self.router.clone()),
-        )
+        if let Some(frame) = frame {
+            root = root.child(sheen(frame.sheen_x, frame.sheen_opacity, c.buddy_primary));
+        }
+        if let Some(frame) = dialog_frame.filter(|_| !self.entrance.is_exiting()) {
+            root = root.child(sheen(frame.sheen_x, frame.sheen_opacity, c.buddy_primary));
+        }
+        root
     }
+}
+
+/// 低对比度的品牌色流光；只覆盖绘制层，不创建交互 hitbox，也不改变窗口布局。
+fn sheen(x: f32, opacity: f32, color: gpui::Rgba) -> gpui::Div {
+    let transparent = Hsla::from(color).opacity(0.0);
+    div()
+        .absolute()
+        .top_0()
+        .left(relative(x - 0.18))
+        .w(relative(0.36))
+        .h_full()
+        .rounded(px(crate::theme_system::tokens::metrics::RADIUS_XL))
+        .bg(linear_gradient(
+            90.,
+            linear_color_stop(transparent, 0.0),
+            linear_color_stop(Hsla::from(color).opacity(0.28), 1.0),
+        ))
+        .opacity(opacity)
 }
 
 /// 初始化产品和外壳预览共用的 UI 环境；须在创建任何页面前调用。

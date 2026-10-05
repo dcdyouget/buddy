@@ -1,8 +1,9 @@
 //! 共用小组件（对应 v1 `src/components/shared/*`）
 
 use crate::icons::{IconName, icon};
-use crate::theme_system::{BuddyTheme, box_shadows, tokens::metrics as m};
-use gpui::{AnyView, App, Context, Div, ElementId, Render, SharedString, Stateful, Window, div, prelude::*, px};
+use crate::theme_system::{BuddyTheme, box_shadows, tokens::{metrics as m, motion}};
+use gpui::{AnyView, App, Context, Div, ElementId, Hsla, IntoElement, Render, RenderOnce, Rgba, SharedString, Stateful, Window, div, prelude::*, px,
+};
 
 /// 图标按钮的视觉变体（v1 `IconButton` `variant`）
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -34,6 +35,8 @@ pub fn icon_button(
     };
     div()
         .id(id)
+        .relative()
+        .overflow_hidden()
         .flex_none()
         .size(px(size))
         .rounded(px(m::RADIUS_FULL))
@@ -44,9 +47,45 @@ pub fn icon_button(
         .when_some(bg, |d, bg| d.bg(bg))
         .when(disabled, |d| d.opacity(0.4))
         .when(!disabled, |d| {
-            d.cursor_pointer().when(variant == IconButtonVariant::Default, |d| d.hover(|s| s.text_color(c.text_primary).bg(c.bg_sunken)))
+            d.cursor_pointer().when(variant == IconButtonVariant::Default, |d| {
+                    d.hover(|s| s.text_color(c.text_primary).bg(c.bg_sunken))
+                })
+                .when(variant == IconButtonVariant::Primary, |d| {
+                    d.hover(|s| s.bg(c.buddy_primary_600))
+                })
+                .when(variant == IconButtonVariant::Danger, |d| {
+                    d.hover(|s| s.bg(Hsla::from(c.state_error).opacity(motion::BUTTON_PRESS_OPACITY)))
+                })
+                // GPUI's active style is held for the mouse-down phase. A small
+                // tonal step gives clicks a tactile response without shifting
+                // layout or making the controls feel springy.
+                .active(|s| match variant {
+                    IconButtonVariant::Default => s.bg(c.bg_sunken).opacity(motion::BUTTON_PRESS_OPACITY),
+                    IconButtonVariant::Primary => s.bg(c.buddy_primary_600).opacity(motion::BUTTON_PRESS_OPACITY),
+                    IconButtonVariant::Danger => s.bg(Hsla::from(c.state_error).opacity(motion::BUTTON_PRESS_OPACITY)),
+                })
         })
         .child(icon(name, px(icon_size)))
+        .when(!disabled, |d| d.child(ButtonLight { accent: c.buddy_primary }))
+}
+
+/// Retain hover state in the button scope so rerenders do not restart the light.
+#[derive(IntoElement)]
+struct ButtonLight {
+    accent: Rgba,
+}
+
+impl RenderOnce for ButtonLight {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let hovered = window.use_keyed_state("button-light-hover", cx, |_, _| false);
+        let active = *hovered.read(cx);
+        div().id("button-light").absolute().top_0().left_0().size_full()
+            .on_hover(move |active, _, cx| hovered.update(cx, |state, cx| {
+                *state = *active;
+                cx.notify();
+            }))
+            .when(active, |d| d.child(crate::motion_effects::surface_sheen("button-light-pass", self.accent, false)))
+    }
 }
 
 /// 悬停提示（v1 用原生 `title` 属性；GPUI 无原生提示，自绘一个最小的）

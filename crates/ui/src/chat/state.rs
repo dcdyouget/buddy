@@ -1341,11 +1341,29 @@ mod tests {
         let mut s = streaming();
         s.push_event(delta(&"字".repeat(10)), 0.0);
         s.tick(0.0);
+        assert_eq!(text_of(blocks(&s)).chars().count(), 1);
+        s.tick(8.0);
+        assert_eq!(text_of(blocks(&s)).chars().count(), 1, "未到下一时隙不放出");
+        s.tick(crate::markdown::streaming::UPDATE_INTERVAL_MS);
         assert_eq!(text_of(blocks(&s)).chars().count(), 2);
-        s.tick(20.0);
-        assert_eq!(text_of(blocks(&s)).chars().count(), 2, "未到 40ms 不放出");
-        s.tick(40.0);
-        assert_eq!(text_of(blocks(&s)).chars().count(), 4);
-        assert_eq!(s.live.as_ref().unwrap().reveal_count, 2);
+        assert_eq!(s.live.as_ref().unwrap().reveal_count, 1);
+    }
+
+    #[test]
+    fn burst_followed_by_done_drains_at_fixed_rate_without_losing_text() {
+        let mut s = streaming();
+        let source = "固定速率显示".repeat(20);
+        s.push_event(delta(&source), 0.0);
+        s.push_event(StreamEvent::TextEnd { content_index: 0, content: source.clone() }, 0.0);
+        s.push_event(StreamEvent::Done { reason: StopReason::Stop, full_text: source.clone() }, 0.0);
+        for index in 0..source.chars().count() {
+            assert!(s.is_streaming());
+            s.tick(index as f64 * crate::markdown::streaming::UPDATE_INTERVAL_MS);
+            if index + 1 < source.chars().count() {
+                assert_eq!(text_of(blocks(&s)).chars().count(), index + 1);
+            }
+        }
+        assert!(!s.is_streaming());
+        assert_eq!(s.messages[0].content, source);
     }
 }

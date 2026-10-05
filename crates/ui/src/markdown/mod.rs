@@ -20,6 +20,7 @@
 pub mod normalize;
 pub mod code_block;
 pub mod streaming;
+pub mod reveal;
 pub mod copy;
 pub mod gfm;
 pub use zed_markdown;

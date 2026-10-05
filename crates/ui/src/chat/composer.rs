@@ -210,6 +210,7 @@ impl Render for Composer {
         let has_text = !self.text.read(cx).text().trim().is_empty();
         let can_send = self.can_send(cx);
         let active = self.focused || self.hovered;
+        let show_sheen = standalone && (active || self.streaming);
         let compact = window.viewport_size().height <= px(COMPACT_MAX_HEIGHT);
         let unsupported_images = !self.images.is_empty() && !self.supports_vision;
         let drag_source = self.drag_source.clone();
@@ -279,6 +280,7 @@ impl Render for Composer {
                                 .text_color(c.text_muted)
                                 .cursor_pointer()
                                 .hover(|s| s.text_color(c.text_primary))
+                                .active(|s| s.bg(c.bg_sunken).opacity(crate::theme_system::tokens::motion::BUTTON_PRESS_OPACITY))
                                 .child(icon(IconName::Close, px(12.0)))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.set_draft("", cx);
@@ -326,7 +328,6 @@ impl Render for Composer {
                         !can_send,
                         cx,
                     )
-                    .when(can_send, |b| b.hover(|s| s.bg(c.buddy_primary_600)))
                     .on_click(cx.listener(|this, _, _, cx| this.send(cx))),
                 )
         };
@@ -368,6 +369,8 @@ impl Render for Composer {
                             .bg(c.bg_elevated)
                             .text_color(c.text_primary)
                             .cursor_pointer()
+                            .hover(|s| s.bg(c.bg_sunken))
+                            .active(|s| s.bg(c.bg_sunken).opacity(crate::theme_system::tokens::motion::BUTTON_PRESS_OPACITY))
                             .on_click(cx.listener(move |this, _, _, cx| this.remove_image(&id, cx)))
                             .child(icon(IconName::Close, px(11.))),
                     )
@@ -393,6 +396,7 @@ impl Render for Composer {
         let recorded_bounds = self.bounds.clone();
         div()
             .id("input-dock")
+            .relative()
             .when(!standalone, |d| d.mx(px(m::SPACE_2)).mb(px(m::SPACE_2)).rounded(px(m::RADIUS_LG)).border_color(c.border_default))
             .when(standalone, |d| d.w_full().flex().flex_col().justify_center().rounded(px(m::RADIUS_XL)).border_color(c.window_outline))
             .when(standalone && compact, |d| d.h_full())
@@ -450,6 +454,7 @@ impl Render for Composer {
                     .bg(linear_gradient(180., linear_color_stop(c.surface_highlight, 0.), linear_color_stop(Hsla::from(c.surface_highlight).opacity(0.), 1.)))
                     .child(body),
             )
+            .when(show_sheen, |d| d.child(crate::motion_effects::surface_sheen(("composer-sheen", self.streaming as usize), c.buddy_primary, self.streaming)))
             // 仅记录外层实际边界，不插入 hitbox 或参与布局。
             .child(gpui::canvas(|_, _, _| {}, move |bounds, _, _, _| recorded_bounds.set(Some(bounds))).absolute().top_0().left_0().size_full())
     }

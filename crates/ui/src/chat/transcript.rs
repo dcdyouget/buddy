@@ -32,6 +32,7 @@ use crate::icons::{IconName, icon};
 use crate::markdown::{
     self, code_block,
     normalize::normalize_markdown,
+    reveal::RevealTimeline,
     streaming,
     zed_markdown::{Markdown, MarkdownElement, MarkdownOptions, syntax::LanguageRegistry},
 };
@@ -46,7 +47,7 @@ use gpui::{
 };
 use gpui::MouseButton;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -86,6 +87,8 @@ pub struct Transcript {
     seen_history_offset: Option<u64>,
     /// 每个正文行一个 markdown 实体（按行 id；行 id 稳定 → 流式结束后实体沿用，不重建）
     markdown: HashMap<String, (Entity<Markdown>, u64)>,
+    /// 每个实时正文行的逐字渐显时间线；历史内容从不写入时间戳。
+    reveal_timelines: HashMap<String, RevealTimeline>,
     registry: Arc<LanguageRegistry>,
     /// 行渲染计数（自检用：验证虚拟化）
     pub rendered_rows: usize,
@@ -161,6 +164,7 @@ impl Transcript {
             row_keys: Vec::new(),
             seen_history_offset: None,
             markdown: HashMap::new(),
+            reveal_timelines: HashMap::new(),
             registry: Arc::new(LanguageRegistry::default()),
             rendered_rows: 0,
             remeasured_rows: 0,
@@ -308,8 +312,10 @@ impl Transcript {
     /// 正文行的 markdown 实体：新行创建，内容变化时替换（规范化见 [`crate::markdown::normalize`]）
     fn update_markdown(&mut self, cx: &mut Context<Self>) {
         let state = &self.conversation.read(cx).state;
+        let now = self.conversation.read(cx).now_ms();
         // (行 id, 源文本, 版本, 是否纯文本)
         let mut wanted: Vec<(String, String, u64, bool)> = Vec::new();
+        let mut reveal_ids = HashSet::new();
         for row in &self.rows {
             match &row.kind {
                 RowKind::Block { msg, block, live } => {
@@ -320,16 +326,22 @@ impl Transcript {
                     };
                     match blocks.and_then(|b| b.get(*block)) {
                         // 思考内容同样以 markdown 显示（v1 `ThinkSection` 展开后用 StreamingMarkdown）
-                        Some(
-                            ContentBlock::Text { content } | ContentBlock::Thinking { content, .. },
-                        ) => {
-                            wanted.push((
-                                row.id.clone(),
-                                normalize_markdown(content),
-                                row.version,
-                                false,
-                            ));
+                        Some(ContentBlock::Text { content }) => {
+                            let source = normalize_markdown(content);
+                            let live_reveal = *live && row.pos.last && state.live.is_some();
+                            self.reveal_timelines
+                                .entry(row.id.clone())
+                                .or_default()
+                                .observe(&source, now, live_reveal);
+                            reveal_ids.insert(row.id.clone());
+                            wanted.push((row.id.clone(), source, row.version, false));
                         }
+                        Some(ContentBlock::Thinking { content, .. }) => wanted.push((
+                            row.id.clone(),
+                            normalize_markdown(content),
+                            row.version,
+                            false,
+                        )),
                         None => {}
                     }
                 }
@@ -353,6 +365,8 @@ impl Transcript {
                 _ => {}
             }
         }
+        self.reveal_timelines
+            .retain(|id, _| reveal_ids.contains(id));
         let registry = self.registry.clone();
         let mut next = HashMap::new();
         for (id, source, version, plain) in wanted {
@@ -496,24 +510,43 @@ impl Transcript {
                     Some(ContentBlock::Text { content }) => match self.markdown.get(&row.id) {
                         Some((md, _)) => {
                             let mut style = markdown::message_style(window, cx);
-                            // 流式中的最后一个正文块：落定渐显 + 星标
+                            let source = normalize_markdown(&content);
+                            let live_reveal = *live && row.pos.last && state.live.is_some();
+                            let timeline = self
+                                .reveal_timelines
+                                .entry(row.id.clone())
+                                .or_default();
+                            // Rendering can outlive the final state notification. Observe
+                            // here as well so the last batch remains animated after Done.
+                            timeline.observe(&source, now, live_reveal);
+                            let mut needs_frame = false;
                             if let Some(live_turn) =
                                 state.live.as_ref().filter(|_| *live && row.pos.last)
                             {
                                 let tail = streaming::tail(
-                                    &normalize_markdown(&content),
+                                    &source,
                                     true,
                                     live_turn.reveal_count,
                                 );
-                                if streaming::decorate(
+                                needs_frame = streaming::decorate(
                                     &mut style,
                                     &tail,
                                     now - live_turn.batch_at,
                                     &theme,
                                     reduce_motion,
-                                ) {
-                                    window.request_animation_frame();
-                                }
+                                );
+                            }
+                            // The timeline veil is applied after the legacy stream
+                            // decorations so it wins over their per-batch veil.
+                            style.decorations.veil = None;
+                            needs_frame |= timeline.decorate(
+                                &mut style,
+                                now,
+                                &theme,
+                                reduce_motion,
+                            );
+                            if needs_frame {
+                                window.request_animation_frame();
                             }
                             message_row::with_blank_drag(
                                 MarkdownElement::new(md.clone(), style)

@@ -308,17 +308,26 @@ impl PageRouter {
         cx.notify();
     }
 
-    /// 原生隐藏前关闭独立菜单并放出流式缓冲，保留整个会话。
+    /// 退出动画前仅关闭独立菜单；缓冲刷新留到原生窗口真正隐藏之后。
     pub fn prepare_window_hide(&mut self, cx: &mut Context<Self>) {
         if let Some(menu) = self.model_menu.take() {
             let _ = menu.update(cx, |menu, window, cx| menu.close(window, cx));
         }
-        self.window_visibility_changed(false, cx);
+        self.focus_composer = false;
     }
 
     /// v1 闲置十分钟后呼出回紧凑页，历史和生成任务仍保留。
     pub fn invoked_after_idle(&mut self, cx: &mut Context<Self>) {
         self.transition(cx, |pages| pages.set_page(Page::Empty));
+    }
+
+    /// Expand the compact composer into the conversation page.
+    ///
+    /// The regular product path emits this transition from `EmptyPage`; this
+    /// small public entry point also lets isolated UI previews exercise the
+    /// exact same resize and dialog motion without synthesizing a mouse event.
+    pub fn expand_conversation(&mut self, cx: &mut Context<Self>) {
+        self.transition(cx, |pages| pages.set_page(Page::Conversation));
     }
 
     /// 对话页（自检用）
@@ -581,10 +590,10 @@ mod config_save;
 #[path = "router_settings.rs"]
 mod settings_save;
 
-#[path = "router_preferences.rs"]
-mod preferences;
 #[path = "router_autostart.rs"]
 mod autostart_save;
+#[path = "router_preferences.rs"]
+mod preferences;
 #[path = "router_update.rs"]
 mod update_restart;
 

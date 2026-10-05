@@ -138,7 +138,9 @@ pub async fn toggle(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Result
 /// 原生隐藏，同一 Router / engine 任务仍存活；失败时恢复前台缓冲模式。
 pub async fn hide(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Result<(), String> {
     let prepared = prepare(handle, cx)?;
-    if !prepared.probe().map_err(|e| e.to_string())?.is_visible {
+    let visible = prepared.probe().map_err(|e| e.to_string())?.is_visible;
+    drop(prepared);
+    if !visible {
         handle
             .update(cx, |shell, _, cx| shell.reset_entrance(cx))
             .map_err(|e| e.to_string())?;
@@ -152,15 +154,49 @@ pub async fn hide(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Result<(
                 .update(cx, |router, cx| router.prepare_window_hide(cx))
         })
         .map_err(|e| e.to_string())?;
-    handle
-        .update(cx, |shell, _, cx| shell.reset_entrance(cx))
+    let Some((generation, animate)) = handle
+        .update(cx, |shell, _, cx| shell.begin_exit(cx))
+        .map_err(|e| e.to_string())?
+    else {
+        // Another hide is already animating; let its generation own the native hide.
+        return Ok(());
+    };
+    if animate {
+        cx.background_executor()
+            .timer(super::entrance::EntranceMotion::exit_duration())
+            .await;
+    }
+    let still_current = handle
+        .update(cx, |shell, _, _| {
+            shell.is_current_visibility_generation(generation)
+        })
         .map_err(|e| e.to_string())?;
+    if !still_current {
+        return Ok(());
+    }
+    let prepared = prepare(handle, cx)?;
+    if !prepared.probe().map_err(|e| e.to_string())?.is_visible {
+        handle
+            .update(cx, |shell, _, cx| shell.reset_entrance(cx))
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
     let result = prepared.hide().map_err(|e| e.to_string());
-    if result.is_err() {
+    if result.is_ok() {
         let _ = handle.update(cx, |shell, _, cx| {
-            shell
-                .router()
-                .update(cx, |router, cx| router.window_visibility_changed(true, cx))
+            if shell.is_current_visibility_generation(generation) {
+                shell.router().update(cx, |router, cx| router.window_visibility_changed(false, cx));
+                shell.reset_entrance(cx);
+            }
+        });
+    } else {
+        let _ = handle.update(cx, |shell, _, cx| {
+            if shell.is_current_visibility_generation(generation) {
+                shell
+                    .router()
+                    .update(cx, |router, cx| router.window_visibility_changed(true, cx));
+                shell.reset_entrance(cx);
+            }
         });
     }
     result.map(|_| ())
@@ -195,18 +231,52 @@ async fn show_on_screen(
     focused_screen: bool,
     cx: &mut AsyncApp,
 ) -> Result<(), String> {
+    let was_visible = prepare(handle, cx)?.probe().map_err(|e| e.to_string())?.is_visible;
+    let (generation, resume_exit) = handle
+        .update(cx, |shell, _, cx| shell.prepare_show(was_visible, cx))
+        .map_err(|e| e.to_string())?;
     positioning_controller::restore(handle, focused_screen, cx).await?;
+    if !handle.read_with(cx, |shell, _| shell.is_current_visibility_generation(generation)).map_err(|e| e.to_string())? {
+        return Ok(());
+    }
     let prepared = prepare(handle, cx)?;
-    prepared.show_and_focus().map_err(|e| e.to_string())?;
+    if !was_visible {
+        prepared.set_alpha(0.0).map_err(|e| e.to_string())?;
+    }
     handle
         .update(cx, |shell, window, cx| {
             shell
                 .router()
                 .update(cx, |router, cx| router.window_visibility_changed(true, cx));
-            shell.play_entrance(cx);
             window.refresh();
         })
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    if let Err(error) = prepared.show_and_focus() {
+        let _ = prepared.set_alpha(1.0);
+        return Err(error.to_string());
+    }
+    if !was_visible {
+        // First callback requests a transparent frame; the second runs after
+        // that frame has been presented. Never expose the old cached drawable.
+        let (ready, rendered) = tokio::sync::oneshot::channel();
+        handle.update(cx, |_, window, _| {
+            window.on_next_frame(move |window, _| {
+                window.refresh();
+                window.on_next_frame(move |_, _| { let _ = ready.send(()); });
+            });
+        }).map_err(|e| e.to_string())?;
+        rendered.await.map_err(|e| e.to_string())?;
+    }
+    if !handle.read_with(cx, |shell, _| shell.is_current_visibility_generation(generation)).map_err(|e| e.to_string())? {
+        return Ok(());
+    }
+    prepared.set_alpha(1.0).map_err(|e| e.to_string())?;
+    handle.update(cx, |shell, window, cx| {
+        if !was_visible || resume_exit {
+            shell.play_entrance(cx);
+        }
+        window.refresh();
+    }).map_err(|e| e.to_string())
 }
 
 fn record_invocation(cx: &mut AsyncApp) -> bool {

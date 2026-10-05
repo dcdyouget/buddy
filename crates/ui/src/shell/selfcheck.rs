@@ -124,9 +124,35 @@ async fn run_native_checks(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) ->
         if visibility.passed() { "PASS" } else { "FAIL" },
     );
 
-    let ok = native_ok && workspace_ok && moved && visibility.passed();
+    let entrance = check_runtime_entrance(handle, cx).await;
+    println!("T12-05 透明首帧 / 呼出落定 / 恢复焦点不重播：{}", if entrance { "PASS" } else { "FAIL" });
+    let ok = native_ok && workspace_ok && moved && visibility.passed() && entrance;
     println!("{} 窗口行为自检", if ok { "PASS" } else { "FAIL" });
     ok
+}
+
+#[cfg(target_os = "macos")]
+async fn check_runtime_entrance(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> bool {
+    if super::runtime::hide(handle, cx).await.is_err() {
+        return false;
+    }
+    let deadline = cx.background_executor().timer(Duration::from_secs(3));
+    let shown = tokio::select! {
+        result = super::runtime::show(handle, cx) => result.is_ok(),
+        _ = deadline => false,
+    };
+    if !shown {
+        return false;
+    }
+    cx.background_executor().timer(Duration::from_millis(350)).await;
+    let settled = handle.read_with(cx, |shell, _| shell.last_entrance_frame().is_none()).unwrap_or(false);
+    let focused = probe_native(handle, cx).is_some_and(|s| s.is_visible && s.view_is_first_responder);
+    if super::runtime::show(handle, cx).await.is_err() {
+        return false;
+    }
+    cx.background_executor().timer(Duration::from_millis(35)).await;
+    let not_replayed = handle.read_with(cx, |shell, _| shell.last_entrance_frame().is_none()).unwrap_or(false);
+    settled && focused && not_replayed
 }
 
 #[cfg(target_os = "macos")]
