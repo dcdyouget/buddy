@@ -84,6 +84,7 @@ mod macos {
         });
         let quit = cx.update(|cx| {
             cx.on_app_quit(move |cx| {
+                log::warn!("[退出诊断] 应用正在退出（on_app_quit）");
                 // GPUI polls quit futures while holding App's RefCell borrow.
                 // Native resources must be released synchronously, never via AsyncApp.
                 crate::shell::services::shutdown(cx);

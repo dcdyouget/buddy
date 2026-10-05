@@ -52,6 +52,7 @@ pub fn install_with_backend(
     cx.update(|cx| {
         cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
         cx.on_action(move |_: &Quit, cx: &mut App| {
+            log::warn!("[退出诊断] 触发 Quit 动作（⌘Q 或应用菜单「退出 Buddy」）");
             cx.spawn(async move |cx: &mut AsyncApp| quit_after_save(handle, cx).await)
                 .detach();
         });
@@ -104,6 +105,7 @@ pub fn install_with_backend(
                         result
                     }
                     MenuAction::Quit => {
+                        log::warn!("[退出诊断] 托盘菜单「退出」");
                         quit_after_save(handle, cx).await;
                         return;
                     }

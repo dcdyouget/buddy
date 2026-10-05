@@ -144,6 +144,7 @@ unsafe extern "C" fn application_should_terminate(
         return 1; // NSTerminateNow
     }
     if !TERMINATION_PENDING.swap(true, Ordering::AcqRel) {
+        log_termination_source();
         if let Some(channel) = TERMINATION_SENDER.get() {
             let guard = channel
                 .lock()
@@ -162,6 +163,48 @@ unsafe extern "C" fn application_should_terminate(
         }
     }
     NS_TERMINATE_CANCEL
+}
+
+/// 记录是谁请求退出：当前输入事件、Apple Event（含发送方进程）与调用栈。
+/// 退出码为 0 的「不明退出」只能靠这里区分 ⌘Q、菜单、托盘、其他进程发来的退出事件等来源。
+fn log_termination_source() {
+    unsafe fn describe(object: *mut Object) -> String {
+        if object.is_null() {
+            return "无".into();
+        }
+        unsafe {
+            let text: *mut Object = objc::msg_send![object, description];
+            if text.is_null() {
+                return "无".into();
+            }
+            let utf8: *const c_char = objc::msg_send![text, UTF8String];
+            if utf8.is_null() {
+                return "无".into();
+            }
+            std::ffi::CStr::from_ptr(utf8).to_string_lossy().into_owned()
+        }
+    }
+    let (event, apple_event) = unsafe {
+        let application: *mut Object =
+            objc::msg_send![objc::class!(NSApplication), sharedApplication];
+        let event: *mut Object = if application.is_null() {
+            std::ptr::null_mut()
+        } else {
+            objc::msg_send![application, currentEvent]
+        };
+        let manager: *mut Object =
+            objc::msg_send![objc::class!(NSAppleEventManager), sharedAppleEventManager];
+        let apple_event: *mut Object = if manager.is_null() {
+            std::ptr::null_mut()
+        } else {
+            objc::msg_send![manager, currentAppleEvent]
+        };
+        (describe(event), describe(apple_event))
+    };
+    log::warn!(
+        "[退出诊断] 收到 applicationShouldTerminate：当前事件={event}；Apple Event={apple_event}\n调用栈：\n{}",
+        std::backtrace::Backtrace::force_capture()
+    );
 }
 
 fn shared_application() -> Result<*mut Object, TerminationError> {

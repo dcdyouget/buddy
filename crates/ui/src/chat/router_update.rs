@@ -29,6 +29,7 @@ impl PageRouter {
             return;
         }
         let save = self.take_config_save();
+        log::warn!("[退出诊断] 安装更新后重启");
         cx.spawn(async move |_, cx| {
             if let Some(save) = save {
                 save.await;
