@@ -1,4 +1,4 @@
-//! macOS AppKit 定位桥（S07-06）。
+//! macOS AppKit 定位桥。
 //!
 //! `prepare` 只在 GPUI 借用窗口时取得一个强引用；`snapshot` / `set_rect` 在借用
 //! 释放后同步执行，避免 AppKit 的 resize 回调重入 GPUI 的 `App` 借用。

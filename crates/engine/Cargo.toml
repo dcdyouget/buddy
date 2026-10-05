@@ -5,12 +5,8 @@ edition.workspace = true
 publish = false
 # ⚠️ MIT —— 引擎层**永不**链接 GPL。
 #
-# 硬约束（见 AGENTS.md 分层规则 + docs/specs/RULES.md §6）：
-#   本 crate 不得依赖 gpui / theme / ui / vendored markdown / 任何 GPL crate。
-#   这样才能保留「以后闭源 engine」的可能性。
-#   **S01-04 会用 CI 断言守护这条边界。**
-#
-# S00-08 已实证可行：本 crate 的依赖树里 0 处 GPUI / Tauri / zed crate。
+# 本 crate 不得依赖 gpui / theme / ui / vendored markdown / 任何 GPL crate，
+# 以保留单独复用（或闭源）engine 的可能性。
 license = "MIT"
 description = "Buddy 引擎层：provider 适配、流式、存储、工具调用。零 UI 依赖。"
 

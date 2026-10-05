@@ -1,46 +1,8 @@
-//! S00-06 产物：`language` 模块 **stub**（去掉语法高亮的极简版）
+//! Buddy 编写：替代 zed 的 `language` 模块。
 //!
-//! # 为什么这是**必需**而不是优化
-//!
-//! 实测依赖链揭示 `language` 是真正的死结：
-//!
-//! ```text
-//! language → tree-sitter (zed fork) → wasmtime-c-api-impl → 需要 cmake        ← 构建直接失败
-//! language → settings → settings_json → migrator                             ← settings 又回来了
-//! ```
-//!
-//! 两个后果：
-//! 1. **`settings` 被重新拖回**，`theme_settings_shim.rs` 的努力白费
-//! 2. `wasmtime` 需要 cmake；`tree-sitter` 是 zed 的 fork
-//!
-//! 所以要在 zed workspace 之外控制闭包，**必须把 `language` 换掉**。
-//!
-//! # 耦合面（实测，很小）
-//!
-//! | 文件 | `language` 引用 |
-//! |------|----------------|
-//! | `markdown.rs` | 13 处（2 个 `use` + 类型位置） |
-//! | `parser.rs` | **0** |
-//! | `selection.rs` | **0** |
-//! | `path_range.rs` | **0** |
-//! | `html.rs` | **0** |
-//!
-//! # 本 stub 的行为
-//!
-//! **不做语法高亮**：`highlight_text_resolved` 返回空 `runs`。
-//! vendored `markdown.rs` 里的消费点会短路：
-//!
-//! ```ignore
-//! let resolved = block.language.highlight_text_resolved(…);
-//! if resolved.runs.is_empty() { return; }   // ← 直接返回，后续 HighlightId 查表不执行
-//! ```
-//!
-//! 因此本 stub 只需通过编译，无需真实高亮。**代码块会按纯文本渲染。**
-//!
-//! # 真实实现应替换为
-//!
-//! **Comet 的 `crates/syntax`（MIT，1354 行）** —— 纯 tree-sitter、paint-only 契约、
-//! **不依赖 LSP/项目机制**。它正好补上被剔除的这块。
+//! zed `language` 依赖 zed 的 tree-sitter fork（经 wasmtime 需要 cmake）并会拖回 `settings` 框架，
+//! 而 vendored `markdown.rs` 只用到其中很小的接口（`Language`、`LanguageRegistry`、`Rope`、高亮结果）。
+//! 本文件提供同名同签名的最小实现，代码块高亮交给 `buddy-syntax`。
 
 #![allow(dead_code)]
 
@@ -139,7 +101,7 @@ impl Rope {
     }
 }
 
-/// Buddy 的语法高亮类别（S04-02）。
+/// Buddy 的语法高亮类别。
 ///
 /// 按 v1 `CodeBlock.tsx` 的 `buddyCodeTheme`（prism 词法类别 → `--code-syntax-*`）归并为 9 类。
 /// 顺序即 `HighlightId` 的值：调用方（buddy-ui）必须按**同一顺序**构造 `SyntaxTheme`
@@ -328,7 +290,7 @@ impl CharClassifier {
     ///
     /// 真实实现会按语言 scope 查 tree-sitter 的字符分类查询。
     /// 对本 spike（验证渲染）足够；**双击选词行为会略粗于 zed**，
-    /// 归 `S05-06` 用 Comet 的 syntax 替换时修正。
+    /// 归 用 Comet 的 syntax 替换时修正。
     pub fn kind(&self, c: char) -> CharKind {
         if c.is_alphanumeric() || c == '_' {
             CharKind::Word

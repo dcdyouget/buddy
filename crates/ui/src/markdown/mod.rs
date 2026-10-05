@@ -1,9 +1,9 @@
-//! Markdown 渲染接入（S04-*）
+//! Markdown 渲染接入
 //!
 //! 渲染器为 vendored zed markdown（`crates/markdown`，lib 名 `zed_markdown`，GPL-3.0-or-later，
 //! 来源与 patch 清单见 `crates/markdown/VENDOR.md`）。本模块负责按 Buddy 令牌初始化它。
 //!
-//! # v1 消息排版的实际取值（`v1-final`，Phase 05 渲染消息行时沿用）
+//! # v1 消息排版的实际取值（`v1-final`）
 //!
 //! | 位置 | 字号 | 行高 | 出处 |
 //! |------|------|------|------|
@@ -11,12 +11,12 @@
 //! | 用户消息正文 | 14px | 1.5 | `MessageBubble.tsx:223-224` |
 //! | 代码块 | 13px 等宽（= `--font-size-base`） | 1.5 | `CodeBlock.tsx:206-208` |
 
-/// 源文本规范化（v1 `markdownNormalizer.ts` 的移植，S04-05）。
+/// 源文本规范化（v1 `markdownNormalizer.ts` 的移植）。
 ///
 /// **接入方式**：流式消息每批更新时对**完整文本**调用 [`normalize::normalize_markdown`]，再 `Markdown::replace`；
 /// 不对增量片段 `append` —— 规范化需要看到完整行与成对定界符（v1 同样对整段文本规范化）。
-/// 上游每次追加本就全量重解析（S04-04），`replace` 不增加成本。
-/// 显示与复制加粗文本时须 [`normalize::strip_guards`]（守卫为零宽空格，复制时会被带出）→ S04-09 / S05-08。
+/// 上游每次追加本就全量重解析，`replace` 不增加成本。
+/// 显示与复制加粗文本时须 [`normalize::strip_guards`]（守卫为零宽空格，复制时会被带出）→ / 。
 pub mod normalize;
 pub mod code_block;
 pub mod streaming;
@@ -34,7 +34,7 @@ use zed_markdown::syntax::SYNTAX_CATEGORIES;
 /// 安装 markdown 渲染所需的字体设置与复制快捷键。须在 [`crate::init_theme`] 之后调用。
 ///
 /// 快捷键：上游依赖 zed 的键位表把 `cmd-c` 映射到 `Copy`；Buddy 没有该键位表，须自行绑定，
-/// 否则选中文字后 Cmd+C 无反应（S04-09）。仅在 markdown 获得焦点（`Markdown` 上下文）时生效。
+/// 否则选中文字后 Cmd+C 无反应。仅在 markdown 获得焦点（`Markdown` 上下文）时生效。
 pub fn init(cx: &mut App) {
     cx.bind_keys([gpui::KeyBinding::new(COPY_KEYSTROKE, zed_markdown::Copy, Some("Markdown"))]);
     let ui_font = fonts::ui_font(cx);
@@ -50,7 +50,7 @@ pub fn init(cx: &mut App) {
 
 /// 助手消息的 markdown 样式（v1 `.ai-message-content`）
 ///
-/// 正文基础字体、代码块（S04-07）、GFM 元素（S04-08，见 [`gfm`]）。使用时配合 [`code_block::renderer`]：
+/// 正文基础字体、代码块、GFM 元素（见 [`gfm`]）。使用时配合 [`code_block::renderer`]：
 /// `MarkdownElement::new(md.clone(), message_style(window, cx)).code_block_renderer(code_block::renderer(md.downgrade(), streaming))`
 pub fn message_style(window: &Window, cx: &App) -> MarkdownStyle {
     let theme = *cx.buddy_theme();
@@ -91,7 +91,7 @@ pub fn message_style(window: &Window, cx: &App) -> MarkdownStyle {
         rule_color: c.markdown_accent_line.into(),
         block_quote_border_color: c.markdown_accent.into(),
         syntax: syntax_theme(&theme),
-        // v1 无 `::selection` 规则，WebKit 用系统高亮色；v2 用品牌色（2026-09-27 用户决定，S04-09）。
+        // v1 无 `::selection` 规则，WebKit 用系统高亮色；v2 用品牌色（2026-09-27 用户决定）。
         // 上游把选区色块画在文字**之上**，必须半透明，否则遮住文字
         selection_background_color: Hsla::from(c.buddy_primary).opacity(SELECTION_ALPHA),
         heading_level_styles: Some(HeadingLevelStyles {
@@ -111,7 +111,7 @@ pub fn message_style(window: &Window, cx: &App) -> MarkdownStyle {
     }
 }
 
-/// 复制快捷键（macOS Cmd+C；Windows Ctrl+C，Phase 09 验证）
+/// 复制快捷键（macOS Cmd+C；Windows Ctrl+C）
 pub const COPY_KEYSTROKE: &str = if cfg!(target_os = "macos") { "cmd-c" } else { "ctrl-c" };
 
 /// 选区色的不透明度（叠在文字上，需保证文字可读）
@@ -137,11 +137,11 @@ pub fn thinking_style(window: &Window, cx: &App) -> MarkdownStyle {
 /// 助手消息正文行高（v1 写死值，见模块文档表格）
 pub const ASSISTANT_LINE_HEIGHT: f32 = 1.6;
 
-/// 按当前主题构造代码高亮配色（S04-02）
+/// 按当前主题构造代码高亮配色
 ///
 /// 顺序必须与 [`SYNTAX_CATEGORIES`] 一致（`HighlightId` 即下标）。取值与 v1 `CodeBlock.tsx`
 /// `buddyCodeTheme` 相同：只设前景色，**注释另加斜体、关键字另加字重 600**（v1 即如此）。
-/// 代码块为等宽字体，字重 / 斜体不改变字符宽度与行高 → 不影响布局（S04-02 测试 T03 验证）。
+/// 代码块为等宽字体，字重 / 斜体不改变字符宽度与行高 → 不影响布局（测试 T03 验证）。
 pub fn syntax_theme(theme: &Theme) -> Arc<SyntaxTheme> {
     let c = theme.colors;
     let color = |rgba| Some(Hsla::from(rgba));
@@ -225,7 +225,7 @@ mod tests {
         assert!(runs.iter().any(|(t, c)| t == "# n" && *c == "comment"), "{runs:?}");
         let runs = categories("sql", "SELECT id FROM t WHERE n = 42;\n");
         assert!(runs.iter().any(|(t, c)| t.eq_ignore_ascii_case("select") && *c == "keyword"), "{runs:?}");
-        // tree-sitter-sequel 把数字归入 literal（字符串色），沿用 S04-02 起的现状
+        // tree-sitter-sequel 把数字归入 literal（字符串色），沿用 起的现状
         assert!(runs.iter().any(|(t, _)| t == "42"), "{runs:?}");
     }
 

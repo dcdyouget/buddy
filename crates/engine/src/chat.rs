@@ -1,9 +1,9 @@
-// 对话编排模块：自 v1 `src-tauri/src/commands.rs`（tag `v1-final`）迁入（S02-07）
+// 对话编排模块：自 v1 `src-tauri/src/commands.rs`（tag `v1-final`）迁入
 //
 // v1 中这些逻辑以 `#[tauri::command]` 形式经 IPC 暴露；v2 UI 与 engine 同进程，
 // 改为 `ChatEngine` 的方法直接调用。三个 Tauri `State`（取消 / 审批 / 提问）合并为
 // `ChatEngine` 的字段；`AppHandle` 仅用于定位数据目录，改为 `ChatEngine::data_dir`。
-// 窗口类命令（resize_window_to_page / 前端诊断日志）归 Phase 07，未迁入。
+// 窗口类命令（resize_window_to_page / 前端诊断日志）属于应用外壳，不在 engine。
 
 use crate::models::*;
 use crate::providers::{self, ProviderType};
@@ -201,7 +201,7 @@ pub struct QuestionState {
 /// 对话引擎：持有数据目录与三类跨调用共享状态（v1 为三个 Tauri `State`）。
 ///
 /// 所有方法取 `&self`；UI 侧用 `Arc<ChatEngine>` 共享，并把 `send_message`
-/// spawn 到 tokio（future 为 `Send + 'static` 需先 clone `Arc`，见 S00-08 §3.3/§3.4）。
+/// spawn 到 tokio（future 为 `Send + 'static` 需先 clone `Arc` §3.3/§3.4）。
 pub struct ChatEngine {
     data_dir: PathBuf,
     cancel: CancelState,
@@ -1524,7 +1524,7 @@ impl ChatEngine {
     /// 在写入磁盘之前进行基本校验：
     /// - 如果 selected_model_id 非空，确保该模型在 models 列表中存在
     /// ⚠️ v1 在写盘前先调用 `hotkey::update_hotkey`（先注册新组合、成功后注销旧组合，失败则拒绝保存）。
-    /// 热键属于应用外壳（Phase 07），engine 不持有；UI 层必须在调用本方法**之前**完成热键注册。
+    /// 热键属于应用外壳，engine 不持有；UI 层必须在调用本方法**之前**完成热键注册。
     pub async fn save_config(&self, config: AppConfig) -> Result<(), String> {
         // 校验：selected_model_id 必须存在于 models 列表中
         if !config.selected_model_id.is_empty() {
@@ -1618,7 +1618,6 @@ impl ChatEngine {
 mod tests {
     use super::*;
 
-    // v1 的 frontend_diagnostic_accepts_only_known_stages 测试窗口诊断命令，归 Phase 07，未迁入。
 
     #[test]
     fn generation_reservation_is_atomic_and_reusable_after_release() {

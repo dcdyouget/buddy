@@ -1,4 +1,4 @@
-//! 消息列表（S05-01）：GPUI `ListState` 真虚拟化
+//! 消息列表：GPUI `ListState` 真虚拟化
 //!
 //! v1 `ChatPage.tsx` 把全部消息渲染成 DOM（无虚拟化，只靠手动分页控制数量）。这里：
 //!
@@ -6,14 +6,14 @@
 //!   内容变化的行只 `remeasure_items` 那一行（流式放字 → 只重测最后一行）；
 //! - 每帧只布局视口内 + 预渲染区（overdraw）的行。
 //!
-//! # `ListState` 的四个陷阱（research-log §16.3，S00-07 实测）
+//! # `ListState` 的四个陷阱（实测）
 //!
 //! 1. `list()` 必须自己 `flex_grow`，否则**静默渲染 0 行**；
 //! 2. `set_scroll_handler` 回调内不得访问 `ListState`（会 panic），只读事件字段；
 //! 3. `ListAlignment::Bottom` 必须 `measure_all()`，否则行高未知、视口空白；
 //! 4. `FollowMode::Tail` 只记状态，贴底须显式 `scroll_to_end()`。
 //!
-//! 行外观见 [`message_row`]（S05-08）；思考块 / 工具行的完整外观由 S05-09 / S05-10 完成。
+//! 行外观见 [`message_row`]；思考块 / 工具行的完整外观由 / 完成。
 
 use super::ask_card::{self, AnswerFn, AskUserCard, CardInput};
 use super::drag::{self, DragSource};
@@ -305,7 +305,7 @@ impl Transcript {
         cx.notify();
     }
 
-    /// 正文行的 markdown 实体：新行创建，内容变化时替换（规范化见 S04-05）
+    /// 正文行的 markdown 实体：新行创建，内容变化时替换（规范化见 ）
     fn update_markdown(&mut self, cx: &mut Context<Self>) {
         let state = &self.conversation.read(cx).state;
         // (行 id, 源文本, 版本, 是否纯文本)
@@ -496,7 +496,7 @@ impl Transcript {
                     Some(ContentBlock::Text { content }) => match self.markdown.get(&row.id) {
                         Some((md, _)) => {
                             let mut style = markdown::message_style(window, cx);
-                            // 流式中的最后一个正文块：落定渐显 + 星标（S04-06）
+                            // 流式中的最后一个正文块：落定渐显 + 星标
                             if let Some(live_turn) =
                                 state.live.as_ref().filter(|_| *live && row.pos.last)
                             {
@@ -720,7 +720,7 @@ impl Transcript {
             RowKind::Actions { msg } => {
                 let message = &state.messages[*msg];
                 let answer = message_actions::answer_text(message);
-                // 本轮用户消息 = 行 id 的锚（S05-02）；它在行集合中才有「回到问题」
+                // 本轮用户消息 = 行 id 的锚；它在行集合中才有「回到问题」
                 let anchor = row.id.split('#').next().unwrap_or_default().to_string();
                 let has_question = self
                     .rows

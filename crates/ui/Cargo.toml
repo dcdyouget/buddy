@@ -15,7 +15,7 @@ theme.workspace = true
 ui.workspace = true
 gpui_tokio.workspace = true
 
-# vendored zed markdown（GPL，S04-01）
+# vendored zed markdown（GPL）
 buddy-markdown.workspace = true
 
 # 引擎层（MIT）—— 注意依赖方向：UI 依赖 engine，反向不允许
@@ -35,7 +35,7 @@ pulldown-cmark.workspace = true
 serde_json.workspace = true
 # text_area：字形 / 词边界
 unicode-segmentation.workspace = true
-# 消息时间按本地时区格式化（S05-14）；engine 已依赖，不新增包
+# 消息时间按本地时区格式化；engine 已依赖，不新增包
 chrono.workspace = true
 # 全局热键的原生注册与事件，由 shell 维持生存期
 global-hotkey.workspace = true

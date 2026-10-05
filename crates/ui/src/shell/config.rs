@@ -1,4 +1,4 @@
-//! 生产窗口的尺寸与原生创建选项（S07-01）。
+//! 生产窗口的尺寸与原生创建选项。
 
 use gpui::{
     App, Bounds, Pixels, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, px,

@@ -1,4 +1,4 @@
-//! 模型选择菜单（S05-15）—— 对应 v1 `ModelDropdown.tsx`、`.model-dropdown*` 样式与 `src/utils/modelMenu.ts`
+//! 模型选择菜单—— 对应 v1 `ModelDropdown.tsx`、`.model-dropdown*` 样式与 `src/utils/modelMenu.ts`
 //!
 //! | v1 | 本模块 |
 //! |----|------|
@@ -6,7 +6,7 @@
 //! | 只列出「Provider 启用了的」模型；空列表显示「暂无已启用模型，请前往设置添加」 | [`menu_rows`] |
 //! | 行：名称 + `Provider · N K 上下文 · N ms`；当前模型高亮底 + 对勾；悬停凹陷底 | [`ModelMenu`] |
 //! | 面板：宽 272、最高 320、圆角 lg、`--composer-surface`、`--shadow-floating-md`；Esc / 点击外部关闭；选中后 120 ms 再关闭 | 同（点击外部 = 窗口失去激活）。**阴影用系统窗口阴影**：窗口就是面板大小，不自绘阴影也不留透明边距 —— 曾自绘 12px 边距 + 阴影，macOS 的系统阴影沿着那圈半透明渐变再画一层，菜单外多出一圈矩形外边缘（目检 #18 反馈） |
-//! | 边框 `--glass-outline` | 改用 `--border-default`（同 Composer，见 S05-16 决策记录） |
+//! | 边框 `--glass-outline` | 改用 `--border-default`（同 Composer） |
 //!
 //! 选择结果经回调交给路由器，由它保存配置（v1 `setDefaultModel`）。
 

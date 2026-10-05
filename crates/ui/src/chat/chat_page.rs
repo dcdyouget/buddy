@@ -1,4 +1,4 @@
-//! 对话页（S05-18）—— 对应 v1 `src/pages/ChatPage.tsx` 的外壳（`streaming` 与 `conversation` 共用）
+//! 对话页—— 对应 v1 `src/pages/ChatPage.tsx` 的外壳（`streaming` 与 `conversation` 共用）
 //!
 //! | v1 | 本模块 |
 //! |----|------|

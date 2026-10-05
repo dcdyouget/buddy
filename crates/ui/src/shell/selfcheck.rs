@@ -1,4 +1,4 @@
-//! S07-12 窗口行为自检。
+//! 窗口行为自检。
 //!
 //! 该入口只创建一个唯一临时数据目录中的真实 `AppShell`，读取原生窗口属性，
 //! 验证工作区、移动与显隐，再清理窗口和目录。它不安装热键、托盘、单实例，
@@ -21,27 +21,27 @@ pub async fn run(cx: &mut AsyncApp) -> bool {
     #[cfg(not(target_os = "macos"))]
     {
         let _ = cx;
-        println!("BLOCKED S07-12：当前平台没有 macOS 原生窗口自检实现，Windows 待测");
+        println!("BLOCKED 窗口自检：当前平台没有 macOS 原生窗口自检实现，Windows 待测");
         return false;
     }
 
     #[cfg(target_os = "macos")]
     {
         if let Err(reason) = macos_preflight() {
-            println!("BLOCKED S07-12：{reason}");
+            println!("BLOCKED 窗口自检：{reason}");
             return false;
         }
 
         let data_dir = sandbox_dir();
         if let Err(error) = std::fs::create_dir(&data_dir) {
-            println!("FAIL S07-12：无法创建临时 engine 沙盒：{error}");
+            println!("FAIL 窗口自检：无法创建临时 engine 沙盒：{error}");
             return false;
         }
         let engine = ChatEngine::new(data_dir.clone());
         let handle = match open_main_window(engine, ShellConfig::default(), cx).await {
             Ok(handle) => handle,
             Err(error) => {
-                println!("FAIL S07-12：真实 shell 工厂创建窗口失败：{error}");
+                println!("FAIL 窗口自检：真实 shell 工厂创建窗口失败：{error}");
                 let _ = std::fs::remove_dir_all(data_dir);
                 return false;
             }
@@ -53,10 +53,10 @@ pub async fn run(cx: &mut AsyncApp) -> bool {
             .is_ok();
         let sandbox_cleanup = std::fs::remove_dir_all(&data_dir).is_ok();
         if !window_cleanup {
-            println!("FAIL S07-12：真实窗口清理失败");
+            println!("FAIL 窗口自检：真实窗口清理失败");
         }
         if !sandbox_cleanup {
-            println!("FAIL S07-12：临时 engine 沙盒清理失败");
+            println!("FAIL 窗口自检：临时 engine 沙盒清理失败");
         }
         result && window_cleanup && sandbox_cleanup
     }
@@ -65,11 +65,11 @@ pub async fn run(cx: &mut AsyncApp) -> bool {
 #[cfg(target_os = "macos")]
 async fn run_native_checks(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> bool {
     let Some(initial) = probe_native(handle, cx) else {
-        println!("FAIL S07-12：无法读取窗口原生属性");
+        println!("FAIL 窗口自检：无法读取窗口原生属性");
         return false;
     };
     let Some(initial_position) = probe_position(handle, cx) else {
-        println!("FAIL S07-12：无法读取窗口原生位置");
+        println!("FAIL 窗口自检：无法读取窗口原生位置");
         return false;
     };
     let native_ok = expected_native(&initial);
@@ -125,7 +125,7 @@ async fn run_native_checks(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) ->
     );
 
     let ok = native_ok && workspace_ok && moved && visibility.passed();
-    println!("{} S07-12 窗口行为自检", if ok { "PASS" } else { "FAIL" });
+    println!("{} 窗口行为自检", if ok { "PASS" } else { "FAIL" });
     ok
 }
 

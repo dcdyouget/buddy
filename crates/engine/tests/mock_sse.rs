@@ -1,4 +1,4 @@
-//! S02-01：无 Tauri 环境下，两个 provider 对本地 mock SSE 完成一次完整流式对话。
+//! 无 Tauri 环境下，两个 provider 对本地 mock SSE 完成一次完整流式对话。
 //!
 //! 契约：provider 的事件流以 `TurnEnd` 结束，结果经返回值 `StreamOutcome` 交出；
 //! 终态 `Done` / `Error` 由编排层（v1 为 `commands.rs` 的 `TerminalStreamEvent`）发射，不由 provider 发射。

@@ -1,4 +1,4 @@
-//! macOS 主窗口的原生外观补丁（S07-02）。
+//! macOS 主窗口的原生外观补丁。
 //!
 //! 只在主线程同步操作：先取得短暂强引用，释放 GPUI App 借用后补丁，再显示。
 //! 原生对象不跨 await、不进入实体或后台任务；模型菜单保留系统阴影。
@@ -51,7 +51,7 @@ pub struct NativeWindowSnapshot {
     pub has_shadow: bool,
     /// GPUI Transparent 背景的真实 opaque 状态。
     pub is_opaque: bool,
-    /// 当前 collection behavior；S07-02 只读取，不修改工作区策略。
+    /// 当前 collection behavior 只读取，不修改工作区策略。
     pub collection_behavior: u64,
     /// contentView 是否启用 layer-backed 绘制。
     pub wants_layer: bool,

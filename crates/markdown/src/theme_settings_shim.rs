@@ -1,4 +1,4 @@
-//! S00-06 产物：`ThemeSettings` **shim**
+//! Buddy 修改：`ThemeSettings` **shim**
 //!
 //! # 为什么需要
 //!
@@ -23,17 +23,16 @@
 //!
 //! 这样 patch 从「21 处」降到「1 行 + 本文件（约 120 行）」。
 //!
-//! # 与 S00-01 的 `ThemeSettingsProvider` 的关系
+//! # 与 `ThemeSettingsProvider` 的关系
 //!
-//! S00-01 发现 `theme::ThemeSettingsProvider` 是只有 5 个方法的 trait，
-//! 自己实现即可满足 `ui` crate 的需求（见 `docs/evidence/s00-02`… 实际是 s00-01）。
+//! `theme::ThemeSettingsProvider` 是只有 5 个方法的 trait，自己实现即可满足 `ui` crate 的需求。
 //!
 //! 但 `markdown.rs` **不通过那个 trait**，而是直接用 `theme_settings::ThemeSettings`
 //! 的具体类型（要用 `.buffer_font.weight`、`.buffer_line_height.value()` 这类字段与方法）。
 //! 所以需要本 shim 提供同样的具体类型。
 //!
 //! 两者互补：
-//! - `ThemeSettingsProvider`（S00-01）→ 满足 `ui` crate
+//! - `ThemeSettingsProvider`→ 满足 `ui` crate
 //! - `ThemeSettings` shim（本文件）→ 满足 vendored `markdown`
 
 use gpui::{App, Font, Global, Pixels, SharedString, px};
@@ -74,7 +73,7 @@ impl Default for ThemeSettings {
 }
 
 impl ThemeSettings {
-    /// 以指定字体与字号构造（S04-01：由 buddy-ui 传入 Buddy 排版令牌，避免 markdown 偏离 v1 观感）
+    /// 以指定字体与字号构造（由 buddy-ui 传入 Buddy 排版令牌，避免 markdown 偏离 v1 观感）
     ///
     /// markdown.rs 区分 ui / buffer（代码）两套字体；agent_* 与 markdown_preview_* 系列取同一套。
     pub fn new(ui_font: Font, buffer_font: Font, ui_size: Pixels, buffer_size: Pixels) -> Self {

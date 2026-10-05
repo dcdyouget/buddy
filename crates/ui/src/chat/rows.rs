@@ -1,4 +1,4 @@
-//! 块粒度行模型（S05-02）
+//! 块粒度行模型
 //!
 //! 虚拟列表的一行 = 一条用户消息 / 助手的一个内容块（正文或思考）/ 一次工具调用，**不是一条消息**
 //! （长回答被拆成多行，虚拟化只布局可见的块；流式时只有最后一行在变）。
@@ -14,7 +14,7 @@
 //! | 助手内容块 | `{锚}#{m}.{i}`：本轮第 m 条 assistant 消息的第 i 个块 |
 //! | 工具调用 | `{锚}#{m}.t.{调用 id}`（调用 id 由模型给出，流式与持久化相同） |
 //!
-//! engine 每个工具轮写一条 assistant（S05-17），界面按同一规则拆分 → 流式与持久化的 (m, i) 一致。
+//! engine 每个工具轮写一条 assistant，界面按同一规则拆分 → 流式与持久化的 (m, i) 一致。
 //! 锚为本轮用户消息 id；最前面没有用户消息的助手消息以 `head` 为锚。
 //!
 //! # 工具调用的位置（v1 `MessageBubble.tsx` 分桶规则）
@@ -53,7 +53,7 @@ pub enum RowKind {
         /// 调用 id
         call: String,
     },
-    /// 回答下方的操作栏（复制 / 回到问题 / 时间，S05-14）。v1：非流式、不是工具循环的中间段、且有正文时显示
+    /// 回答下方的操作栏（复制 / 回到问题 / 时间）。v1：非流式、不是工具循环的中间段、且有正文时显示
     Actions {
         /// 所属 assistant 消息下标
         msg: usize,
@@ -161,7 +161,7 @@ fn bucket(state: &ChatState, calls: &[String], block_count: usize) -> HashMap<i3
 pub fn build_rows(state: &ChatState) -> Vec<Row> {
     let mut rows = Vec::new();
     // 开头没有用户消息的助手行（分页边界）锚在首条消息上：各页开头的 `head` 行 id 不能相同，
-    // 否则并入更早一页时 diff 会把两页的开头行误认作同一行（S05-05 T22 发现）
+    // 否则并入更早一页时 diff 会把两页的开头行误认作同一行（T22 发现）
     let mut anchor = format!("head-{}", state.messages.first().map_or("", |m| m.id.as_str()));
     let mut assistant_ordinal = 0usize;
     for (ix, message) in state.messages.iter().enumerate() {
@@ -296,7 +296,7 @@ pub fn diff(old: &[Row], new: &[Row]) -> Splice {
 }
 
 /// 与轮次锚点无关的行键（消息 id + 行内位置）。行 id 以本轮用户消息为锚；分页边界处的
-/// 助手消息在更早一页并入前锚为 `head`，并入后改锚 → 行 id 变了但行键不变（S05-05 保持视口用）
+/// 助手消息在更早一页并入前锚为 `head`，并入后改锚 → 行 id 变了但行键不变（保持视口用）
 pub fn stable_key(state: &ChatState, row: &Row) -> String {
     let id = &state.messages[msg_of(&row.kind)].id;
     match &row.kind {

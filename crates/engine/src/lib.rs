@@ -13,16 +13,16 @@
 //! zed 的 `theme` / `ui` / vendored `markdown` 均为 **GPL-3.0-or-later**。
 //! 一旦引擎层链接了它们，整个 engine 也变成 GPL，"以后闭源 engine" 的可能性消失。
 //!
-//! **S00-08 已实测验证**：engine 的依赖树里 0 处 GPUI / Tauri / zed crate。
+//! **实测**：engine 的依赖树里 0 处 GPUI / Tauri / zed crate。
 //! 这不是设想，是已验证的边界。
 //!
-//! # 模块（S02-* 将逐一迁入）
+//! # 模块
 //!
-//! - `models` —— 数据模型（`S02-03`）
-//! - `providers` —— LLM provider 适配（`S02-01`）
-//! - `streaming` —— 流式事件（`S02-05`）
-//! - `tools` —— 工具调用（`S02-02`）
-//! - `storage` —— 持久化（`S02-04`）
+//! - `models` —— 数据模型
+//! - `providers` —— LLM provider 适配
+//! - `streaming` —— 流式事件
+//! - `tools` —— 工具调用
+//! - `storage` —— 持久化
 //!
 //! # 与 UI 的接口
 //!

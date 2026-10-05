@@ -1,4 +1,4 @@
-//! S02-09（T05）：真实 provider 契约测试 —— 需要 API Key 与网络，默认忽略。
+//! （T05）：真实 provider 契约测试 —— 需要 API Key 与网络，默认忽略。
 //!
 //! 手动运行：`cargo test -p buddy-engine --test real_provider -- --ignored --nocapture`
 //!

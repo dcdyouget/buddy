@@ -1,14 +1,13 @@
-//! 多行文本输入框（S05-06）—— 对应 v1 Composer 的 `<textarea>`
+//! 多行文本输入框—— 对应 v1 Composer 的 `<textarea>`
 //!
-//! 以 zed `crates/gpui/examples/input.rs` 为骨架，修正 S00-05 记录的四个缺陷
-//! （`docs/evidence/s00-05/ime-input.rs`），并补上 `<textarea>` 应有的能力：
+//! 以 zed `crates/gpui/examples/input.rs` 为骨架，修正其输入法处理的四个缺陷，并补上 `<textarea>` 应有的能力：
 //!
 //! - 软换行（`shape_text` 按宽度折行）+ 自动增高到上限后内部滚动（v1 `max-height: 120px`）；
 //! - 光标 / 选区、按视觉行上下移动（保持横向位置）、按词移动与删除、行首 / 行尾（macOS 快捷键）；
 //! - 鼠标点击、拖选、Shift+点击、双击选词；复制 / 剪切 / 粘贴（保留换行）；撤销 / 重做；
 //! - 输入法：标记文本（下划线）、候选窗定位、`characterIndexForPoint`。
 //!
-//! # S00-05 四个缺陷的处理
+//! # 四个缺陷的处理
 //!
 //! | # | 缺陷 | 这里 |
 //! |---|------|------|
@@ -20,7 +19,7 @@
 //! # 回车
 //!
 //! 组字期间 Enter 由 macOS 输入法消费（gpui_macos 在 `marked_text_range()` 非空时先交给 inputContext，
-//! S00-05 实测 0 次到达应用）。这里再加一道：有标记文本时忽略 [`Submit`]（v1 同样判断 `isComposing`）。
+//! 实测 0 次到达应用）。这里再加一道：有标记文本时忽略 [`Submit`]（v1 同样判断 `isComposing`）。
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, CursorStyle, Element, ElementId, ElementInputHandler, Entity, EntityInputHandler,
@@ -105,7 +104,7 @@ actions!(
     ]
 );
 
-/// 键位（上下文 `TextArea`）。macOS 用 Cmd，其余平台 Ctrl（Phase 09 验证）。
+/// 键位（上下文 `TextArea`）。macOS 用 Cmd，其余平台 Ctrl。
 pub fn bind_keys(cx: &mut App) {
     let ctx = Some("TextArea");
     let cmd = if cfg!(target_os = "macos") { "cmd" } else { "ctrl" };

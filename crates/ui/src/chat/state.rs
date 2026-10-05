@@ -1,13 +1,13 @@
-//! 对话状态（S05-17）—— 逐项移植 v1 `src/stores/chatStore.ts` 中与界面相关的部分（`v1-final`）
+//! 对话状态—— 逐项移植 v1 `src/stores/chatStore.ts` 中与界面相关的部分（`v1-final`）
 //!
-//! v1 的 1447 行 store 里，调用模型、工具循环、持久化已由 engine（S02-07）承担；
+//! v1 的 1447 行 store 里，调用模型、工具循环、持久化已由 engine承担；
 //! 界面只需消费 [`StreamEvent`] 并维护可显示的状态。本模块是纯数据逻辑（无 GPUI），
 //! 行为与 v1 逐条对应，v1 的 14 个 store 用例全部移植为本模块测试。
 //!
 //! # 流式事件的两条路径（v1 `useStreaming.ts` + `queueStreamEvent`）
 //!
 //! - `Start` 忽略；`Done` / `Error` 为终态（见 [`ChatState::push_event`]）。
-//! - 其余事件进入**同一个先进先出队列**：正文增量交给节奏器（[`Pacer`]，S04-06）逐字放出，
+//! - 其余事件进入**同一个先进先出队列**：正文增量交给节奏器（[`Pacer`]）逐字放出，
 //!   **排在未放完正文之后的结构事件必须等待**（否则第二轮的内容会抢在第一轮正文之前出现）。
 //!   相邻的正文增量合并，使数千个 1 字片段变成一个可按积压量追赶的缓冲。
 //!
@@ -104,7 +104,7 @@ pub struct LiveTurn {
     pacer: Pacer,
     /// 后端已结束，等队列放完再收尾（v1 `streamDonePending`）
     done_pending: bool,
-    /// 最近一批放出的字数（v1 `streamingRevealCount`，S04-06 落定效果用）
+    /// 最近一批放出的字数（v1 `streamingRevealCount` 落定效果用）
     pub reveal_count: usize,
     /// 最近一批放出的时刻（毫秒）
     pub batch_at: f64,
@@ -169,12 +169,12 @@ fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-/// 新建一条用户消息（v1 `sendMessage` 的 `userMessage`；附件随 S05-07 接入）
+/// 新建一条用户消息（v1 `sendMessage` 的 `userMessage`；附件随 接入）
 pub fn user_message(content: &str) -> Message {
     user_message_with_images(content, Vec::new())
 }
 
-/// 新建带图片附件的用户消息（S05-07）。附件已由 Composer 写入 engine，
+/// 新建带图片附件的用户消息。附件已由 Composer 写入 engine，
 /// 因此消息持久化时只包含路径，不携带 Base64。
 pub fn user_message_with_images(content: &str, images: Vec<ImageAttachment>) -> Message {
     Message {
@@ -1045,7 +1045,7 @@ mod tests {
 
     #[test]
     fn reveal_never_splits_surrogate_pairs() {
-        // v1「逐字消费时不会拆开 Unicode 代理对字符」（v1 用 emoji；按硬约束 4 改用同为代理对的「𠮷」）
+        // v1「逐字消费时不会拆开 Unicode 代理对字符」（v1 用 emoji；源码不放 emoji，改用同为代理对的「𠮷」）
         let mut s = streaming();
         s.push_event(delta("A𠮷"), 0.0);
         reveal(&mut s, 1);

@@ -13,7 +13,7 @@ pub const SOURCE_TOKEN_COUNT: usize = 139;
 
 /// 不迁移的令牌及理由
 pub const EXCLUDED: &[(&str, &str)] = &[
-    ("--glass-outline", "S00-04 用户实机否决（白色描边观感为「四边白光」），v2 不迁移"),
+    ("--glass-outline", "用户实机否决（白色描边观感为「四边白光」），v2 不迁移"),
 ];
 
 /// 随主题变化的颜色（浅 / 深各一份）
@@ -637,7 +637,7 @@ pub mod motion {
     pub const EASE_STANDARD: [f32; 4] = [0.2, 0.0, 0.0, 1.0];
 }
 
-/// 字体栈（原样保留 CSS 顺序，含通用族名；平台映射见 S03-05）
+/// 字体栈（原样保留 CSS 顺序，含通用族名；平台映射见 ）
 pub mod fonts {
     /// `--font-mono: 'Fira Code', 'JetBrains Mono', 'SF Mono', 'Menlo', 'Consolas', monospace`
     pub const FONT_MONO: &[&str] = &["Fira Code", "JetBrains Mono", "SF Mono", "Menlo", "Consolas", "monospace"];

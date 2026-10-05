@@ -13,7 +13,7 @@
 
 use crate::{HighlightError, HighlightKind, HighlightSpan, split_lines};
 
-/// 高亮任意语言的源码，返回按行、行内字节偏移的区间（与 [`crate::HighlightedDocument::lines`] 相同）。
+/// 高亮任意语言的源码，返回按行、行内字节偏移的区间（与 [`crate::highlight`] 相同）。
 pub fn highlight(source: &str) -> Result<Vec<Vec<HighlightSpan>>, HighlightError> {
     if source.len() > crate::DEFAULT_MAX_SOURCE_BYTES {
         return Err(HighlightError::SourceTooLarge);

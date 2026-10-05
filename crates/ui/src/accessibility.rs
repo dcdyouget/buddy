@@ -1,4 +1,4 @@
-//! 系统辅助功能设置（S04-06）
+//! 系统辅助功能设置
 //!
 //! v1 经 `prefers-reduced-motion`（WebKit 读取 macOS「减弱动态效果」）关闭流式渐显、星标呼吸、
 //! 复制成功动画等。GPUI 没有对应接口，这里直接读系统设置。每次调用都实时读取，
@@ -17,7 +17,7 @@ pub fn prefers_reduced_motion() -> bool {
     }
 }
 
-/// 系统是否要求减弱动态效果（Windows 对应项在 Phase 09 接入）
+/// 系统是否要求减弱动态效果（Windows 对应项未实现）
 #[cfg(not(target_os = "macos"))]
 pub fn prefers_reduced_motion() -> bool {
     false

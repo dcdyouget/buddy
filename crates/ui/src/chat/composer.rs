@@ -1,4 +1,4 @@
-//! 输入区（S05-06）—— 对应 v1 `src/components/chat/InputDock.tsx` 与 `global.css` 的 `.input-dock`
+//! 输入区—— 对应 v1 `src/components/chat/InputDock.tsx` 与 `global.css` 的 `.input-dock`
 //!
 //! | v1 | 本模块 |
 //! |----|------|
@@ -7,13 +7,13 @@
 //! | 有文字时右侧显示清除按钮（20px 圆，`--bg-sunken`，X 12px） | [`Composer`] |
 //! | 可发送：有文字，或（模型支持图片且有图片）；图片不被支持时不可发送 | [`can_send`] |
 //! | 流式中：「模型名 · 生成中...」+ 红色停止按钮 | 同 |
-//! | 容器：圆角 lg、上亮下透渐变叠 `--composer-surface`、双层描边 + `--shadow-composer` | 同（外描边改用 `--border-default`，见决策记录） |
+//! | 容器：圆角 lg、上亮下透渐变叠 `--composer-surface`、双层描边 + `--shadow-composer` | 同（外描边改用 `--border-default`） |
 //!
 //! | 空态页的独立气泡（`hideBorder` → `.is-standalone`）：无外边距、圆角 xl、`--window-outline` 描边 +
 //! 内侧 `--window-inner-highlight` + `--shadow-floating-md`；输入框聚焦也不加底色；不自动撑高（`disableAutoResize`）；
 //! 紧凑窗口中撑满高度 | [`Composer::set_standalone`] |
 //!
-//! 模型选择（S05-15，菜单见 [`super::model_menu`]）、图片附件（S05-07）、设置入口（S05-18）只提供回调位置。
+//! 模型选择（菜单见 [`super::model_menu`]）、图片附件、设置入口只提供回调位置。
 
 use crate::components::{IconButtonVariant, TextTooltip, icon_button};
 use super::drag::{self, DragSource};
@@ -73,7 +73,7 @@ pub struct Composer {
     pub(super) save_tasks: Vec<Task<()>>,
     focused: bool,
     hovered: bool,
-    /// 空态页的独立气泡（S05-16）
+    /// 空态页的独立气泡
     standalone: bool,
     /// 上一帧绘制的模型按钮边界（窗口坐标；模型菜单据此定位，流式中按钮不存在时为 `None`）
     model_button: Rc<Cell<Option<Bounds<Pixels>>>>,
@@ -397,7 +397,7 @@ impl Render for Composer {
             .when(standalone, |d| d.w_full().flex().flex_col().justify_center().rounded(px(m::RADIUS_XL)).border_color(c.window_outline))
             .when(standalone && compact, |d| d.h_full())
             .p(px(m::SPACE_1))
-            // 内层渐变由外层圆角裁切（不另设 11px 圆角：硬约束 3 只允许刻度内的值）
+            // 内层渐变由外层圆角裁切（不另设 11px 圆角：圆角只用 4/8/12/16/9999 刻度）
             .overflow_hidden()
             .border_1()
             .bg(c.composer_surface)

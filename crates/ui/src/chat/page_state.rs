@@ -1,4 +1,4 @@
-//! 页面状态机（S05-18）—— 对应 v1 `uiStore.ts` 的 `currentPage` / `previousPage` 与 `App.tsx` 的路由、配置副作用
+//! 页面状态机—— 对应 v1 `uiStore.ts` 的 `currentPage` / `previousPage` 与 `App.tsx` 的路由、配置副作用
 //!
 //! 纯逻辑，不依赖 GPUI；由 [`super::shell::Shell`] 驱动。
 //!
@@ -16,15 +16,14 @@
 //! 配置补齐且当前在 noapikey ──> conversation
 //! ```
 //!
-//! # 决策（迁自已退役的 `docs/design/pages-and-states.md`）
+//! # 决策
 //!
 //! - **设置页不卸载底层页面**：设置只是叠加层，底层的对话 / 流式状态不能被清空，滑入动画才有意义。
 //!   → [`PageState::base_page`]。
 //! - **添加 Provider 的中间态不能打断设置流程**：依次保存 provider、模型、默认模型的过程中配置暂时无效，
 //!   此时若因「配置无效」切回 empty，会提前退回紧凑气泡。→ [`PageState::config_changed`] 对 `settings` 不动作。
 //! - **窗口尺寸**：v1 仅在「离开紧凑页（empty / noapikey）进入内容页」时展开一次，内容页之间切换保持用户尺寸
-//!   （AGENTS.md 硬约束 6 的准确含义，见 `docs/evidence/v1-baseline/README.md` §3）。
-//!   本模块只给出判定 [`expands_window`]；真正改窗口尺寸属 Phase 07，**页面切换本身不改窗口**。
+//!   本模块只给出判定 [`expands_window`]；真正改窗口尺寸由窗口外壳执行，**页面切换本身不改窗口**。
 
 /// 页面（v1 `PageState`；`add-provider` 是 v1 遗留的无路由类型值，不迁移）
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

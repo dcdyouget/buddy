@@ -29,7 +29,7 @@ use self::ffi::{
 
 mod ffi;
 
-// Buddy patch (S07-03): Carbon accepts a non-exclusive registration even when another
+// Buddy patch : Carbon accepts a non-exclusive registration even when another
 // process exclusively owns the shortcut, but delivers no events. Reject that conflict.
 const K_EVENT_HOT_KEY_EXCLUSIVE: u32 = 1 << 0;
 

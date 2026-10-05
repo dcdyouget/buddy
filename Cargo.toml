@@ -16,10 +16,7 @@ exclude = ["vendor/global-hotkey"]
 version = "0.1.2"
 edition = "2024"
 authors = ["Buddy"]
-# 注意：许可证是**分层**的，不能在此统一声明。
-#   crates/engine → MIT（零 GPL 链接）
-#   crates/ui、apps/buddy → GPL-3.0-or-later
-# 见 docs/specs/phase-01/S01-03-licensing.md
+# 注意：许可证是分层的，不能在此统一声明（见 LICENSE）。
 
 [workspace.dependencies]
 # ── 分层内部 crate ──
@@ -29,23 +26,21 @@ buddy-markdown = { path = "crates/markdown" }
 buddy-syntax = { path = "crates/syntax" }
 buddy-update = { path = "crates/update" }
 
-# ── GPUI 与 zed crate（S00-01 实测的组合）──
+# ── GPUI 与 zed crate（实测的组合）──
 #
 # ⚠️ **四个 crate 必须同一 rev**，否则类型不兼容。
-# rev 与日期记录于此，升级时同步修改（见 S01-02）。
-#   上游 = https://github.com/zed-industries/zed  (branch: main)
-#   实测基准 rev 见 docs/tasks/v2.0.0-gpui/research-log.md §9.1
+# 升级时同步修改全部 rev。上游 = https://github.com/zed-industries/zed (branch: main)
 gpui = { git = "https://github.com/zed-industries/zed", rev = "290cbcb9cb6a5dcbe0060431a126ad19e743f2f4" }
 theme = { git = "https://github.com/zed-industries/zed", rev = "290cbcb9cb6a5dcbe0060431a126ad19e743f2f4" }
 ui = { git = "https://github.com/zed-industries/zed", rev = "290cbcb9cb6a5dcbe0060431a126ad19e743f2f4" }
-# tokio ↔ GPUI 桥接（S00-08 实测可用）
+# tokio ↔ GPUI 桥接（实测可用）
 gpui_tokio = { git = "https://github.com/zed-industries/zed", rev = "290cbcb9cb6a5dcbe0060431a126ad19e743f2f4" }
-# vendored markdown（S04-01）所需的 zed 内部 crate —— 同一 rev
+# vendored markdown所需的 zed 内部 crate —— 同一 rev
 collections = { git = "https://github.com/zed-industries/zed", rev = "290cbcb9cb6a5dcbe0060431a126ad19e743f2f4" }
 sum_tree = { git = "https://github.com/zed-industries/zed", rev = "290cbcb9cb6a5dcbe0060431a126ad19e743f2f4" }
 gpui_util = { git = "https://github.com/zed-industries/zed", rev = "290cbcb9cb6a5dcbe0060431a126ad19e743f2f4" }
 
-# ── `gpui_platform` 的两个**必需** feature（S00-01 实测）──
+# ── `gpui_platform` 的两个**必需** feature（实测）──
 #
 # 缺任一即失败：
 #   ① `runtime_shaders` —— 否则 gpui_apple 的 build script 调用
@@ -68,7 +63,7 @@ log = "0.4"
 chrono = "0.4"
 dom_query = "0.27"
 base64 = "0.22"
-# vendored markdown（S04-01）—— 版本与 zed workspace（rev 290cbcb）一致，同 S00-06
+# vendored markdown—— 版本与 zed workspace（rev 290cbcb）一致，同 
 anyhow = "1.0.86"
 html5ever = "0.39"
 linkify = "0.10.0"
@@ -81,21 +76,21 @@ tempfile = "3"
 dirs = "6"
 parking_lot = "0.12"
 env_logger = "0.11"
-# macOS 系统设置查询（「减弱动态效果」，S04-06）；与 gpui_macos 同一版本，不新增包
+# macOS 系统设置查询（「减弱动态效果」）；与 gpui_macos 同一版本，不新增包
 objc = "0.2"
-# 主窗口原生句柄（S07-02）；GPUI 闭包已有 0.6.2，不新增包
+# 主窗口原生句柄；GPUI 闭包已有 0.6.2，不新增包
 raw-window-handle = "0.6"
-# 系统全局热键（S07-03），与 S00-03 实测版本一致
+# 系统全局热键，与 实测版本一致
 global-hotkey = "0.8"
 tray-icon = { version = "0.24.1", default-features = false }
 auto-launch = "0.6"
 image = { version = "0.25", default-features = false, features = ["png"] }
-# macOS 外部鼠标事件监听（S07-04）；GPUI 闭包已有 0.1.6
+# macOS 外部鼠标事件监听；GPUI 闭包已有 0.1.6
 block = "0.1"
 libc = "0.2"
-# 文本输入的字形 / 词边界（S05-06）；与 gpui 闭包中同一版本，不新增包
+# 文本输入的字形 / 词边界；与 gpui 闭包中同一版本，不新增包
 unicode-segmentation = "1"
-# 自更新（Phase 08）：sha256 与 Ed25519 minisign 验签（与 Tauri signer 产出的签名格式兼容）
+# 自更新：sha256 与 Ed25519 minisign 验签（与 Tauri signer 产出的签名格式兼容）
 sha2 = "0.10"
 hex = "0.4"
 semver = "1"
@@ -105,14 +100,14 @@ minisign-verify = "0.2"
 # ⚠️ 必须复制 zed 的 `[patch.crates-io]`
 # ═══════════════════════════════════════════════════════════════
 #
-# **S00-06 阻碍级发现**：`[patch]` **不会传递给下游消费者**。
+# **实测**：`[patch]` **不会传递给下游消费者**。
 # zed 的 `util` crate 依赖 `smol` → `async-process`，而 crates.io 版本缺
 # `Child::adopt_raw_pid`（zed 用自家 fork 补上了）。不复制就会编译失败：
 #
 #   error[E0599]: no function `adopt_raw_pid` found for `smol::async_process::Child`
 #
 # 这里只复制 macOS 侧 markdown 闭包实际需要的项。
-# 未复制及原因（完整清单见 docs/evidence/s00-06/README.md §1）：
+# 未复制及原因：
 #   windows-capture      —— 仅 Windows
 #   calloop              —— 仅 Linux
 #   livekit / libwebrtc / webrtc-sys —— 协作音频，Buddy 不需要
@@ -120,28 +115,27 @@ minisign-verify = "0.2"
 #
 # ⚠️ 只保留**实际被使用**的 patch。
 #
-# 实测：下列 3 项在 Phase 01 的闭包里未被使用，cargo 会警告
+# 下列几项当前闭包未使用，声明会让 cargo 警告
 #   "patch `X` was not used in the crate graph"
 # 保留它们只会制造噪音，故暂不声明：
 #
-#   tree-sitter-language  —— ~~引入 tree-sitter 语法时（S04-02）需要~~ **实测不需要**（S04-02）：该 patch 服务于
+#   tree-sitter-language  —— ~~引入 tree-sitter 语法时需要~~ **实测不需要**：该 patch 服务于
 #                            zed 的 tree-sitter fork；Buddy 用 crates.io 上游 tree-sitter 0.26 + tree-sitter-language 0.1.8，
-#                            不加 patch 即编译通过、Comet 语法测试 26 项通过。仅当改用 zed fork 时才需要：
+#                            不加 patch 即可编译。仅当改用 zed fork 时才需要：
 #                            { git = "https://github.com/tree-sitter/tree-sitter", rev = "43623ec9bf0eaaf7113285c46e8a09018f181b18" }
-#   async-process         —— 原由 zed `util` → `smol` 引入；S04-03 起 markdown 改用本地 util 替身
+#   async-process         —— 原由 zed `util` → `smol` 引入；markdown 改用本地 util 替身后不再需要
 #                            （crates/markdown/util-shim），闭包中已无 async-process（`cargo tree -i async-process` 为空）。
 #                            若将来重新依赖 zed `util`，必须加回：
 #                            { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }
-#   notify / notify-types —— 引入 fs 监听时（S04-04 后台解析、S07 文件监听）需要
+#   notify / notify-types —— 引入文件监听时需要
 #                            { git = "https://github.com/zed-industries/notify", rev = "d842f16b2716bd60f09caf3ae3a894237ab38f54" }
 #
-# ⚠️ 到那时**必须加回来**，否则会因 API 不匹配而编译失败。见
-#    docs/evidence/s00-06/README.md §1 与 THIRD_PARTY_NOTICES.md §5。
-# 发布构建去掉符号表（实测二进制 58.5 MB → 53.8 MB，更新包 tar.gz 12.2 MB）
+# ⚠️ 到那时**必须加回来**，否则会因 API 不匹配而编译失败。
+# 发布构建去掉符号表，减小安装包
 [profile.release]
 strip = true
 
 [patch.crates-io]
-# S07-03: Carbon must reject conflicts, not silently register an inactive shared hotkey.
+# Carbon must reject conflicts, not silently register an inactive shared hotkey.
 global-hotkey = { path = "vendor/global-hotkey" }
 async-task = { git = "https://github.com/smol-rs/async-task.git", rev = "b4486cd71e4e94fbda54ce6302444de14f4d190e" }

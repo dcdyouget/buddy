@@ -1,4 +1,4 @@
-//! 页面路由器（S05-18）—— 对应 v1 `App.tsx` 的 `PageRenderer` 与其配置 / 流式副作用，并接入 engine
+//! 页面路由器—— 对应 v1 `App.tsx` 的 `PageRenderer` 与其配置 / 流式副作用，并接入 engine
 //!
 //! 转换条件见 [`super::page_state`]；本模块负责把它们接到真实的输入：
 //!
@@ -13,7 +13,7 @@
 //! | 设置 | 叠加层（[`PageState::base_page`] 保持底层页不卸载）；设置本体为 `crate::settings::SettingsView`，侧滑层退出即释放输入 |
 //!
 //! **页面切换不改变窗口尺寸**：路由器不接触窗口，只发出 [`RouterEvent::PageChanged`]，
-//! 「离开紧凑页时展开一次」由 Phase 07 依 [`expands_window`] 执行。
+//! 「离开紧凑页时展开一次」由窗口外壳依 [`expands_window`] 执行。
 
 use super::approval_panel::Decision;
 use super::chat_page::{ChatPage, ToolActions};

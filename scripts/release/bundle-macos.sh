@@ -27,12 +27,12 @@ plutil -lint "$APP/Contents/Info.plist" >/dev/null
 # 导致客户端 `codesign --verify --strict` 拒绝更新。资源一律放 Resources。
 cp "$BINARY" "$APP/Contents/MacOS/buddy"
 cp "$TEMPLATE/icon.icns" "$APP/Contents/Resources/icon.icns"
-# GPL-3.0 随包许可（S08-10）：许可证全文与第三方声明
+# GPL-3.0 随包许可：许可证全文与第三方声明
 for f in LICENSE LICENSE-GPL-3.0-or-later LICENSE-APACHE-2.0 THIRD_PARTY_NOTICES.md; do
   cp "$ROOT/$f" "$APP/Contents/Resources/$f"
 done
 
-# Ad-hoc 签名：Apple Silicon 必须有签名才能运行；正式 Developer ID 签名与公证见 S08-08。
+# Ad-hoc 签名：Apple Silicon 必须有签名才能运行；正式 Developer ID 签名与公证见 。
 codesign --force --deep --sign - "$APP"
 codesign --verify --deep --strict "$APP"
 

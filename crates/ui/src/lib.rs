@@ -1,6 +1,6 @@
 //! Buddy 界面层（GPL-3.0-or-later）
 //!
-//! # GPUI 接入的三个**必需**前置条件（S00-01 实测）
+//! # GPUI 接入的三个**必需**前置条件（实测）
 //!
 //! 缺任一即失败，且其中两个是**静默失败**：
 //!
@@ -18,21 +18,19 @@
 //!    `no state of type GlobalThemeSettingsProvider exists`
 //!    见 [`init_theme`]。
 //!
-//! 完整证据：`docs/tasks/v2.0.0-gpui/research-log.md` §10
+//! # 模块
 //!
-//! # 模块（S03-* / S05-* / S07-* 将逐一迁入）
-//!
-//! - `theme_system` —— 设计令牌（`S03-*`）
-//! - [`markdown`] —— vendored zed markdown 的接入（`S04-*`，渲染器在 `crates/markdown`）
-//! - [`chat`] —— 聊天界面（`S05-*`）
-//! - `settings` —— 设置页（`S06-*`）
-//! - `shell` —— 窗口外壳（`S07-*`）
-//! - [`icons`] —— SVG 图标与资源源（`S04-07` 起）
-//! - [`http`] —— GPUI 图片加载用的 HTTP 客户端（`S04-08`）
-//! - [`accessibility`] —— 系统辅助功能设置（减弱动态效果，`S04-06`）
+//! - `theme_system` —— 设计令牌
+//! - [`markdown`] —— vendored zed markdown 的接入（渲染器在 `crates/markdown`）
+//! - [`chat`] —— 聊天界面
+//! - `settings` —— 设置页
+//! - `shell` —— 窗口外壳
+//! - [`icons`] —— SVG 图标与资源源（起）
+//! - [`http`] —— GPUI 图片加载用的 HTTP 客户端
+//! - [`accessibility`] —— 系统辅助功能设置（减弱动态效果）
 //! - [`components`] —— 共用小组件（v1 `components/shared`）
-//! - [`text_area`] —— 多行文本输入框（`S05-06`）
-//! - [`chat_bridge`] —— tokio（engine）↔ GPUI 前台的事件桥接（`S02-06`）
+//! - [`text_area`] —— 多行文本输入框
+//! - [`chat_bridge`] —— tokio（engine）↔ GPUI 前台的事件桥接
 
 #![warn(missing_docs)]
 
@@ -72,7 +70,6 @@ use theme::{LoadThemes, ThemeSettingsProvider, UiDensity};
 /// / `release_channel`）。
 ///
 /// 该 trait 只有 5 个方法，自行实现即可**完全跳过**那条依赖链。
-/// 见 `docs/evidence/s00-01`（实为 S00-01 的证据段）与 `research-log` §10.3。
 pub struct BuddyThemeSettings {
     /// UI 字体
     pub ui_font: Font,

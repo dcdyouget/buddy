@@ -455,8 +455,7 @@ pub enum StreamEvent {
 /// 流式事件发射器
 ///
 /// 把 StreamEvent 发送到 channel，由 UI 侧直接消费（无 IPC、无 JSON 序列化）。
-/// v1 经 Tauri 事件 `stream-event` 发给 webview；v2 UI 与 engine 同进程，改用 channel
-/// （S00-08 实测，docs/evidence/s00-08/engine-integration.md §1.1）。
+/// v1 经 Tauri 事件 `stream-event` 发给 webview；v2 UI 与 engine 同进程，改用 channel。
 pub struct StreamEventEmitter {
     tx: UnboundedSender<StreamEvent>,
     inline_think_parsers: Mutex<HashMap<usize, InlineThinkParser>>,

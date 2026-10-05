@@ -1,4 +1,4 @@
-//! 空态页（S05-16）—— 对应 v1 `src/pages/EmptyPage.tsx` 与 `.empty-shell` / `.empty-expand-trigger`
+//! 空态页—— 对应 v1 `src/pages/EmptyPage.tsx` 与 `.empty-shell` / `.empty-expand-trigger`
 //!
 //! | v1 | 本模块 |
 //! |----|------|
@@ -6,9 +6,9 @@
 //! | 输入区 `hideBorder` + `disableAutoResize` → 独立气泡 | [`Composer::set_standalone`]（路由器在切页时设置） |
 //! | 顶部居中的「展开」按钮：24×20、圆角 full、`--border-subtle`、`--control-surface`、`--shadow-static`、`ChevronUp` 14；悬停品牌色字 + `--composer-surface` 底；title「展开对话」 | 同，发出 [`EmptyPageEvent::Expand`] |
 //! | 有错误时输入区上方显示 `.chat-error` | [`EmptyPage::set_error`] + [`error_banner`]，关闭发出 [`EmptyPageEvent::DismissError`] |
-//! | 顶部左右两块拖拽区（`.empty-drag-region`） | 按 v1 留出中间展开按钮，S07-07 真实拖拽 |
+//! | 顶部左右两块拖拽区（`.empty-drag-region`） | 按 v1 留出中间展开按钮 真实拖拽 |
 //!
-//! 发送 / 模型选择 / 设置入口来自输入区自身的事件（[`EmptyPage::composer`]），由页面状态机（S05-18）订阅。
+//! 发送 / 模型选择 / 设置入口来自输入区自身的事件（[`EmptyPage::composer`]），由页面状态机订阅。
 
 use super::composer::Composer;
 use super::drag::{self, DragSource};

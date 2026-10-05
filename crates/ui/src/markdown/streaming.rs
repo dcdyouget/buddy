@@ -1,4 +1,4 @@
-//! 流式显示（S04-06）—— 逐项移植 v1 的三部分行为（`v1-final`）
+//! 流式显示—— 逐项移植 v1 的三部分行为（`v1-final`）
 //!
 //! 1. **节奏**（[`Pacer`]，v1 `useSmoothTextRenderer.ts`）：后端增量先入缓冲，按约 50 字/秒、
 //!    每秒最多 25 次小批量放出；积压多时追赶（每批至多 16 字）；窗口隐藏时立即放出全部，
@@ -283,7 +283,7 @@ mod tests {
     #[test]
     fn hidden_reveals_immediately() {
         // v1「Esc 隐藏后立即消费后续缓冲，不依赖动画帧」。v1 用例含 emoji 测 UTF-16 代理对；
-        // 硬约束 4 禁止源码出现 emoji，改用同为代理对的 CJK 扩展 B 字「𠮷」（U+20BB7）
+        // 源码不放 emoji，改用同为代理对的 CJK 扩展 B 字「𠮷」（U+20BB7）
         let mut p = Pacer::new();
         assert_eq!(p.hide(), None);
         assert_eq!(p.push("后台继续𠮷", 0.0).as_deref(), Some("后台继续𠮷"));

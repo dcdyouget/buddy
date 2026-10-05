@@ -1,4 +1,4 @@
-//! macOS LaunchAgent 开机自启服务（S07-10）。
+//! macOS LaunchAgent 开机自启服务。
 //!
 //! 该模块只负责真实系统登录项的查询和切换。托盘菜单、配置写盘和用户提示由
 //! 上层调用者负责；因此可以在上层注入 [`AutostartBackend`]，而不会让单测修改
@@ -58,7 +58,7 @@ impl SystemAutostart {
         #[cfg(not(target_os = "macos"))]
         {
             let _ = (app_name, app_path);
-            Err("S07-10 当前仅实现 macOS LaunchAgent；Windows 归 Phase 09".into())
+            Err("开机自启目前只支持 macOS".into())
         }
     }
 
@@ -72,7 +72,7 @@ impl SystemAutostart {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            Err("S07-10 当前仅实现 macOS LaunchAgent；Windows 归 Phase 09".into())
+            Err("开机自启目前只支持 macOS".into())
         }
     }
 
@@ -120,7 +120,7 @@ impl RawAutostartBackend for SystemAutostart {
         #[cfg(not(target_os = "macos"))]
         {
             let _ = enabled;
-            Err("S07-10 当前仅实现 macOS LaunchAgent；Windows 归 Phase 09".into())
+            Err("开机自启目前只支持 macOS".into())
         }
     }
 }

@@ -22,7 +22,7 @@ theme.workspace = true
 ui.workspace = true
 collections.workspace = true
 sum_tree.workspace = true
-# ⚠️ 不用 zed `util`（会拖入 36 个包）；改用本地替身，lib 名同为 `util`，vendored 源码无需改动（S04-03）
+# ⚠️ 不用 zed `util`（会拖入 36 个包）；改用本地替身，lib 名同为 `util`，vendored 源码无需改动
 util = { package = "buddy-md-util", path = "util-shim" }
 anyhow.workspace = true
 base64.workspace = true
@@ -33,11 +33,11 @@ markup5ever_rcdom.workspace = true
 pulldown-cmark.workspace = true
 smallvec.workspace = true
 stacksafe.workspace = true
-# 语法高亮（S04-02；MIT，移植自 Comet）—— 替代 zed `language` 的高亮能力
-# 只编译 Python / Shell / SQL 语法；其余语言走 buddy-syntax 的通用高亮（用户 2026-10-04 决定，S08-06 体积分析）
+# 语法高亮（MIT，移植自 Comet）—— 替代 zed `language` 的高亮能力
+# 只编译 Python / Shell / SQL 语法；其余语言走 buddy-syntax 的通用高亮（用户 2026-10-04 决定 体积分析）
 buddy-syntax.workspace = true
 # ⚠️ 与 zed 原 Cargo.toml 的差异：移除 language / settings / theme_settings / mermaid_render
-#    （由 src/{language_stub,theme_settings_shim,mermaid}.rs 替代，理由见各文件头与 S00-06）
+#    （由 src/{language_stub,theme_settings_shim,mermaid}.rs 替代，理由见各文件头与 ）
 
 [features]
 # zed 原 crate 的 feature（vendored 源码中有 `cfg(feature = "test-support")`），保留同名以免 unexpected_cfgs

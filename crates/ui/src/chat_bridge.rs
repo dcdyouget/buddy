@@ -1,7 +1,7 @@
-//! tokio（engine）↔ GPUI（前台）桥接（S02-06）
+//! tokio（engine）↔ GPUI（前台）桥接
 //!
 //! engine 的 `ChatEngine::send_message` 是 `Send + 'static` 的 tokio future；GPUI 视图是
-//! 单线程的 `Entity`（不能被 tokio 任务捕获，S00-08 §3.3）。两边只经 channel 交互：
+//! 单线程的 `Entity`（不能被 tokio 任务捕获 §3.3）。两边只经 channel 交互：
 //!
 //! ```text
 //! tokio 线程池                          GPUI 前台
@@ -14,7 +14,7 @@
 //!
 //! 它返回的 GPUI `Task` **被 drop 时会 abort 底层 tokio 任务**（`gpui_tokio.rs` 的 `defer(abort)`）。
 //! 若把对话任务交给视图持有，视图销毁 / 窗口关闭即中止生成：
-//! - 违反硬约束 7（Esc / 点击外部关闭**不得**中断流式）；
+//! - Esc / 点击外部关闭**不得**中断流式；
 //! - `send_message` 在中途被杀，来不及 `release_generation` 与持久化 →
 //!   此后每次发送都报「已有生成任务正在进行中」，且本轮消息丢失。
 //!
@@ -25,7 +25,7 @@
 //!
 //! `ChatEngine` 的 `get_config` / `load_messages` / `save_config` 等内部用 `tokio::task::spawn_blocking`
 //! （v1 的 `run_blocking`）。在 GPUI 前台直接 `.await` 会 panic：
-//! `there is no reactor running, must be called from the context of a Tokio 1.x runtime`（S02-06 实测）。
+//! `there is no reactor running, must be called from the context of a Tokio 1.x runtime`（实测）。
 //! 一律经 [`spawn_engine`] 调用。同步方法（`stop_generation` / `approve_tool_call` /
 //! `answer_tool_question`）可直接调用。
 

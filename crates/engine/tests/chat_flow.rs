@@ -1,4 +1,4 @@
-//! S02-07：对话编排（`ChatEngine::send_message`）端到端测试 —— 无 Tauri、无 UI。
+//! 对话编排（`ChatEngine::send_message`）端到端测试 —— 无 Tauri、无 UI。
 //!
 //! 用 mock SSE 驱动 v1 迁入的编排逻辑，UI 侧以「消费事件 + 调用 approve / answer / stop」模拟。
 

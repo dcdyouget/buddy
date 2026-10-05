@@ -1,4 +1,4 @@
-//! zed `util` crate 的最小替身（S04-03）。
+//! zed `util` crate 的最小替身。
 //!
 //! vendored markdown 只用到 `util` 的三项：
 //! - `util::maybe!`、`util::ResultExt` —— zed `util` 本身就是从 `gpui_util` 重导出的（`util.rs:43`
@@ -6,7 +6,7 @@
 //! - `util::markdown::generate_heading_slug` —— 下方逐字复制自 zed rev `290cbcb`
 //!   `crates/util/src/markdown.rs:4-17`（Apache-2.0）。
 //!
-//! 为什么不直接依赖 zed `util`：它另外拖入 `async_zip` / `rust-embed` / `nix` / `globset` 等 36 个包（S04-01 实测），
+//! 为什么不直接依赖 zed `util`：它另外拖入 `async_zip` / `rust-embed` / `nix` / `globset` 等 36 个包（实测），
 //! 而且在 workspace 中只有 buddy-markdown 使用它（`cargo tree -i util`）。
 
 pub use gpui_util::*;

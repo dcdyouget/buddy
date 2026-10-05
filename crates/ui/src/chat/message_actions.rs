@@ -1,4 +1,4 @@
-//! 回答操作栏（S05-14）—— 对应 v1 `src/components/chat/MessageActions.tsx` 与 `.message-action*` 样式
+//! 回答操作栏—— 对应 v1 `src/components/chat/MessageActions.tsx` 与 `.message-action*` 样式
 //!
 //! | v1 | 本模块 |
 //! |----|------|

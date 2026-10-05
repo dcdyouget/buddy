@@ -1,4 +1,4 @@
-//! SVG 图标（硬约束 4：只用 SVG，不用 emoji）
+//! SVG 图标（界面只用 SVG 图标，不用 emoji）
 //!
 //! 图形取自 v1 所用的 Lucide（`lucide-react`，ISC，见 `THIRD_PARTY_NOTICES.md`）；
 //! `streaming-star.svg` 为 Buddy 按 v1 `.streaming-next-star` 的 `clip-path` 多边形自绘。

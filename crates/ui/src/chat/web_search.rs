@@ -1,4 +1,4 @@
-//! 网络搜索卡片（S05-11）—— 对应 v1 `WebSearchSection.tsx` 与 `global.css` 的 `.websearch-*`（外壳沿用 `.think-section`）
+//! 网络搜索卡片—— 对应 v1 `WebSearchSection.tsx` 与 `global.css` 的 `.websearch-*`（外壳沿用 `.think-section`）
 //!
 //! | v1 | 本模块 |
 //! |----|------|

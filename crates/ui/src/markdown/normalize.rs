@@ -1,4 +1,4 @@
-//! Markdown 源文本规范化（S04-05）—— 逐行为移植自 v1 `src/utils/markdownNormalizer.ts`（`v1-final`）
+//! Markdown 源文本规范化—— 逐行为移植自 v1 `src/utils/markdownNormalizer.ts`（`v1-final`）
 //!
 //! v1 在交给解析器之前做两件事，v2 保持一致：
 //!

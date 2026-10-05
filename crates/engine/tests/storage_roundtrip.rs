@@ -1,4 +1,4 @@
-//! S02-04：storage 在临时目录内的往返测试（无 Tauri）。
+//! storage 在临时目录内的往返测试（无 Tauri）。
 
 mod common;
 
@@ -102,7 +102,7 @@ fn default_data_dir_matches_v1() {
     println!("default_data_dir = {}", dir.display());
 }
 
-/// S01-06-10：长会话样本（`scripts/v1-baseline/gen_long_session.py` 生成）可被 v1 格式的 storage 完整读回。
+/// 长会话样本（`scripts/v1-baseline/gen_long_session.py` 生成）可被 v1 格式的 storage 完整读回。
 /// 手动运行：先生成样本，再 `cargo test -p buddy-engine --test storage_roundtrip -- --ignored --nocapture`
 #[test]
 #[ignore = "需先运行 scripts/v1-baseline/gen_long_session.py"]

@@ -1,4 +1,4 @@
-//! 代码块渲染与复制（S04-07）—— 外观逐项取自 v1 `CodeBlock.tsx` 与 `global.css` 的 `.markdown-code-*`
+//! 代码块渲染与复制—— 外观逐项取自 v1 `CodeBlock.tsx` 与 `global.css` 的 `.markdown-code-*`
 //!
 //! 结构（v1 同）：
 //!
@@ -11,7 +11,7 @@
 //! └
 //! ```
 //!
-//! 渲染器经 vendored markdown 的 `CodeBlockRenderer::Custom`（上游本 rev 未接通，S04-07 补丁接通，
+//! 渲染器经 vendored markdown 的 `CodeBlockRenderer::Custom`（上游本 rev 未接通 补丁接通，
 //! 见 `crates/markdown/VENDOR.md`）：本模块构造外层容器与头部，代码行由 markdown 作为其子节点追加。
 
 use super::zed_markdown::{

@@ -1,10 +1,10 @@
-//! GPUI 的 HTTP 客户端（S04-08）：让 `img()` 能加载网络图片（markdown 中的 `![alt](https://…)`）
+//! GPUI 的 HTTP 客户端：让 `img()` 能加载网络图片（markdown 中的 `![alt](https://…)`）
 //!
 //! GPUI 默认的客户端是空实现，网络图片会静默走失败占位。这里用 engine 同款 `reqwest`
 //! 在 gpui_tokio 的运行时上执行请求。只服务于**无请求体**的请求（图片 GET）；带请求体时返回错误，
 //! 以免被误用为通用客户端（模型请求一律走 engine）。
 //!
-//! 代理：`reqwest` 读取 `HTTP(S)_PROXY` 环境变量；v1 的 webview 走系统代理 —— 差异见 S04-08 决策记录。
+//! 代理：`reqwest` 读取 `HTTP(S)_PROXY` 环境变量；v1 的 webview 走系统代理，v2 不读系统代理设置。
 
 use gpui::http_client::{AsyncBody, HttpClient, Inner, Request, Response, Url, http};
 use std::future::Future;

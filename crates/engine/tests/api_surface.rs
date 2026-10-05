@@ -1,7 +1,7 @@
-//! S02-08：v1 IPC 命令 → engine 入口的编译期覆盖检查。
+//! v1 IPC 命令 → engine 入口的编译期覆盖检查。
 //!
-//! `_every_v1_command_has_an_engine_entry` 从不运行，只要求能编译：覆盖表
-//! （`docs/specs/phase-02/S02-08-ipc-retire.md`）中任一 engine 入口改名或改签名都会让本文件编译失败。
+//! `_every_v1_command_has_an_engine_entry` 从不运行，只要求能编译：
+//! 任一 engine 入口改名或改签名都会让本文件编译失败。
 
 mod common;
 
@@ -25,7 +25,7 @@ async fn _every_v1_command_has_an_engine_entry(
     let _: Result<(), String> = e.approve_tool_call("id", true, false); // approve_tool_call
     let _: Result<(), String> = e.answer_tool_question("id", vec![0], None, None); // answer_tool_question
     let _: Result<AppConfig, String> = e.get_config().await; // get_config
-    let _: Result<(), String> = e.save_config(config).await; // save_config（热键注册归 Phase 07）
+    let _: Result<(), String> = e.save_config(config).await; // save_config（热键注册属于应用外壳）
     let _ = e.fetch_models("u".into(), "k".into(), None).await; // fetch_models
     let _ = e.test_latency("u".into(), "k".into(), "m".into(), None).await; // test_latency
     let _: Result<Vec<Message>, String> = e.load_messages(0, 1).await; // load_messages
@@ -35,10 +35,10 @@ async fn _every_v1_command_has_an_engine_entry(
         e.save_chat_image("a.png".into(), "image/png".into(), String::new()).await; // save_chat_image
     let _: Result<bool, String> = e.delete_chat_image(String::new()).await; // delete_chat_image
     let _: Result<String, String> = e.download_generated_image(image).await; // download_generated_image
-    // resize_window_to_page / log_window_frontend_diagnostic → Phase 07（窗口外壳），不在 engine
+    // resize_window_to_page / log_window_frontend_diagnostic → 窗口外壳，不在 engine
 }
 
-/// 原 `rust-data-models.md` 约定（S02-01 移交）：保存时默认模型必须存在于模型列表
+/// 原 `rust-data-models.md` 约定（移交）：保存时默认模型必须存在于模型列表
 #[tokio::test]
 async fn save_config_rejects_unknown_selected_model() {
     let tmp = TempDir::new().unwrap();

@@ -5,7 +5,7 @@
 
 use buddy_engine::models::{AppConfig, ModelInfo};
 
-/// S06-03 支持的模型编辑操作。
+/// 支持的模型编辑操作。
 #[derive(Clone, Debug)]
 pub enum ModelEdit {
     /// 将一个已存在的模型设为默认模型。

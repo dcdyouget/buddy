@@ -1,4 +1,4 @@
-//! ask_user 提问卡（S05-13）—— 对应 v1 `AskUserCard.tsx`、`QuestionPrompt.tsx`、`utils/askUserDisplay.ts` 与 `.tool-question-*` / `.question-prompt*` 样式
+//! ask_user 提问卡—— 对应 v1 `AskUserCard.tsx`、`QuestionPrompt.tsx`、`utils/askUserDisplay.ts` 与 `.tool-question-*` / `.question-prompt*` 样式
 //!
 //! | v1 | 本模块 |
 //! |----|------|

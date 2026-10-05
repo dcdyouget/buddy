@@ -1,4 +1,4 @@
-//! 无 Key 页（S05-16）—— 对应 v1 `src/pages/NoApiKeyPage.tsx` 与 `.brand-mark`
+//! 无 Key 页—— 对应 v1 `src/pages/NoApiKeyPage.tsx` 与 `.brand-mark`
 //!
 //! | v1 | 本模块 |
 //! |----|------|

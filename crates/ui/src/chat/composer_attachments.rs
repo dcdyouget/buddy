@@ -1,4 +1,4 @@
-//! Composer 附件状态与持久化（S05-07）。
+//! Composer 附件状态与持久化。
 
 use super::attachments::{self, DraftImage, MAX_IMAGE_COUNT};
 use super::composer::Composer;

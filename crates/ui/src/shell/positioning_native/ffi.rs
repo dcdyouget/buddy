@@ -1,4 +1,4 @@
-//! AppKit display-number and CoreGraphics UUID FFI helpers for S07-06.
+//! AppKit display-number and CoreGraphics UUID FFI helpers for .
 
 use objc::{sel, sel_impl};
 

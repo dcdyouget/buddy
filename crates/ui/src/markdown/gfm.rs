@@ -1,6 +1,6 @@
-//! GFM 元素的 v1 外观（S04-08）—— 逐项取自 `v1-final:src/styles/global.css` 的 `.ai-message-content *`
+//! GFM 元素的 v1 外观—— 逐项取自 `v1-final:src/styles/global.css` 的 `.ai-message-content *`
 //!
-//! 经 vendored markdown 的 `MarkdownDecorations`（S04-08 补丁，见 `crates/markdown/VENDOR.md`）在上游样式之后覆盖。
+//! 经 vendored markdown 的 `MarkdownDecorations`（补丁，见 `crates/markdown/VENDOR.md`）在上游样式之后覆盖。
 //!
 //! | 元素 | v1 | 这里 |
 //! |------|----|------|
@@ -12,7 +12,7 @@
 //! | 表格 | 外框圆角 md、表头淡底主色字、单元格右 / 下细线 | 同（上游用左 / 上细线，视觉等价） |
 //! | 分隔线 | 两端渐隐的 1px 线 | 同（两段各 50% 的渐变） |
 //!
-//! GPUI 做不到、已知有差距的见 S04-08 决策记录（行内代码边框 / 字号、链接悬停下划线、表格行悬停）。
+//! GPUI 做不到、与 v1 仍有差距的：行内代码边框 / 字号、链接悬停下划线、表格行悬停。
 
 use super::zed_markdown::{ListBulletKind, MarkdownDecorations, TableCellInfo};
 use crate::icons::{IconName, icon};
@@ -164,9 +164,9 @@ pub fn decorations(theme: &Theme) -> MarkdownDecorations {
             color: Some(c.markdown_accent_strong.into()),
             ..Default::default()
         }),
-        // 与 v1（WebKit）选区纯文本一致，并去掉加粗守卫（S04-09）
+        // 与 v1（WebKit）选区纯文本一致，并去掉加粗守卫
         copy_text: Some(Arc::new(super::copy::copy_text)),
-        // 流式渐显与星标按帧设置（S04-06，见 markdown::streaming）
+        // 流式渐显与星标按帧设置（见 markdown::streaming）
         veil: None,
         overlay: None,
     }

@@ -1,4 +1,4 @@
-//! Composer 图片附件的输入、校验与预览数据（S05-07）。
+//! Composer 图片附件的输入、校验与预览数据。
 //!
 //! 这里不负责写盘：图片先以 data URL 保存在 Composer 草稿中，再由 Composer
 //! 经 `spawn_engine` 调用 engine 的 `save_chat_image`。这样切换空态 / 对话页时

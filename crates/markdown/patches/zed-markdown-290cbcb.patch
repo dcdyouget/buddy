@@ -1,6 +1,6 @@
 diff --color -ruN md-orig/html/html_rendering.rs md-ours/html/html_rendering.rs
---- md-orig/html/html_rendering.rs	2026-10-05 10:32:19
-+++ md-ours/html/html_rendering.rs	2026-10-05 10:32:19
+--- md-orig/html/html_rendering.rs	2026-10-05 10:34:47
++++ md-ours/html/html_rendering.rs	2026-10-05 10:34:47
 @@ -103,6 +103,7 @@
                      &heading.source_range,
                      markdown_end,
@@ -19,51 +19,13 @@ diff --color -ruN md-orig/html/html_rendering.rs md-ours/html/html_rendering.rs
                      &block_quote.children,
 diff --color -ruN md-orig/language_stub.rs md-ours/language_stub.rs
 --- md-orig/language_stub.rs	1970-01-01 08:00:00
-+++ md-ours/language_stub.rs	2026-10-05 10:32:19
-@@ -0,0 +1,353 @@
-+//! S00-06 产物：`language` 模块 **stub**（去掉语法高亮的极简版）
++++ md-ours/language_stub.rs	2026-10-05 10:34:47
+@@ -0,0 +1,315 @@
++//! Buddy 编写：替代 zed 的 `language` 模块。
 +//!
-+//! # 为什么这是**必需**而不是优化
-+//!
-+//! 实测依赖链揭示 `language` 是真正的死结：
-+//!
-+//! ```text
-+//! language → tree-sitter (zed fork) → wasmtime-c-api-impl → 需要 cmake        ← 构建直接失败
-+//! language → settings → settings_json → migrator                             ← settings 又回来了
-+//! ```
-+//!
-+//! 两个后果：
-+//! 1. **`settings` 被重新拖回**，`theme_settings_shim.rs` 的努力白费
-+//! 2. `wasmtime` 需要 cmake；`tree-sitter` 是 zed 的 fork
-+//!
-+//! 所以要在 zed workspace 之外控制闭包，**必须把 `language` 换掉**。
-+//!
-+//! # 耦合面（实测，很小）
-+//!
-+//! | 文件 | `language` 引用 |
-+//! |------|----------------|
-+//! | `markdown.rs` | 13 处（2 个 `use` + 类型位置） |
-+//! | `parser.rs` | **0** |
-+//! | `selection.rs` | **0** |
-+//! | `path_range.rs` | **0** |
-+//! | `html.rs` | **0** |
-+//!
-+//! # 本 stub 的行为
-+//!
-+//! **不做语法高亮**：`highlight_text_resolved` 返回空 `runs`。
-+//! vendored `markdown.rs` 里的消费点会短路：
-+//!
-+//! ```ignore
-+//! let resolved = block.language.highlight_text_resolved(…);
-+//! if resolved.runs.is_empty() { return; }   // ← 直接返回，后续 HighlightId 查表不执行
-+//! ```
-+//!
-+//! 因此本 stub 只需通过编译，无需真实高亮。**代码块会按纯文本渲染。**
-+//!
-+//! # 真实实现应替换为
-+//!
-+//! **Comet 的 `crates/syntax`（MIT，1354 行）** —— 纯 tree-sitter、paint-only 契约、
-+//! **不依赖 LSP/项目机制**。它正好补上被剔除的这块。
++//! zed `language` 依赖 zed 的 tree-sitter fork（经 wasmtime 需要 cmake）并会拖回 `settings` 框架，
++//! 而 vendored `markdown.rs` 只用到其中很小的接口（`Language`、`LanguageRegistry`、`Rope`、高亮结果）。
++//! 本文件提供同名同签名的最小实现，代码块高亮交给 `buddy-syntax`。
 +
 +#![allow(dead_code)]
 +
@@ -162,7 +124,7 @@ diff --color -ruN md-orig/language_stub.rs md-ours/language_stub.rs
 +    }
 +}
 +
-+/// Buddy 的语法高亮类别（S04-02）。
++/// Buddy 的语法高亮类别。
 +///
 +/// 按 v1 `CodeBlock.tsx` 的 `buddyCodeTheme`（prism 词法类别 → `--code-syntax-*`）归并为 9 类。
 +/// 顺序即 `HighlightId` 的值：调用方（buddy-ui）必须按**同一顺序**构造 `SyntaxTheme`
@@ -351,7 +313,7 @@ diff --color -ruN md-orig/language_stub.rs md-ours/language_stub.rs
 +    ///
 +    /// 真实实现会按语言 scope 查 tree-sitter 的字符分类查询。
 +    /// 对本 spike（验证渲染）足够；**双击选词行为会略粗于 zed**，
-+    /// 归 `S05-06` 用 Comet 的 syntax 替换时修正。
++    /// 归 用 Comet 的 syntax 替换时修正。
 +    pub fn kind(&self, c: char) -> CharKind {
 +        if c.is_alphanumeric() || c == '_' {
 +            CharKind::Word
@@ -375,14 +337,14 @@ diff --color -ruN md-orig/language_stub.rs md-ours/language_stub.rs
 +    }
 +}
 diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
---- md-orig/markdown.rs	2026-10-05 10:32:19
-+++ md-ours/markdown.rs	2026-10-05 10:32:19
+--- md-orig/markdown.rs	2026-10-05 10:34:47
++++ md-ours/markdown.rs	2026-10-05 10:34:47
 @@ -1,5 +1,34 @@
  pub mod html;
  mod mermaid;
 +mod theme_settings_shim;
 +
-+/// Buddy patch（S00-06 / S04-01）：安装 vendored markdown 使用的 `ThemeSettings` shim。
++/// Buddy patch：安装 vendored markdown 使用的 `ThemeSettings` shim。
 +///
 +/// **必须在 `theme::init()` 之后调用**，否则 `MarkdownStyle::themed()` 会因
 +/// `ThemeSettings::get_global(cx)` 找不到全局而 panic。
@@ -403,7 +365,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
 +    );
 +}
 +mod language_stub;
-+/// Buddy patch（S04-02）：导出高亮类别顺序与语言注册表，供 buddy-ui 构造 SyntaxTheme 与 Markdown
++/// Buddy patch：导出高亮类别顺序与语言注册表，供 buddy-ui 构造 SyntaxTheme 与 Markdown
 +pub mod syntax {
 +    pub use crate::language_stub::{
 +        HighlightId, Language, LanguageRegistry, Rope, SYNTAX_CATEGORIES, language_for_tag,
@@ -417,7 +379,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  use gpui::HitboxBehavior;
  use gpui::UnderlineStyle;
 -use language::LanguageName;
-+// S00-06 patch：原为 `use language::LanguageName;`
++// Buddy 修改：原为 `use language::LanguageName;`
 +// 换成本地 stub —— 理由见 language_stub.rs（`language` 会拖回 settings 且需 cmake）
 +use crate::language_stub::LanguageName;
  
@@ -427,12 +389,12 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  };
  pub use path_range::{LineCol, PathWithRange};
 -use settings::Settings as _;
-+// S00-06 patch：原为 `use settings::Settings as _;`
++// Buddy 修改：原为 `use settings::Settings as _;`
 +// 那是为了让 `ThemeSettings::get_global(cx)`（settings 框架的 trait 方法）可用。
 +// 本 shim 把 `get_global` 实现为**固有方法**，故该导入不再需要。
  use smallvec::SmallVec;
 -use theme_settings::ThemeSettings;
-+// S00-06 patch：原为 `use theme_settings::ThemeSettings;`
++// Buddy 修改：原为 `use theme_settings::ThemeSettings;`
 +// 改为本地 shim，从而**不需要 zed 的 settings 框架**（见 theme_settings_shim.rs）
 +use crate::theme_settings_shim::ThemeSettings;
  use util::maybe;
@@ -1350,8 +1312,8 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                      .painted_quads()
                      .into_iter()
 diff --color -ruN md-orig/mermaid.rs md-ours/mermaid.rs
---- md-orig/mermaid.rs	2026-10-05 10:32:19
-+++ md-ours/mermaid.rs	2026-10-05 10:32:19
+--- md-orig/mermaid.rs	2026-10-05 10:34:47
++++ md-ours/mermaid.rs	2026-10-05 10:34:47
 @@ -1,1836 +1,100 @@
 -use collections::HashMap;
 -use gpui::{
@@ -1359,7 +1321,7 @@ diff --color -ruN md-orig/mermaid.rs md-ours/mermaid.rs
 -    ParsedSvg, RenderImage, SMOOTH_SVG_SCALE_FACTOR, ScrollDelta, ScrollHandle, ScrollWheelEvent,
 -    Size, Stateful, StyledText, Task, Window, img, pulsating_between, size,
 -};
-+//! S00-06 产物：`mermaid` 模块 **stub**
++//! Buddy 修改：`mermaid` 模块 **stub**
 +//!
 +//! # 为什么
 +//!
@@ -3249,13 +3211,13 @@ diff --color -ruN md-orig/mermaid.rs md-ours/mermaid.rs
 -    }
 +    // 不会到达这里：`MarkdownOptions::render_mermaid_diagrams` 默认 false，
 +    // 且所有入口都先检查该标志。
-+    unreachable!("S00-06 stub：mermaid 已被裁掉，不应渲染 mermaid 图表")
++    unreachable!("mermaid 已被裁掉，不应渲染 mermaid 图表")
  }
 diff --color -ruN md-orig/theme_settings_shim.rs md-ours/theme_settings_shim.rs
 --- md-orig/theme_settings_shim.rs	1970-01-01 08:00:00
-+++ md-ours/theme_settings_shim.rs	2026-10-05 10:32:19
-@@ -0,0 +1,148 @@
-+//! S00-06 产物：`ThemeSettings` **shim**
++++ md-ours/theme_settings_shim.rs	2026-10-05 10:34:47
+@@ -0,0 +1,147 @@
++//! Buddy 修改：`ThemeSettings` **shim**
 +//!
 +//! # 为什么需要
 +//!
@@ -3280,17 +3242,16 @@ diff --color -ruN md-orig/theme_settings_shim.rs md-ours/theme_settings_shim.rs
 +//!
 +//! 这样 patch 从「21 处」降到「1 行 + 本文件（约 120 行）」。
 +//!
-+//! # 与 S00-01 的 `ThemeSettingsProvider` 的关系
++//! # 与 `ThemeSettingsProvider` 的关系
 +//!
-+//! S00-01 发现 `theme::ThemeSettingsProvider` 是只有 5 个方法的 trait，
-+//! 自己实现即可满足 `ui` crate 的需求（见 `docs/evidence/s00-02`… 实际是 s00-01）。
++//! `theme::ThemeSettingsProvider` 是只有 5 个方法的 trait，自己实现即可满足 `ui` crate 的需求。
 +//!
 +//! 但 `markdown.rs` **不通过那个 trait**，而是直接用 `theme_settings::ThemeSettings`
 +//! 的具体类型（要用 `.buffer_font.weight`、`.buffer_line_height.value()` 这类字段与方法）。
 +//! 所以需要本 shim 提供同样的具体类型。
 +//!
 +//! 两者互补：
-+//! - `ThemeSettingsProvider`（S00-01）→ 满足 `ui` crate
++//! - `ThemeSettingsProvider`→ 满足 `ui` crate
 +//! - `ThemeSettings` shim（本文件）→ 满足 vendored `markdown`
 +
 +use gpui::{App, Font, Global, Pixels, SharedString, px};
@@ -3331,7 +3292,7 @@ diff --color -ruN md-orig/theme_settings_shim.rs md-ours/theme_settings_shim.rs
 +}
 +
 +impl ThemeSettings {
-+    /// 以指定字体与字号构造（S04-01：由 buddy-ui 传入 Buddy 排版令牌，避免 markdown 偏离 v1 观感）
++    /// 以指定字体与字号构造（由 buddy-ui 传入 Buddy 排版令牌，避免 markdown 偏离 v1 观感）
 +    ///
 +    /// markdown.rs 区分 ui / buffer（代码）两套字体；agent_* 与 markdown_preview_* 系列取同一套。
 +    pub fn new(ui_font: Font, buffer_font: Font, ui_size: Pixels, buffer_size: Pixels) -> Self {

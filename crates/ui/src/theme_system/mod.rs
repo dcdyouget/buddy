@@ -1,4 +1,4 @@
-//! Buddy 主题体系（S03-*）
+//! Buddy 主题体系
 //!
 //! 令牌数据在 [`tokens`]（最初取自 v1 `global.css`）；本模块只提供结构、全局安装与读取。
 //!
@@ -19,7 +19,7 @@
 //! # 外观只有浅 / 深两种
 //!
 //! v1 的主题设置只有 `light` / `dark`（`src/types/index.ts` `Theme`、engine `models::Theme`），
-//! **不跟随系统外观**。v2 保持一致（2026-09-27 用户决定不做「跟随系统」，S03-06 决策记录）。
+//! **不跟随系统外观**。v2 保持一致（2026-09-27 用户决定不做「跟随系统」）。
 
 pub mod easing;
 pub mod fonts;
@@ -152,7 +152,7 @@ impl Theme {
     }
 }
 
-/// 运行时切换外观：更新全局主题并刷新所有窗口（S03-06）
+/// 运行时切换外观：更新全局主题并刷新所有窗口
 pub fn set_appearance(appearance: Appearance, cx: &mut App) {
     Theme::install(appearance, cx);
     cx.refresh_windows();
@@ -187,7 +187,7 @@ mod tests {
         // v1 global.css：--bg-canvas 浅 #F3F1EE / 深 #181719
         assert_eq!(hex(light.colors.bg_canvas), "#F3F1EE");
         assert_eq!(hex(dark.colors.bg_canvas), "#181719");
-        // 品牌色两套主题相同（硬约束 2）
+        // 品牌色两套主题相同
         assert_eq!(hex(light.colors.buddy_primary), "#5B5FE9");
         assert_eq!(light.colors.buddy_primary, dark.colors.buddy_primary);
     }

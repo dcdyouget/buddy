@@ -1,4 +1,4 @@
-//! CSS 字体栈 → GPUI `Font`（S03-05）
+//! CSS 字体栈 → GPUI `Font`
 //!
 //! # 为什么要在运行时选字体
 //!
@@ -50,7 +50,7 @@ pub fn resolve_stack(stack: &[&str], installed: &HashSet<String>, default_family
 
 /// GPUI 的 `all_font_names()` 会把它内置回退栈的族名（`.ZedMono` / `Segoe UI` / `Ubuntu` …，
 /// `gpui/src/text_system.rs` `TextSystem::new`）**无条件并入**结果，不代表本机已安装。
-/// CSS 栈中与之重叠的只有 `Segoe UI`（Windows 字体）→ 非 Windows 平台剔除，免得被当作已安装（S03-05 自检发现）。
+/// CSS 栈中与之重叠的只有 `Segoe UI`（Windows 字体）→ 非 Windows 平台剔除，免得被当作已安装（自检发现）。
 #[cfg(not(target_os = "windows"))]
 const NOT_INSTALLED_ON_THIS_PLATFORM: &[&str] = &["Segoe UI"];
 #[cfg(target_os = "windows")]
@@ -104,7 +104,7 @@ pub fn mono_font(cx: &App) -> Font {
 /// 文字渲染模式：显式 `Grayscale`。
 ///
 /// macOS 自 10.14 起不做次像素抗锯齿，灰度即其现状；显式设定让 Windows（默认次像素）
-/// 在 Phase 09 与 macOS 同口径比较（research-log §4.3，风险 R4）。
+/// Windows 字体渲染与 macOS 的差异未验证。
 pub const TEXT_RENDERING: TextRenderingMode = TextRenderingMode::Grayscale;
 
 /// 应用文字渲染模式（启动时调用一次）

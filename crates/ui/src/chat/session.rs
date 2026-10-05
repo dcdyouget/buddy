@@ -1,4 +1,4 @@
-//! 会话实体（S05-17）：持有 [`ChatState`]，接收 engine 事件批次，流式期间按帧推进节奏器
+//! 会话实体：持有 [`ChatState`]，接收 engine 事件批次，流式期间按帧推进节奏器
 //!
 //! 视图（Transcript、Composer……）各自 `observe` 本实体，只在 [`ChatState::revision`] 变化时收到通知；
 //! 节奏器每帧推进但**没有新字放出时不通知** —— 流式中空转的帧不触发任何视图重算（v1 为每帧 set store）。

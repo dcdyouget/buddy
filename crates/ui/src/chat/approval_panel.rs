@@ -1,4 +1,4 @@
-//! 工具审批浮层（S05-13）—— 对应 v1 `ApprovalModal.tsx` 与 `.tool-interaction-*` / `.tool-action-button` 样式
+//! 工具审批浮层—— 对应 v1 `ApprovalModal.tsx` 与 `.tool-interaction-*` / `.tool-action-button` 样式
 //!
 //! | v1 | 本模块 |
 //! |----|------|

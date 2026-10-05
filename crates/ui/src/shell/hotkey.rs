@@ -1,4 +1,4 @@
-//! 全局热键注册与事件桥接（S07-03）。
+//! 全局热键注册与事件桥接。
 //!
 //! `GlobalHotKeyManager` 必须由 GPUI 主线程创建并保持存活。操作系统事件由
 //! global-hotkey 的一次性 handler 原样送入 tokio channel；GPUI 主线程再调用

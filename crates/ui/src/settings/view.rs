@@ -30,7 +30,7 @@ pub enum SettingsEvent {
     AddProvider(ProviderSubmission),
     /// 已保存模型的编辑交给 Router 串行保存。
     EditModel(crate::settings::model_config::ModelEdit),
-    /// 热键仅保存配置，系统注册由 Phase 07 外壳处理。
+    /// 热键仅保存配置，系统注册由窗口外壳处理。
     HotkeyChanged(String),
     /// 保存成功后发布浅 / 深主题。
     ThemeChanged(Theme),

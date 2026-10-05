@@ -1,4 +1,4 @@
-//! 思考块（S05-09）—— 对应 v1 `src/components/chat/ThinkSection.tsx` 与 `global.css` `.think-section*`
+//! 思考块—— 对应 v1 `src/components/chat/ThinkSection.tsx` 与 `global.css` `.think-section*`
 //!
 //! | v1 | 本模块 |
 //! |----|------|

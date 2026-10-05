@@ -1,4 +1,4 @@
-//! 工具调用卡片（S05-10）—— 对应 v1 `ToolSection.tsx` 与 `global.css` 的 `.tool-section*` / `.tool-status-badge*` / `.tool-detail-*`
+//! 工具调用卡片—— 对应 v1 `ToolSection.tsx` 与 `global.css` 的 `.tool-section*` / `.tool-status-badge*` / `.tool-detail-*`
 //!
 //! | v1 | 本模块 |
 //! |----|------|
@@ -9,7 +9,7 @@
 //! | 展开：「调用参数」（格式化 JSON）+ 有结果时「执行结果」/「执行错误」（无内容时「(无返回内容)」） | 紧凑代码块，最高 180px 卡内滚动 |
 //! | 卡片：圆角 lg、左侧 3px 强调色（inset 阴影）、135° 淡强调色渐变叠 `--panel-surface`；悬停 / 展开时边框带强调色 | 同 |
 //!
-//! 网络搜索（S05-11）、图片生成（S05-12）、提问卡（S05-13）有专门的卡片；未完成前按通用卡片显示。
+//! 网络搜索、图片生成、提问卡有专门的卡片；未完成前按通用卡片显示。
 
 use super::state::{ToolStatus, ToolView};
 use crate::icons::{IconName, icon};

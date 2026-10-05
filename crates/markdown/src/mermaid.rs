@@ -1,4 +1,4 @@
-//! S00-06 产物：`mermaid` 模块 **stub**
+//! Buddy 修改：`mermaid` 模块 **stub**
 //!
 //! # 为什么
 //!
@@ -96,5 +96,5 @@ pub(crate) fn render_mermaid_diagram(
 ) -> AnyElement {
     // 不会到达这里：`MarkdownOptions::render_mermaid_diagrams` 默认 false，
     // 且所有入口都先检查该标志。
-    unreachable!("S00-06 stub：mermaid 已被裁掉，不应渲染 mermaid 图表")
+    unreachable!("mermaid 已被裁掉，不应渲染 mermaid 图表")
 }

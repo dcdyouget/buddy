@@ -2,7 +2,7 @@ pub mod html;
 mod mermaid;
 mod theme_settings_shim;
 
-/// Buddy patch（S00-06 / S04-01）：安装 vendored markdown 使用的 `ThemeSettings` shim。
+/// Buddy patch：安装 vendored markdown 使用的 `ThemeSettings` shim。
 ///
 /// **必须在 `theme::init()` 之后调用**，否则 `MarkdownStyle::themed()` 会因
 /// `ThemeSettings::get_global(cx)` 找不到全局而 panic。
@@ -23,7 +23,7 @@ pub fn install_theme_settings(
     );
 }
 mod language_stub;
-/// Buddy patch（S04-02）：导出高亮类别顺序与语言注册表，供 buddy-ui 构造 SyntaxTheme 与 Markdown
+/// Buddy patch：导出高亮类别顺序与语言注册表，供 buddy-ui 构造 SyntaxTheme 与 Markdown
 pub mod syntax {
     pub use crate::language_stub::{
         HighlightId, Language, LanguageRegistry, Rope, SYNTAX_CATEGORIES, language_for_tag,
@@ -37,7 +37,7 @@ use base64::Engine as _;
 use gpui::EdgesRefinement;
 use gpui::HitboxBehavior;
 use gpui::UnderlineStyle;
-// S00-06 patch：原为 `use language::LanguageName;`
+// Buddy 修改：原为 `use language::LanguageName;`
 // 换成本地 stub —— 理由见 language_stub.rs（`language` 会拖回 settings 且需 cmake）
 use crate::language_stub::LanguageName;
 
@@ -46,11 +46,11 @@ use mermaid::{
     MermaidState, ParsedMarkdownMermaidDiagram, extract_mermaid_diagrams, render_mermaid_diagram,
 };
 pub use path_range::{LineCol, PathWithRange};
-// S00-06 patch：原为 `use settings::Settings as _;`
+// Buddy 修改：原为 `use settings::Settings as _;`
 // 那是为了让 `ThemeSettings::get_global(cx)`（settings 框架的 trait 方法）可用。
 // 本 shim 把 `get_global` 实现为**固有方法**，故该导入不再需要。
 use smallvec::SmallVec;
-// S00-06 patch：原为 `use theme_settings::ThemeSettings;`
+// Buddy 修改：原为 `use theme_settings::ThemeSettings;`
 // 改为本地 shim，从而**不需要 zed 的 settings 框架**（见 theme_settings_shim.rs）
 use crate::theme_settings_shim::ThemeSettings;
 use util::maybe;
