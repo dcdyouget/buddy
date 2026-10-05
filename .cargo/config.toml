@@ -1,4 +1,4 @@
-# 本机开发环境常设 HTTP(S)_PROXY（Clash，见 docs/dev-environment.md §2），
+# 本机开发环境常设 HTTP(S)_PROXY（如 Clash 代理），
 # reqwest 会让回环地址也走代理 → 本地 mock SSE 测试收到代理的 502。
 # 仅对 cargo 启动的进程生效；未覆盖用户已设置的 NO_PROXY。
 [env]

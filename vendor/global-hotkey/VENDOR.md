@@ -6,8 +6,8 @@
 
 唯一源码差异：`src/platform_impl/macos/mod.rs` 的 `RegisterEventHotKey` 使用 `kEventHotKeyExclusive (1 << 0)`，替代 options=0；公共 API、键码映射和其他平台保持原文。
 
-原因：Apple SDK `CarbonEvents.h` 的 HotKeyOptions 说明，非独占注册在其他进程独占占键时仍返回成功但不收到事件。S07-03 独立 child 实测复现了这一行为；应用必须在保存前获得冲突错误并保留旧注册，不能静默保存失效热键。不是 GPUI fork。
+原因：Apple SDK `CarbonEvents.h` 的 HotKeyOptions 说明，非独占注册在其他进程独占占键时仍返回成功但不收到事件。实测复现了这一行为；应用必须在保存前获得冲突错误并保留旧注册，不能静默保存失效热键。不是 GPUI fork。
 
-复核：从上述 SHA-256 的发布归档解包，逐文件比较本目录的 `src/`；应仅有该常量、原因注释及一处实参差异。根 workspace 的 `[patch.crates-io]` 使用本副本，`exclude` 防止将上游示例及 dev-dependencies 加入 Buddy 工作区；v1 独立 workspace 不受影响。
+复核：从上述 SHA-256 的发布归档解包，逐文件比较本目录的 `src/`；应仅有该常量、原因注释及一处实参差异。根 workspace 的 `[patch.crates-io]` 使用本副本，`exclude` 防止将上游示例及 dev-dependencies 加入 Buddy 工作区。
 
 验收：`shell_preview --selftest-behavior` 的 T47 独立 Carbon exclusive owner；`scripts/shell/verify_behavior.py` 的 `os-exclusive-registration` 将实参还原为 0，必须得到行为 FAIL。升级上游时重新检查其注册策略；若提供等价独占 API，应移除此补丁。

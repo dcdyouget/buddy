@@ -1,53 +1,15 @@
 Buddy — 许可证说明
 ==================
 
-本项目采用**分层许可**。不同 crate 适用不同许可证，边界由依赖方向强制保证。
+本项目分层许可（各 crate 的 Cargo.toml `license` 字段为准）：
 
-## 分层
+| 路径 | 许可证 |
+|------|--------|
+| `crates/engine/`、`crates/syntax/`、`crates/update/` | MIT（不依赖任何 GPL 代码） |
+| `crates/ui/`、`crates/markdown/`、`apps/buddy/` | GPL-3.0-or-later（依赖 zed 的 GPL 组件） |
 
-| 路径 | 许可证 | 说明 |
-|------|--------|------|
-| `crates/engine/` | **MIT** | 引擎层。**零 GPUI 依赖、零 GPL 链接** —— 可独立复用、可闭源 |
-| `crates/ui/` | **GPL-3.0-or-later** | 界面层。依赖 zed 的 `theme` / `ui`（GPL） |
-| `apps/buddy/` | **GPL-3.0-or-later** | 可执行入口。链接了界面层 |
+可执行程序与发布产物整体受 GPL-3.0-or-later 约束：分发时须提供对应源码
+（每个发布版本的源码包随发布上传，地址见版本清单的 `source.url`），
+且不能上架 Mac App Store。
 
-**整个可执行程序（`apps/buddy` 及发布产物）受 GPL-3.0-or-later 约束。**
-
-## 为什么这样分
-
-`crates/engine` 不链接任何 GPL 代码，因此其源码可以按 MIT 单独使用
-（例如用于其他项目，或作为闭源产品的一部分）。
-
-这条边界**不是靠约定，而是靠 CI 断言守护**：`crates/engine` 的依赖树中
-不得出现 `gpui` / `theme` / `ui` / 任何 GPL crate。见
-`docs/specs/phase-01/S01-04-license-guard.md`。
-
-## 许可证全文
-
-| 文件 | 内容 |
-|------|------|
-| `LICENSE-GPL-3.0-or-later` | GPL-3.0 全文（34 KB，取自 zed rev `290cbcb`，与上游一致） |
-| `LICENSE-APACHE-2.0` | Apache-2.0 全文（GPUI 平台层使用） |
-| `THIRD_PARTY_NOTICES.md` | 第三方依赖的许可证清单与来源 |
-
-## GPL 的实际约束（如实说明）
-
-采用 GPL-3.0-or-later 意味着接受以下约束：
-
-1. **分发二进制时必须提供完整源码**（含对第三方 GPL 代码的修改）
-2. **无法上架 Mac App Store** —— GPL-3 与 Apple 的 DRM/商店条款冲突
-3. **同一二进制内不可闭源增值** —— 故引擎层与界面层必须保持分层
-4. **对 GPL 代码的修改必须以 GPL 释出** —— 本项目对 vendored zed 代码的修改
-   以独立 patch 文件释出（见 `docs/specs/design-deletions.md` 与 `THIRD_PARTY_NOTICES.md`）
-
-## 致谢
-
-界面层大量复用 [Zed](https://github.com/zed-industries/zed) 的成果
-（GPUI 框架、主题系统、组件库、markdown 渲染栈），并按 GPL-3.0-or-later 的要求
-保留原始版权声明与来源注释。
-
-参考实现还包括 **Comet**（MIT 许可）—— 用于 markdown 栈、语法高亮、输入框
-（IME / 多行）与虚拟列表的架构参考。其具体来源与 rev 记录于
-`docs/tasks/v2.0.0-gpui/research-log.md` §9.7。
-
-> ⚠️ 若后续采用 Comet 的 `crates/syntax`（`S04-02`），必须保留其 MIT 版权声明与来源注释。
+许可证全文：`LICENSE-GPL-3.0-or-later`、`LICENSE-APACHE-2.0`；第三方声明：`THIRD_PARTY_NOTICES.md`。
