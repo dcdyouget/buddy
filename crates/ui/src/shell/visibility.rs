@@ -239,6 +239,10 @@ impl OutsideClickMonitor {
         {
             ensure_main_thread()?;
             let handler = block::ConcreteBlock::new(move |_event: *mut objc::runtime::Object| {
+                // 必须在事件发生时同步判断：双击选中图片会立即关闭选择器，异步再查就晚了。
+                if unsafe { system_panel_open() } {
+                    return;
+                }
                 let _ = sender.send(VisibilityEvent::ExternalMouseDown);
             })
             .copy();
@@ -277,6 +281,37 @@ impl Drop for OutsideClickMonitor {
         unsafe {
             let _: () = objc::msg_send![objc::class!(NSEvent), removeMonitor: self.token];
         }
+    }
+}
+
+/// 本应用是否正显示系统文件面板（打开 / 存储）或模态窗口。
+///
+/// macOS 的 `NSOpenPanel` / `NSSavePanel` 由独立进程「Open and Save Panel Service」绘制，
+/// 用户在面板里的点击对本进程而言是「其他应用的点击」，会被外部点击监听当作点外部收起。
+#[cfg(target_os = "macos")]
+unsafe fn system_panel_open() -> bool {
+    use objc::runtime::{BOOL, Object, YES};
+    unsafe {
+        let app: *mut Object = objc::msg_send![objc::class!(NSApplication), sharedApplication];
+        if app.is_null() {
+            return false;
+        }
+        let modal: *mut Object = objc::msg_send![app, modalWindow];
+        if !modal.is_null() {
+            return true;
+        }
+        let windows: *mut Object = objc::msg_send![app, windows];
+        if windows.is_null() {
+            return false;
+        }
+        let count: usize = objc::msg_send![windows, count];
+        let panel_class = objc::class!(NSSavePanel);
+        (0..count).any(|ix| {
+            let window: *mut Object = objc::msg_send![windows, objectAtIndex: ix];
+            let is_panel: BOOL = objc::msg_send![window, isKindOfClass: panel_class];
+            let visible: BOOL = objc::msg_send![window, isVisible];
+            is_panel == YES && visible == YES
+        })
     }
 }
 
