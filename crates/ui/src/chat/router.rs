@@ -366,16 +366,6 @@ impl PageRouter {
         &self.settings
     }
 
-    /// 退出动画的绘制进度（自检用）；关闭后不再接受输入。
-    pub fn settings_present(&self) -> bool {
-        self.settings_motion.present()
-    }
-
-    /// 覆盖层当前可见量（真实帧动画自检用）。
-    pub fn settings_amount(&self) -> f32 {
-        self.settings_motion.amount()
-    }
-
     /// 模型菜单窗口（自检用）
     pub fn model_menu(&self) -> Option<WindowHandle<ModelMenu>> {
         self.model_menu

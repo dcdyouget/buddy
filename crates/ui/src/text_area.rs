@@ -409,21 +409,6 @@ impl TextArea {
         &self.content
     }
 
-    /// 当前选区（字节偏移，自检用）
-    pub fn selected_range_for_test(&self) -> Range<usize> {
-        self.selected_range.clone()
-    }
-
-    /// 当前滚动偏移（自检用）
-    pub fn scroll_y_for_test(&self) -> Pixels {
-        self.scroll_y
-    }
-
-    /// 当前水平滚动偏移（自检用）
-    pub fn scroll_x_for_test(&self) -> Pixels {
-        self.scroll_x
-    }
-
     /// 上一帧绘制的文字区域（自检用；尚未绘制时为 `None`）
     pub fn painted_bounds_for_test(&self) -> Option<Bounds<Pixels>> {
         self.layout.as_ref().map(|l| l.bounds)

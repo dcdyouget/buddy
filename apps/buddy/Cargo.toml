@@ -24,10 +24,6 @@ log.workspace = true
 env_logger.workspace = true
 
 [dev-dependencies]
-# examples/update_probe.rs（S08-03）：不经界面的自更新端到端探针
+# examples/update_probe.rs：不经界面验证自更新（check → download → install）
 reqwest.workspace = true
-# examples/chat_bridge.rs（S02-06 驱动程序）：mock SSE 与配置构造
 tokio.workspace = true
-serde_json.workspace = true
-# examples/markdown_preview.rs（S04-07 T04）：以 CommonMark 解析结果为 v1 复制内容的对照
-pulldown-cmark.workspace = true

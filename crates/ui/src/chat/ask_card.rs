@@ -305,16 +305,6 @@ impl AskUserCard {
         self.submitted
     }
 
-    /// 自定义回答框（自检用）
-    pub fn custom_area(&self) -> &Entity<TextArea> {
-        &self.custom
-    }
-
-    /// 补充信息框（自检用）
-    pub fn option_input(&self, index: usize) -> Option<&Entity<TextArea>> {
-        self.option_inputs.get(&index)
-    }
-
     /// 点选选项
     pub fn toggle_option(&mut self, index: usize, cx: &mut Context<Self>) {
         if !self.input.awaiting || self.submitting {

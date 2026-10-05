@@ -23,11 +23,6 @@ impl Composer {
         images.into_iter().map(|image| image.attachment).collect()
     }
 
-    /// 供预览 / 自测注入真实附件，也用于选择器和剪贴板的共同入口。
-    pub fn add_images(&mut self, images: Vec<DraftImage>, cx: &mut Context<Self>) {
-        self.add_drafts(images, cx);
-    }
-
     /// 当前图片数量（自测与路由器使用）。
     pub fn image_count(&self) -> usize {
         self.images.len()
@@ -147,11 +142,6 @@ impl Composer {
         }
         self.saving_images = self.engine.is_some() && self.images.iter().any(|i| i.attachment.path.is_empty());
         cx.notify();
-    }
-
-    /// 移除指定草稿图片；路由器 / 预览自测使用同一删除与 engine 清理链路。
-    pub fn remove_image_by_id(&mut self, id: &str, cx: &mut Context<Self>) {
-        self.remove_image(id, cx);
     }
 
     pub(super) fn add_paths(&mut self, paths: &[std::path::PathBuf], cx: &mut Context<Self>) {

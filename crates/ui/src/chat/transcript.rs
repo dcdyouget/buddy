@@ -19,7 +19,7 @@ use super::ask_card::{self, AnswerFn, AskUserCard, CardInput};
 use super::drag::{self, DragSource};
 use super::image_gen;
 use super::image_gen_state::{
-    self, CopyStates, DownloadFn, DownloadState, DownloadStates, ImageLoadStates, RetryStates,
+    self, CopyStates, DownloadFn, DownloadStates, ImageLoadStates, RetryStates,
 };
 use super::message_actions;
 use super::message_row;
@@ -194,11 +194,6 @@ impl Transcript {
         this
     }
 
-    /// 替换打开链接的动作（自检用）
-    pub fn set_open_handler(&mut self, open: OpenFn) {
-        self.open_url = open;
-    }
-
     /// Shared callback source used by ChatPage's edge strips and Markdown
     /// blank-body dragging. Kept stable so self-tests can replace the action.
     pub fn drag_source(&self) -> DragSource {
@@ -208,27 +203,6 @@ impl Transcript {
     /// 替换生成图片的保存动作（生产路由可接入 engine `download_generated_image`）。
     pub fn set_download_handler(&mut self, download: DownloadFn) {
         self.download_image = download;
-    }
-
-    /// 读取图片保存状态（预览自测用）。
-    pub fn download_state_for_test(&self, image_id: &str) -> Option<DownloadState> {
-        self.download_states
-            .lock()
-            .ok()
-            .and_then(|states| states.get(image_id).cloned())
-    }
-
-    /// 读取图片重试点击状态（预览自测用）。
-    pub fn retry_state_for_test(&self, image_id: &str) -> bool {
-        self.retry_states
-            .lock()
-            .ok()
-            .is_some_and(|states| states.contains(image_id))
-    }
-
-    /// 读取资源图片缓存数量（预览自测用）。
-    pub fn image_cache_len_for_test(&self, cx: &App) -> usize {
-        self.image_cache.read(cx).len()
     }
 
     /// 读取图片加载结果（预览自测用）。
@@ -242,22 +216,9 @@ impl Transcript {
             .and_then(|states| states.get(image_id).cloned())
     }
 
-    /// 读取复制提示词反馈状态（预览自测用）。
-    pub fn copy_state_for_test(&self, row_id: &str) -> bool {
-        self.copy_states
-            .lock()
-            .ok()
-            .is_some_and(|states| states.contains(row_id))
-    }
-
     /// 设置回答回调（提问卡的「确认 / 跳过」经它交给 engine）
     pub fn set_answer_fn(&mut self, answer: AnswerFn) {
         self.answer = Some(answer);
-    }
-
-    /// 提问卡（自检用）
-    pub fn ask_card_for_test(&self, tool_id: &str) -> Option<Entity<AskUserCard>> {
-        self.ask_cards.get(tool_id).map(|(card, _)| card.clone())
     }
 
     /// 取（或建）提问卡；卡内状态变化 → 重测该行
@@ -292,11 +253,6 @@ impl Transcript {
     /// 当前行（自检与测试用）
     pub fn rows(&self) -> &[Row] {
         &self.rows
-    }
-
-    /// 列表状态（自检用）
-    pub fn list_state(&self) -> &ListState {
-        &self.list
     }
 
     /// 按会话状态更新行：一次最小 splice + 只重测内容变化的行
@@ -457,11 +413,6 @@ impl Transcript {
                 .size_full(),
             )
             .into_any_element()
-    }
-
-    /// 某行最近一次绘制的屏幕边界
-    pub fn painted_row_bounds(&self, row_id: &str) -> Option<gpui::Bounds<Pixels>> {
-        self.painted_rows.borrow().get(row_id).copied()
     }
 
     fn render_row_content(
@@ -994,29 +945,6 @@ impl Transcript {
         .size_full()
     }
 
-    /// 会话状态（自检用）
-    pub fn conversation_state<'a>(&self, cx: &'a App) -> &'a super::state::ChatState {
-        &self.conversation.read(cx).state
-    }
-
-    /// 切换工具卡片展开（自检用，与点击标题行同一路径）
-    pub fn toggle_tool_for_test(&mut self, row_id: &str, cx: &mut Context<Self>) {
-        let state = &self.conversation.read(cx).state;
-        let current = self.tool_expanded.get(row_id).copied().unwrap_or_else(|| {
-            self.rows
-                .iter()
-                .find(|r| r.id == row_id)
-                .and_then(|r| match &r.kind {
-                    RowKind::Tool { call, .. } => {
-                        state.tools.get(call).map(|t| default_open(t, false, false))
-                    }
-                    _ => None,
-                })
-                .unwrap_or(false)
-        });
-        self.set_tool_expanded(row_id, !current, cx);
-    }
-
     /// 操作栏「已复制」反馈，1.6 秒后恢复（v1）
     fn mark_copied(&mut self, row_id: String, cx: &mut Context<Self>) {
         let task = cx.spawn(async move |this, cx| {
@@ -1043,12 +971,6 @@ impl Transcript {
         }
     }
 
-    /// 预览中定位到一张卡片时避免尾部跟随把目标行挤出视口。
-    pub fn stop_following_for_test(&mut self, cx: &mut Context<Self>) {
-        self.list.set_follow_mode(FollowMode::Normal);
-        cx.notify();
-    }
-
     /// 设置工具卡片展开（用户点击）：记住用户选择并重测该行
     fn set_tool_expanded(&mut self, row_id: &str, expanded: bool, cx: &mut Context<Self>) {
         self.tool_expanded.insert(row_id.to_string(), expanded);
@@ -1057,16 +979,6 @@ impl Transcript {
             self.remeasured_rows += 1;
         }
         cx.notify();
-    }
-
-    /// 当前处于「已复制」的操作栏行（自检用）
-    pub fn copied_row_for_test(&self) -> Option<String> {
-        self.copied_actions.as_ref().map(|(id, _)| id.clone())
-    }
-
-    /// 工具详情的卡内滚动句柄（自检用）
-    pub fn detail_scroll_for_test(&self, detail_id: &str) -> Option<ScrollHandle> {
-        self.detail_scroll.get(detail_id).cloned()
     }
 
     /// 最后一条可见消息（tool 消息不显示）
@@ -1086,11 +998,6 @@ impl Transcript {
         !self.list.is_following_tail()
             && !self.conversation.read(cx).state.is_streaming()
             && !self.rows.is_empty()
-    }
-
-    /// 是否有未读新消息（v1 `hasUnseenMessages`）
-    pub fn has_unseen(&self, cx: &App) -> bool {
-        !self.list.is_following_tail() && self.last_visible_message(cx) != self.last_seen
     }
 
     /// 平滑滚到底部后恢复跟随（v1 `scrollTo({ behavior: 'smooth' })`）

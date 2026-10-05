@@ -95,13 +95,6 @@ pub fn main_window(cx: &App) -> Option<WindowHandle<AppShell>> {
     cx.try_global::<Runtime>().map(|runtime| runtime.window)
 }
 
-/// 实际有效热键，不把配置写盘当作系统注册成功。
-pub fn registered_hotkey(cx: &App) -> Option<String> {
-    cx.try_global::<Runtime>()
-        .and_then(|runtime| runtime.hotkey.borrow().current())
-        .map(|key| key.to_string())
-}
-
 /// v1 三态 toggle：可见且聚焦时隐藏，其余情况唤回前台。
 pub async fn toggle(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Result<(), String> {
     let prepared = prepare(handle, cx)?;

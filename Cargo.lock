@@ -773,9 +773,7 @@ dependencies = [
  "buddy-update",
  "env_logger",
  "log",
- "pulldown-cmark",
  "reqwest",
- "serde_json",
  "tokio",
 ]
 

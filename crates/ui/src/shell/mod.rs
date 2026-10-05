@@ -85,21 +85,6 @@ impl AppShell {
         self.router.clone()
     }
 
-    /// 当前进程为指定显示器记住的位置；供窗口诊断读取，不从磁盘恢复。
-    pub fn saved_window_position(&self, display_key: &str) -> Option<positioning::Point> {
-        self.positions.saved(display_key)
-    }
-
-    /// 当前入场阶段，供真实渲染自测读取。
-    pub fn entrance_phase(&self) -> entrance::EntrancePhase {
-        self.entrance.phase()
-    }
-
-    /// 入场开始后的已采样时长，供真实帧验收读取。
-    pub fn entrance_elapsed_ms(&self) -> u64 {
-        self.entrance.elapsed_ms()
-    }
-
     /// 最近一次真实 render 采样的 underlay 参数；稳定态或展开页为 `None`。
     pub fn last_entrance_frame(&self) -> Option<entrance::EntranceFrame> {
         self.last_entrance_frame

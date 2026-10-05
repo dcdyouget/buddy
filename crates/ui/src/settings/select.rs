@@ -131,11 +131,6 @@ impl SettingsSelect {
         cx.notify();
     }
 
-    /// 当前已绘制的菜单边界，供真实鼠标自检定位选项。
-    pub fn painted_menu_bounds_for_test(&self) -> Option<Bounds<Pixels>> {
-        self.menu_bounds.get()
-    }
-
     /// 当前帧记录的选择器边界，供预览自测定位真实点击点。
     pub fn painted_bounds_for_test(&self) -> Option<Bounds<Pixels>> {
         self.last_bounds.get()

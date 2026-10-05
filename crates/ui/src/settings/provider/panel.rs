@@ -132,10 +132,6 @@ impl AddProviderPanel {
     pub fn control_bounds(&self, id: &str) -> Option<Bounds<Pixels>> {
         self.bounds.borrow().get(id).copied()
     }
-    /// 兼容早期预览命名。
-    pub fn get_control_bounds(&self, id: &str) -> Option<Bounds<Pixels>> {
-        self.control_bounds(id)
-    }
 
     /// 选择预设并同步 draft 字段。
     pub fn select_preset(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -239,21 +235,4 @@ impl AddProviderPanel {
         self.focus_nav.handle(&key)
     }
 
-    /// provider-content 使用的 ScrollHandle，供预览/外层自测观察滚动位置。
-    pub fn content_scroll(&self) -> gpui::ScrollHandle {
-        self.focus_nav.scroll.clone()
-    }
-
-    /// 模型上下文菜单的实际边界。
-    pub fn context_menu_bounds(&self, model_id: &str, cx: &App) -> Option<Bounds<Pixels>> {
-        self.model_context
-            .iter()
-            .find(|(id, _)| id == model_id)
-            .and_then(|(_, select)| select.read(cx).painted_menu_bounds_for_test())
-    }
-
-    /// 当前焦点控件的稳定 ID，供真实键盘自测确认 Tab 顺序。
-    pub fn focused_control(&self, window: &gpui::Window, cx: &gpui::App) -> Option<String> {
-        self.focus_nav.focused_id(self, window, cx)
-    }
 }

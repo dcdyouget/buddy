@@ -49,5 +49,3 @@ pub mod streaming;
 #[allow(missing_docs)]
 pub mod tools;
 
-/// 引擎层版本（用于诊断输出）
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");

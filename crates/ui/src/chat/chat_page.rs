@@ -80,12 +80,6 @@ impl ChatPage {
         Self { conversation, transcript, composer, actions, drag, drag_source, focus: cx.focus_handle() }
     }
 
-    /// 替换拖动窗口的动作（自检用：合成鼠标事件下没有系统事件可供 `start_window_move` 使用）
-    pub fn set_drag_handler(&mut self, drag: DragFn) {
-        *self.drag_source.borrow_mut() = drag.clone();
-        self.drag = drag;
-    }
-
     /// 消息列表（自检用）
     pub fn transcript(&self) -> &Entity<Transcript> {
         &self.transcript

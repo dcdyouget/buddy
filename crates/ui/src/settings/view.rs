@@ -182,24 +182,9 @@ impl SettingsView {
         &self.model_list
     }
 
-    /// 获取设置内容滚动视口的当前边界，供焦点可见性自测使用。
-    pub fn scroll_bounds(&self) -> Bounds<Pixels> {
-        self.scroll.bounds()
-    }
-
     /// 二层添加 Provider 面板（真实输入自检用）。
     pub fn provider_panel(&self) -> &gpui::Entity<AddProviderPanel> {
         &self.provider
-    }
-
-    /// 是否正在显示添加 Provider 流程。
-    pub fn provider_open(&self) -> bool {
-        self.provider_motion.interactive()
-    }
-
-    /// 最后一帧添加按钮边界。
-    pub fn add_button_bounds(&self) -> Option<Bounds<Pixels>> {
-        self.add_bounds.get()
     }
 
     /// 在当前设置页打开新增面板；每次打开与 v1 挂载新表单一致。
@@ -237,11 +222,6 @@ impl SettingsView {
     /// 是否接受输入。
     pub fn active(&self) -> bool {
         self.active
-    }
-
-    /// 最后一帧实际覆盖层边界（动画位移 / 布局自检用）。
-    pub fn painted_bounds(&self) -> Option<Bounds<Pixels>> {
-        self.bounds.get()
     }
 
     /// 把 Tab 导航选中的模型控件或添加入口滚入设置内容视口。

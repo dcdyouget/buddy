@@ -86,11 +86,6 @@ impl EntranceMotion {
         self.started = Instant::now();
     }
 
-    /// 当前阶段。
-    pub(crate) fn phase(&self) -> EntrancePhase {
-        self.phase
-    }
-
     /// 当前动画是否仍需请求下一帧。
     ///
     /// 终态转换由 [`Self::frame`] 独占。一次 render 可能在进入时尚未超时，
@@ -135,13 +130,6 @@ impl EntranceMotion {
         frame_at(progress(elapsed), metrics::RADIUS_FULL)
     }
 
-    /// 已开始入场后的经过时间，供真实帧采样验收读取。
-    pub(crate) fn elapsed_ms(&self) -> u64 {
-        self.started
-            .elapsed()
-            .as_millis()
-            .min(duration().as_millis()) as u64
-    }
 }
 
 fn duration() -> Duration {
@@ -238,11 +226,11 @@ mod tests {
     #[test]
     fn reset_and_play_are_the_only_triggers() {
         let mut motion = EntranceMotion::default();
-        assert_eq!(motion.phase(), EntrancePhase::Settled);
+        assert_eq!(motion.phase, EntrancePhase::Settled);
         motion.reset_with_preference(false);
-        assert_eq!(motion.phase(), EntrancePhase::Hidden);
+        assert_eq!(motion.phase, EntrancePhase::Hidden);
         motion.play_with_preference(false);
-        assert_eq!(motion.phase(), EntrancePhase::Entering);
+        assert_eq!(motion.phase, EntrancePhase::Entering);
     }
 
     #[test]
@@ -258,13 +246,13 @@ mod tests {
         );
 
         assert!(motion.animating_with_preference(false));
-        assert_eq!(motion.phase(), EntrancePhase::Entering);
+        assert_eq!(motion.phase, EntrancePhase::Entering);
         assert!(
             motion
                 .frame_with_preference(true, false, duration() + Duration::from_millis(1))
                 .is_none()
         );
-        assert_eq!(motion.phase(), EntrancePhase::Settled);
+        assert_eq!(motion.phase, EntrancePhase::Settled);
         assert!(!motion.animating_with_preference(false));
     }
 
@@ -272,10 +260,10 @@ mod tests {
     fn reduced_motion_resets_and_plays_without_animation() {
         let mut motion = EntranceMotion::default();
         motion.reset_with_preference(true);
-        assert_eq!(motion.phase(), EntrancePhase::Settled);
+        assert_eq!(motion.phase, EntrancePhase::Settled);
         assert!(!motion.animating());
         motion.play_with_preference(true);
-        assert_eq!(motion.phase(), EntrancePhase::Settled);
+        assert_eq!(motion.phase, EntrancePhase::Settled);
         assert!(!motion.animating());
     }
 }

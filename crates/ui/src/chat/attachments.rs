@@ -23,15 +23,6 @@ pub struct DraftImage {
     pub preview: Arc<Image>,
 }
 
-/// 图片输入来源，用于统一三种入口的校验。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ImageInputKind {
-    /// 文件选择或拖放。
-    File,
-    /// 系统剪贴板。
-    Clipboard,
-}
-
 /// 将合法字节包装为未写盘的附件。
 pub fn draft_from_bytes(
     name: impl Into<String>,

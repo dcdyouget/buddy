@@ -138,16 +138,6 @@ impl TrayService {
         self.refresh_menu_state();
     }
 
-    /// 返回当前托盘菜单中显示的自启勾选状态。
-    pub fn autostart_checked(&self) -> bool {
-        self.autostart.is_checked()
-    }
-
-    /// 返回自启菜单当前是否允许点击。
-    pub fn autostart_menu_enabled(&self) -> bool {
-        self.autostart.is_enabled()
-    }
-
     fn refresh_menu_state(&self) {
         self.autostart
             .set_enabled(self.autostart_available && !self.autostart_busy);

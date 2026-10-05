@@ -1,10 +1,6 @@
 use super::*;
 
 impl SettingsView {
-    /// 热键录制实体（真实输入与显示核查）。
-    pub fn hotkey_recorder(&self) -> &gpui::Entity<super::super::hotkey::HotkeyRecorder> {
-        &self.hotkey
-    }
 
     /// 外观控件（真实点击与配置恢复核查）。
     pub fn theme_control(&self) -> &gpui::Entity<super::super::theme_control::ThemeControl> {

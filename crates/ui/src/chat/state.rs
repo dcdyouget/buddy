@@ -539,11 +539,6 @@ impl ChatState {
         }
     }
 
-    /// 是否仍有待放出的正文或待处理事件
-    pub fn has_pending(&self) -> bool {
-        self.live.as_ref().is_some_and(|l| !l.queue.is_empty() || !l.pacer.pending().is_empty())
-    }
-
     /// 处理队首事件，直到遇到尚未放完的正文（v1 `_drainStreamEventQueue`）
     fn drain(&mut self, now: f64) {
         loop {

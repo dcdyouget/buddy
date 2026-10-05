@@ -56,12 +56,6 @@ pub fn with_blank_drag(markdown: MarkdownElement, source: DragSource) -> Markdow
     markdown.on_blank_mouse_down(move |window| drag::invoke(&source, window))
 }
 
-/// 助手行容器：左右 space-4，上下按位置
-pub fn assistant_row(pos: RowPos, content: impl IntoElement) -> Div {
-    let (top, bottom) = assistant_padding(pos);
-    div().w_full().px(px(m::SPACE_4)).pt(px(top)).pb(px(bottom)).child(content)
-}
-
 /// Assistant row with drag regions restricted to the row's actual padding.
 /// The content area is intentionally left without a structural listener;
 /// Markdown owns its own blank-body hit testing and controls remain isolated.
@@ -122,38 +116,6 @@ pub fn user_text_style(window: &gpui::Window, cx: &App) -> MarkdownStyle {
         paragraph_line_height: relative(USER_LINE_HEIGHT),
         ..Default::default()
     }
-}
-
-/// 用户消息行（`text` 为 [`user_text_style`] 渲染的正文；图片附件由 S05-07 接入）
-pub fn user_row(text: impl IntoElement, cx: &App) -> AnyElement {
-    let theme = cx.buddy_theme();
-    let c = theme.colors;
-    div()
-        .w_full()
-        .px(px(m::SPACE_4))
-        .py(px(m::SPACE_2))
-        .flex()
-        .justify_end()
-        .child(
-            div()
-                .max_w(relative(USER_MAX_WIDTH))
-                .min_w_0()
-                .px(px(m::SPACE_3))
-                .py(px(m::SPACE_2))
-                .rounded_tl(px(m::RADIUS_MD))
-                .rounded_tr(px(m::RADIUS_MD))
-                .rounded_br(px(m::RADIUS_MD))
-                .rounded_bl(px(m::RADIUS_SM))
-                .bg(c.user_bubble)
-                .border_1()
-                .border_color(c.user_bubble_border)
-                .shadow(box_shadows(theme.shadows.shadow_static))
-                .text_color(c.text_primary)
-                .text_size(px(m::FONT_SIZE_MD))
-                .line_height(relative(USER_LINE_HEIGHT))
-                .child(text),
-        )
-        .into_any_element()
 }
 
 /// User row variant used by the transcript so the bubble's surrounding blank
@@ -224,36 +186,6 @@ pub fn user_row_with_drag(text: impl IntoElement, cx: &App, source: DragSource) 
         .into_any_element()
 }
 
-/// 用户消息行，附带 v1 同样的图片缩略图带。
-pub fn user_row_with_images(
-    text: impl IntoElement,
-    images: &[ImageAttachment],
-    has_text: bool,
-    window: &gpui::Window,
-    cx: &App,
-) -> AnyElement {
-    if images.is_empty() {
-        return user_row(text, cx);
-    }
-    let columns = if images.len() > 1 { 2 } else { 1 };
-    // Match v1's two responsive grid columns inside the 76% user bubble.
-    let available = (f32::from(window.viewport_size().width) - m::SPACE_4 * 2.0) * USER_MAX_WIDTH
-        - m::SPACE_3 * 2.0 - 2.0;
-    let max_width = ((available - m::SPACE_1 * (columns - 1) as f32) / columns as f32)
-        .clamp(m::SPACE_12, 260.0);
-    let image_strip = div()
-        .grid()
-        .grid_cols(columns)
-        .max_w(px(max_width * columns as f32 + m::SPACE_1 * (columns - 1) as f32))
-        .gap(px(m::SPACE_1))
-        .when(has_text, |d| d.mb(px(m::SPACE_2)))
-        .children(images.iter().map(|image| attachment_image_sized(image, cx, max_width)));
-    user_row(
-        div().flex().flex_col().items_end().child(image_strip).child(text),
-        cx,
-    )
-}
-
 /// User row with attachments and a structural blank drag region.
 pub fn user_row_with_images_drag(
     text: impl IntoElement,
@@ -284,11 +216,6 @@ pub fn user_row_with_images_drag(
         cx,
         source,
     )
-}
-
-/// 渲染消息附件；本地路径、HTTP/data URL 均走现有图片来源链路。
-pub fn attachment_image(image: &ImageAttachment, cx: &App) -> AnyElement {
-    attachment_image_sized(image, cx, 260.0)
 }
 
 fn attachment_image_sized(image: &ImageAttachment, cx: &App, max_width: f32) -> AnyElement {
