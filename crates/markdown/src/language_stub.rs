@@ -181,28 +181,16 @@ fn category_of(kind: buddy_syntax::HighlightKind) -> Option<usize> {
     })
 }
 
-/// 代码块围栏标签 → 高亮方式。
-///
-/// 用户决定（2026-10-04，S08-06 体积分析）：只内置 Python / Shell / SQL 的 tree-sitter 语法；
-/// 其余任何带标签的代码块（rust、ts、java、objc、graphql…）都用 `buddy_syntax::generic` 通用高亮。
+/// 代码块围栏标签 → 高亮方式：Python / Shell / SQL 用内置语法，其余带标签的代码块用通用高亮，
 /// 纯文本类标签（[`PLAIN_TAGS`]）与无标签代码块不着色。
-///
-/// 此前（S04-02 / 2026-09-27）按 v1 prism 集合 + 额外 10 种语言内置全部语法，约占发布二进制 30 MB。
 fn resolve(tag: &str) -> Option<Highlighter> {
-    use buddy_syntax::LanguageId as L;
     let tag = tag.trim().split_ascii_whitespace().next()?.to_ascii_lowercase();
     if PLAIN_TAGS.contains(&tag.as_str()) {
         return None;
     }
-    let id = match tag.as_str() {
-        // prism 把这些都归入 markup
-        "markup" | "xml" | "svg" | "mathml" | "ssml" | "rss" | "atom" => Some(L::Html),
-        "flow" => Some(L::JavaScript),
-        other => buddy_syntax::language_for_alias(other),
-    };
-    Some(match id {
-        Some(id) if buddy_syntax::supports_language(id) => Highlighter::Grammar(id),
-        _ => Highlighter::Generic,
+    Some(match buddy_syntax::language_for_alias(&tag) {
+        Some(id) => Highlighter::Grammar(id),
+        None => Highlighter::Generic,
     })
 }
 
@@ -262,12 +250,7 @@ impl Language {
             return ResolvedHighlights::default();
         };
         let lines = match highlighter {
-            Highlighter::Grammar(id) => buddy_syntax::highlight(buddy_syntax::HighlightRequest {
-                source,
-                path: None,
-                fence_tag: Some(language_tag(id)),
-            })
-            .map(|doc| doc.lines),
+            Highlighter::Grammar(id) => buddy_syntax::highlight(id, source),
             Highlighter::Generic => buddy_syntax::generic::highlight(source),
         };
         let Ok(lines) = lines else {
@@ -292,41 +275,6 @@ impl Language {
             sources: SmallVec::new(),
             runs: runs.into(),
         }
-    }
-}
-
-/// Comet 按围栏标签识别语言；为已解析出的 `LanguageId` 取一个它认得的标签
-fn language_tag(id: buddy_syntax::LanguageId) -> &'static str {
-    use buddy_syntax::LanguageId as L;
-    match id {
-        L::Rust => "rust",
-        L::JavaScript => "javascript",
-        L::Jsx => "jsx",
-        L::TypeScript => "typescript",
-        L::Tsx => "tsx",
-        L::Python => "python",
-        L::Go => "go",
-        L::Json => "json",
-        L::Markdown => "markdown",
-        L::Html => "html",
-        L::Css => "css",
-        L::Yaml => "yaml",
-        L::C => "c",
-        L::Cpp => "cpp",
-        L::Kotlin => "kotlin",
-        L::Swift => "swift",
-        L::Sql => "sql",
-        L::Jsonc => "jsonc",
-        L::Bash => "bash",
-        L::Toml => "toml",
-        L::CSharp => "csharp",
-        L::Java => "java",
-        L::Ruby => "ruby",
-        L::Php => "php",
-        L::Lua => "lua",
-        L::Nix => "nix",
-        L::Make => "make",
-        L::Dockerfile => "dockerfile",
     }
 }
 
