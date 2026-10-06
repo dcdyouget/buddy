@@ -45,7 +45,7 @@ YES=false
 WINDOWS_DIR=""
 HAS_WINDOWS=false
 SOURCE_PUSHED=false
-WINDOWS_WORKFLOW="Windows"
+WINDOWS_WORKFLOW="ci.yml"
 WINDOWS_ARTIFACT="Buddy-windows-x86_64"
 
 fail() { printf '\n错误：%s\n' "$*" >&2; exit 1; }

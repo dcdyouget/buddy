@@ -1,9 +1,37 @@
-name: Windows
+name: CI
 
 on:
   push:
     branches: [main]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '**/Cargo.toml'
+      - '**/*.rs'
+      - 'apps/**'
+      - 'crates/**'
+      - 'vendor/**'
+      - 'scripts/**'
+      - '.cargo/**'
+      - 'rust-toolchain*'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/**'
   pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '**/Cargo.toml'
+      - '**/*.rs'
+      - 'apps/**'
+      - 'crates/**'
+      - 'vendor/**'
+      - 'scripts/**'
+      - '.cargo/**'
+      - 'rust-toolchain*'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/**'
   workflow_dispatch:
     inputs:
       ref:
