@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { canonicalOssResource, compareVersions, ossAuthorization, ossStringToSign, publishSequence } from "./publish-ci-artifacts.mjs";
+import { canonicalOssResource, compareVersions, fetchWithTimeout, ossAuthorization, ossStringToSign, publishSequence } from "./publish-ci-artifacts.mjs";
 
 test("OSS V1 canonical resource rejects unsafe object keys", () => {
   assert.equal(canonicalOssResource("buddy-release", "buddy/releases/0.2.0/manifest.json"), "/buddy-release/buddy/releases/0.2.0/manifest.json");
@@ -57,4 +57,63 @@ test("stable.json is the last publication operation", async () => {
   const events = [];
   await publishSequence({ files: ["a"], ...sequenceCallbacks(events) });
   assert.deepEqual(events, ["artifact:a", "artifact:a.sig", "notes", "manifest", "release", "version", "stable"]);
+});
+
+async function withMockFetch(mock, run) {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = mock;
+  try {
+    await run();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+test("a transient public GET connection failure retries and succeeds", { concurrency: false }, async () => {
+  let calls = 0;
+  await withMockFetch(async () => {
+    calls += 1;
+    if (calls === 1) {
+      const error = new TypeError("fetch failed");
+      error.cause = { code: "UND_ERR_SOCKET" };
+      throw error;
+    }
+    return new Response("ok", { status: 200 });
+  }, async () => {
+    const response = await fetchWithTimeout("https://example.invalid/public", {}, { attempts: 3 });
+    assert.equal(await response.text(), "ok");
+  });
+  assert.equal(calls, 2);
+});
+
+test("a transient 5xx response retries and succeeds", { concurrency: false }, async () => {
+  let calls = 0;
+  await withMockFetch(async () => {
+    calls += 1;
+    return calls === 1 ? new Response("busy", { status: 503 }) : new Response("ok", { status: 200 });
+  }, async () => {
+    const response = await fetchWithTimeout("https://example.invalid/public", {}, { attempts: 2 });
+    assert.equal(response.status, 200);
+  });
+  assert.equal(calls, 2);
+});
+
+test("retry limit and stable PUT default both make no extra request", { concurrency: false }, async () => {
+  let boundedCalls = 0;
+  await withMockFetch(async () => {
+    boundedCalls += 1;
+    throw new TypeError("fetch failed");
+  }, async () => {
+    await assert.rejects(fetchWithTimeout("https://example.invalid/public", {}, { attempts: 2 }), /Network request failed/);
+  });
+  assert.equal(boundedCalls, 2);
+
+  let stablePutCalls = 0;
+  await withMockFetch(async () => {
+    stablePutCalls += 1;
+    throw new TypeError("fetch failed");
+  }, async () => {
+    await assert.rejects(fetchWithTimeout("https://example.invalid/stable.json", { method: "PUT", body: "manifest" }), /Network request failed/);
+  });
+  assert.equal(stablePutCalls, 1);
 });

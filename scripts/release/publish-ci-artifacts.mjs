@@ -90,7 +90,7 @@ function ossUrl(key) {
   return `${REGION_ENDPOINT}/${key.split("/").map(encodeURIComponent).join("/")}`;
 }
 
-async function fetchWithTimeout(url, init, { attempts = 1 } = {}) {
+export async function fetchWithTimeout(url, init, { attempts = 1 } = {}) {
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
