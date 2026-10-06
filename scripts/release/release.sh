@@ -99,7 +99,7 @@ verify_public() { # 公开URL 本地文件：公网下载回来逐字节比对 s
 copy_windows_artifacts() {
   local source="$1" file
   mkdir -p "$OUT/windows/x86_64"
-  for file in "Buddy_${VERSION}_x86_64.exe" "Buddy_${VERSION}_x86_64.zip"; do
+  for file in "Buddy_${VERSION}_x86_64.exe" "Buddy_${VERSION}_x86_64_setup.exe" "Buddy_${VERSION}_x86_64.zip"; do
     [[ -f "$source/$file" ]] || fail "缺少同版本 Windows 制品：$source/$file"
     cp "$source/$file" "$OUT/windows/x86_64/$file"
   done
@@ -114,7 +114,7 @@ single_windows_artifact() {
 }
 
 download_windows_artifacts() {
-  local head="$1" started_at runs run_id download_dir exe zip
+  local head="$1" started_at runs run_id download_dir exe setup zip
   started_at="$(date -u +%s)"
   gh workflow run "$WINDOWS_WORKFLOW" --repo "$GITHUB_REPO" --ref main -f ref="$head" \
     || fail "无法触发 Windows 构建工作流"
@@ -147,9 +147,11 @@ download_windows_artifacts() {
   gh run download "$run_id" --repo "$GITHUB_REPO" --name "$WINDOWS_ARTIFACT" --dir "$download_dir" \
     || fail "无法下载 Windows 构建制品"
   exe="$(single_windows_artifact "$download_dir" "Buddy_${VERSION}_x86_64.exe")"
+  setup="$(single_windows_artifact "$download_dir" "Buddy_${VERSION}_x86_64_setup.exe")"
   zip="$(single_windows_artifact "$download_dir" "Buddy_${VERSION}_x86_64.zip")"
   mkdir -p "$OUT/windows/x86_64"
   cp "$exe" "$OUT/windows/x86_64/$(basename "$exe")"
+  cp "$setup" "$OUT/windows/x86_64/$(basename "$setup")"
   cp "$zip" "$OUT/windows/x86_64/$(basename "$zip")"
 }
 
@@ -265,13 +267,17 @@ sign "$UPDATE"
 sign "$INSTALLER"
 if [[ "$HAS_WINDOWS" == true ]]; then
   WINDOWS_UPDATE="$OUT/windows/x86_64/Buddy_${VERSION}_x86_64.exe"
-  WINDOWS_INSTALLER="$OUT/windows/x86_64/Buddy_${VERSION}_x86_64.zip"
+  WINDOWS_INSTALLER="$OUT/windows/x86_64/Buddy_${VERSION}_x86_64_setup.exe"
+  WINDOWS_PORTABLE="$OUT/windows/x86_64/Buddy_${VERSION}_x86_64.zip"
   sign "$WINDOWS_UPDATE"
   sign "$WINDOWS_INSTALLER"
+  sign "$WINDOWS_PORTABLE"
   cargo run --locked -p buddy-update --example verify-artifact -- "$WINDOWS_UPDATE" "$WINDOWS_UPDATE.sig" \
     || fail "Windows EXE 更新签名验证失败"
   cargo run --locked -p buddy-update --example verify-artifact -- "$WINDOWS_INSTALLER" "$WINDOWS_INSTALLER.sig" \
-    || fail "Windows ZIP 更新签名验证失败"
+    || fail "Windows 安装器签名验证失败"
+  cargo run --locked -p buddy-update --example verify-artifact -- "$WINDOWS_PORTABLE" "$WINDOWS_PORTABLE.sig" \
+    || fail "Windows 便携包签名验证失败"
 fi
 REMOTE_DIR="$PREFIX/releases/$VERSION"
 MANIFEST_PLATFORMS="darwin-aarch64"
@@ -328,10 +334,10 @@ verify_public "$CHANNEL_URL" "$OUT/manifest.json"
 step 11/11 "创建 GitHub Release"
 { cat "$OUT/notes.txt"; printf '\n安装：下载 `%s`，打开后把 Buddy 拖进「应用程序」。仅支持 Apple Silicon，macOS 12 及以上；首次打开若被系统拦截，请右键「打开」。\n' "$(basename "$INSTALLER")"; } >"$OUT/github-notes.md"
 if [[ "$HAS_WINDOWS" == true ]]; then
-  printf '\nWindows 10/11 x64：下载 `Buddy_%s_x86_64.zip`，解压整个 Buddy 目录到用户可写目录，运行 buddy.exe。默认快捷键 Ctrl+J。\n' "$VERSION" >>"$OUT/github-notes.md"
+  printf '\nWindows 10/11 x64：下载 `Buddy_%s_x86_64_setup.exe`，双击按向导安装。默认快捷键 Ctrl+J；ZIP 为可选便携版。\n' "$VERSION" >>"$OUT/github-notes.md"
 fi
 RELEASE_ASSETS=("$INSTALLER")
-if [[ "$HAS_WINDOWS" == true ]]; then RELEASE_ASSETS+=("$OUT/windows/x86_64/Buddy_${VERSION}_x86_64.zip"); fi
+if [[ "$HAS_WINDOWS" == true ]]; then RELEASE_ASSETS+=("$WINDOWS_INSTALLER" "$WINDOWS_PORTABLE"); fi
 gh release create "v$VERSION" "${RELEASE_ASSETS[@]}" --repo "$GITHUB_REPO" --verify-tag --latest \
   --title "Buddy $VERSION" --notes-file "$OUT/github-notes.md" >/dev/null \
   || fail "创建 GitHub Release 失败（OSS 已发布、标签已推送）。手动执行：gh release create v$VERSION $INSTALLER --title \"Buddy $VERSION\" --notes-file $OUT/github-notes.md"

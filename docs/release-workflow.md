@@ -8,7 +8,7 @@
 |---|---|
 | 版本清单（客户端检查更新；产品介绍页读取最新安装包地址） | `https://buddy-release.oss-cn-beijing.aliyuncs.com/buddy/channels/stable.json` |
 | 版本制品 | `https://buddy-release.oss-cn-beijing.aliyuncs.com/buddy/releases/<版本>/...` |
-| GitHub Release（DMG 备用下载、源码） | `https://github.com/dcdyouget/buddy/releases` |
+| GitHub Release（安装包备用下载、源码） | `https://github.com/dcdyouget/buddy/releases` |
 
 清单地址写死在已发布的客户端里（`crates/update/src/lib.rs` 的 `MANIFEST_URL`）：
 bucket `buddy-release`（cn-beijing）不能删除、改名或换地域。换地址只能在新版本客户端中进行，并让旧地址继续发布到旧版本用户都升级为止。
@@ -30,7 +30,8 @@ bucket `buddy-release`（cn-beijing）不能删除、改名或换地域。换地
     },
     "windows-x86_64": {
       "update":    { "url": ".../Buddy_0.1.2_x86_64.exe", "size": 0, "sha256": "…", "signature": "…" },
-      "installer": { "url": ".../Buddy_0.1.2_x86_64.zip", "size": 0, "sha256": "…", "signature": "…" }
+      "installer": { "url": ".../Buddy_0.1.2_x86_64_setup.exe", "size": 0, "sha256": "…", "signature": "…" },
+      "portable":  { "url": ".../Buddy_0.1.2_x86_64.zip", "size": 0, "sha256": "…", "signature": "…" }
     }
   },
   "source": { "url": "https://github.com/dcdyouget/buddy/tree/v0.1.2" }
@@ -49,7 +50,8 @@ buddy/
     macos/aarch64/Buddy_<版本>_aarch64.app.tar.xz(.sig)   ← 应用内更新包
     macos/aarch64/Buddy_<版本>_aarch64.dmg(.sig)          ← 安装包
     windows/x86_64/Buddy_<版本>_x86_64.exe(.sig)         ← 已签名原始 EXE 更新包
-    windows/x86_64/Buddy_<版本>_x86_64.zip(.sig)         ← 含 buddy.exe 与许可的便携安装包
+    windows/x86_64/Buddy_<版本>_x86_64_setup.exe(.sig)   ← NSIS 中文安装向导（默认下载）
+    windows/x86_64/Buddy_<版本>_x86_64.zip(.sig)         ← 可选便携版，含运行库与许可
 ```
 
 所有对象使用 `Cache-Control: no-cache`（浏览器向 OSS 校验 ETag，未变化时 304）。
@@ -62,18 +64,18 @@ npm run release -- 0.2.0 --notes "修复 xxx；新增 yyy"
 npm run release -- 0.2.0 --notes-file notes.txt --yes
 ```
 
-`scripts/release/release.sh` 依次：环境与版本检查（新版本须高于线上）→ 写版本号并本地提交 → `scripts/gate.sh` 与全部测试 → 推送该精确提交并触发 GitHub Actions 的 Windows 构建 → 等待并下载该运行的未签名 EXE、ZIP → release 构建 → 组装 `Buddy.app`、更新包、DMG，并用 Mac 钥匙串中的同一更新私钥签名全部四个更新制品 → 上传版本目录并公网回读校验 → 确认 → 打标签并推送源码标签 → 覆盖 `channels/stable.json` → 创建附带两平台安装包的 GitHub Release（标记为 Latest）。
+`scripts/release/release.sh` 依次：环境与版本检查（新版本须高于线上）→ 写版本号并本地提交 → `scripts/gate.sh` 与全部测试 → 推送该精确提交并触发 GitHub Actions 的 Windows 构建 → 等待并下载该运行的未签名 EXE、安装器和 ZIP → release 构建 → 组装 `Buddy.app`、更新包、DMG，并用 Mac 钥匙串中的同一更新私钥签名全部五个发布制品 → 上传版本目录并公网回读校验 → 确认 → 打标签并推送源码标签 → 覆盖 `channels/stable.json` → 创建附带两平台安装包的 GitHub Release（标记为 Latest）。
 
 覆盖 `stable.json` 这一步让应用内更新看到新版本；之前任何一步失败都不影响用户，修复后重跑即可。
 源码推送失败时不会切换更新清单；创建 Release 失败时，脚本会打印需要手动补做的命令。开始前脚本会检查 `gh` 已登录、GitHub 上的 `main` 没有本地缺少的提交。
 
-其他选项：`--skip-tests`（重跑上传 / 发布时）、`--skip-publish`（只上传版本目录，不发布、不推送）、`--windows-dir <目录>`（改用本地未签名 Windows EXE 与 ZIP，跳过 Actions 下载）。
+其他选项：`--skip-tests`（重跑上传 / 发布时）、`--skip-publish`（只上传版本目录，不发布、不推送）、`--windows-dir <目录>`（改用本地未签名 Windows EXE、安装器与 ZIP，跳过 Actions 下载）。
 
 ## Windows 构建与双平台发布
 
 推荐在 GitHub 的 **Actions → Release version → Run workflow** 发版：先把开发完成的代码推送到 `main`，选择 `main`，填入新版本号（如 `0.1.11`）和中文更新说明。无需手动改版本、创建标签或在本机编译。工作流检查线上版本和 OSS 连通性，自动提交版本号并推送不可变的 `v<版本>` 源码标签；Mac ARM64 和 Windows x64 分别在标准 GitHub runner 上测试、构建、打包和签名。
 
-两平台构建均成功后，Linux 发布任务再次用客户端内置公钥验证四个制品，生成双平台清单，将包、签名、更新说明和版本清单上传 OSS，并从公网回读校验 SHA-256。然后创建包含 Mac DMG 和 Windows ZIP 的 GitHub Release，最后切换 `channels/stable.json`。整次发布串行锁定；构建、签名或上传失败时不会提前切换稳定通道。普通 push 不会自动发布。
+两平台构建均成功后，Linux 发布任务再次用客户端内置公钥验证五个制品，生成双平台清单，将包、签名、更新说明和版本清单上传 OSS，并从公网回读校验 SHA-256。然后创建包含 Mac DMG、Windows 安装器和 ZIP 的 GitHub Release，最后切换 `channels/stable.json`。整次发布串行锁定；构建、签名或上传失败时不会提前切换稳定通道。普通 push 不会自动发布。
 
 超过 8 MiB 的包通过 OSS 原生分片上传（4 MiB 分片、最多四路并发），避免海外 runner 单连接传输 Windows EXE 超时。合并后的完整对象仍须从公网回读并通过 SHA-256 校验；失败的分片上传会尝试中止，不会发布不完整包。
 
@@ -102,13 +104,13 @@ Buddy 当前为公开仓库，标准 GitHub 托管 runner 的运行分钟数免�
 
 Mac 本地发版命令仍可使用，此路径在 Mac 本地使用更新私钥。脚本在写入版本号并通过本地测试后，先将该精确提交推送到 `main`，再以该完整 SHA 作为 `ref` 触发 `.github/workflows/windows.yml`。脚本只接受 `head_sha` 完全相同、由刚刚触发的 `workflow_dispatch` 运行产生的 `Buddy-windows-x86_64` 制品；它等待该运行成功后下载其中未签名的 EXE 和 ZIP。这样不会误用其它分支、旧提交或普通 push 检查的制品。
 
-下载后的 `Buddy_<版本>_x86_64.exe` 和 `Buddy_<版本>_x86_64.zip` 在 Mac 上由与 macOS 更新包相同的私钥签名。脚本随后用 `buddy-update` 客户端内置公钥逐个验证两个 Windows 签名，才会生成清单、上传或切换 `stable.json`。`windows.yml` 从不接触更新私钥；未通过签名验证时发布停止，线上稳定通道保持不变。
+下载后的 `Buddy_<版本>_x86_64.exe`、`Buddy_<版本>_x86_64_setup.exe` 和 `Buddy_<版本>_x86_64.zip` 在 Mac 上由与 macOS 更新包相同的私钥签名。脚本随后用 `buddy-update` 客户端内置公钥逐个验证 Windows 签名，才会生成清单、上传或切换 `stable.json`。`windows.yml` 从不接触更新私钥；未通过签名验证时发布停止，线上稳定通道保持不变。
 
 如需手动接管已签名的 CI 制品，可下载到 Windows 发布机的 `.release/<版本>/macos/aarch64` 和 `.release/<版本>/windows/x86_64`，再运行 `scripts/release/publish-artifacts.ps1 -Version <版本> -NotesFile <更新说明>`。脚本以客户端内置公钥验证、上传 OSS 并回读校验、创建 GitHub Release，最后切换 `stable.json`；必须在与版本标签相同的源代码提交上执行。不要同时运行本地发布和云端发布。普通 `windows.yml` 的 push、PR 和手动构建仍只生成未签名 Windows 制品。
 
 下载命令为 `gh run download <运行ID> --name Buddy-darwin-aarch64-v<版本> --dir .release/<版本>/macos/aarch64`，Windows 包使用名称 `Buddy-windows-x86_64-v<版本>` 和目录 `.release/<版本>/windows/x86_64`。
 
-网络受限或需要重跑时，`--windows-dir` 可替代自动下载。目录须只含同版本、尚未签名的 `Buddy_<版本>_x86_64.exe` 和 `Buddy_<版本>_x86_64.zip`；Mac 脚本仍会负责签名和客户端校验：
+网络受限或需要重跑时，`--windows-dir` 可替代自动下载。目录须包含同版本、尚未签名的 `Buddy_<版本>_x86_64.exe`、`Buddy_<版本>_x86_64_setup.exe` 和 `Buddy_<版本>_x86_64.zip`；Mac 脚本仍会负责签名和客户端校验：
 
 ```bash
 npm run release -- 0.2.0 --notes-file notes.txt --windows-dir /path/to/windows/x86_64
@@ -116,9 +118,11 @@ npm run release -- 0.2.0 --notes-file notes.txt --windows-dir /path/to/windows/x
 
 清单保持 `schema: 1`。同一 `version` 下所有平台包必须对应同一版本；不能保留旧 Windows 包却把顶层版本改成新版本。正式发布必须同时包含 Mac 与 Windows 包。
 
-Windows 安装 ZIP 解压到用户可写目录即可。更新链路为：下载 `.exe` → 大小 / SHA-256 / minisign 校验 → 同目录暂存 → 退出进程 → 后台 PowerShell 替换旧 EXE 并重启。替换失败保留或恢复旧程序。开发构建与示例不自动更新；安装到不可写目录时会提示暂存失败，需改用用户目录。配置和历史消息独立保存在 `%APPDATA%\com.buddy.chat`。
+Windows 默认下载 NSIS 的 `_setup.exe`：双击中文向导，默认安装到 `%LOCALAPPDATA%\Programs\Buddy`，无需管理员权限；添加开始菜单入口，可选创建桌面快捷方式，并登记在 Windows 的“已安装的应用”中。卸载仅移除程序、快捷方式及对应注册项，保留 `%APPDATA%\com.buddy.chat` 中的配置和历史消息。NSIS 3 是 Windows 打包依赖，GitHub Actions 会自动安装；本地打包需安装 NSIS 3 或把 `makensis.exe` 加入 PATH。
 
-`.github/workflows/windows.yml` 的 push 和 PR 仅做检查与测试；`workflow_dispatch` 接收精确 `ref`，才构建并上传包含未签名 EXE、ZIP 的 `Buddy-windows-x86_64` 制品。可通过 `target/release/buddy.exe --selfcheck-window` 在已解锁的 Windows 桌面验证窗口创建、隐藏、唤回和聚焦，测试数据目录与用户配置隔离。
+`portable` 是可选 ZIP 下载；0.1.11 及更早的发布清单中，`installer` 仍为 ZIP，恢复旧制品时兼容这一格式。应用内更新始终读取原始 EXE 的 `update.url`，不会把安装器作为更新程序替换进去。更新链路为：下载 `.exe` → 大小 / SHA-256 / minisign 校验 → 同目录暂存 → 退出进程 → 后台 PowerShell 替换旧 EXE 并重启。替换失败保留或恢复旧程序。开发构建与示例不自动更新；安装到不可写目录时会提示暂存失败，需改用用户目录。
+
+`.github/workflows/windows.yml` 的 push 和 PR 仅做检查与测试；`workflow_dispatch` 接收精确 `ref`，才构建并上传包含未签名 EXE、安装器和 ZIP 的 `Buddy-windows-x86_64` 制品。可通过 `target/release/buddy.exe --selfcheck-window` 在已解锁的 Windows 桌面验证窗口创建、隐藏、唤回和聚焦，测试数据目录与用户配置隔离。
 
 这里只采用更新签名，未配置 Windows Authenticode 证书；首次运行可能出现 SmartScreen 提示。
 

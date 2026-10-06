@@ -108,6 +108,15 @@ jobs:
           key: ${{ matrix.platform }}
           cache-on-failure: true
 
+      - name: Install NSIS Windows installer compiler
+        if: matrix.platform == 'windows-x86_64'
+        shell: powershell
+        run: |
+          if (-not (Get-Command makensis.exe -ErrorAction SilentlyContinue) -and -not (Test-Path 'C:\Program Files (x86)\NSIS\makensis.exe')) {
+            choco install nsis --version=3.11 -y --no-progress
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
       - name: Test and package macOS Apple Silicon
         id: package_macos
         if: matrix.platform == 'darwin-aarch64'
@@ -135,6 +144,7 @@ jobs:
           ./scripts/windows-dev.ps1 -Action build
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./scripts/release/bundle-windows.ps1 -Version $env:VERSION -OutDir ".release/$env:VERSION/windows/x86_64"
+          ./scripts/release/test-windows-installer.ps1 -Setup ".release/$env:VERSION/windows/x86_64/Buddy_$($env:VERSION)_x86_64_setup.exe" -AppName Buddy -AppId Buddy
 
       # Tag and manual-dispatch runs are trusted repository workflows. No pull
       # request event is accepted, and a missing secret deliberately leaves the
@@ -178,6 +188,7 @@ jobs:
             $env:TAURI_SIGNING_PRIVATE_KEY = $null
             $assets = @(
               ".release/$env:VERSION/windows/x86_64/Buddy_$($env:VERSION)_x86_64.exe",
+              ".release/$env:VERSION/windows/x86_64/Buddy_$($env:VERSION)_x86_64_setup.exe",
               ".release/$env:VERSION/windows/x86_64/Buddy_$($env:VERSION)_x86_64.zip"
             )
             foreach ($asset in $assets) {

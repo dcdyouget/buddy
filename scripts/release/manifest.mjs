@@ -48,6 +48,12 @@ function asset(relative, signed) {
   return entry;
 }
 
+function hasSignedAsset(relative) {
+  const file = path.join(args.dir, relative);
+  return existsSync(file) && existsSync(`${file}.sig`) && statSync(file).size > 0 &&
+    readFileSync(`${file}.sig`, "utf8").trim().length > 0;
+}
+
 const mac = `macos/aarch64/Buddy_${version}_aarch64`;
 const windows = `windows/x86_64/Buddy_${version}_x86_64`;
 // 同一版本可以分两台机器构建；只合并版本完全一致的清单，不能把旧包标为新版本。
@@ -65,7 +71,20 @@ for (const platform of requested) {
   if (platform === "darwin-aarch64") {
     platforms[platform] = { update: asset(`${mac}.app.tar.xz`, true), installer: asset(`${mac}.dmg`, true) };
   } else if (platform === "windows-x86_64") {
-    platforms[platform] = { update: asset(`${windows}.exe`, true), installer: asset(`${windows}.zip`, true) };
+    const setup = `${windows}_setup.exe`;
+    const zip = `${windows}.zip`;
+    if (existsSync(path.join(args.dir, setup))) {
+      // A present setup package must be signed; do not silently downgrade to ZIP.
+      const release = { update: asset(`${windows}.exe`, true), installer: asset(setup, true) };
+      // Portable ZIPs are optional and only appear in the manifest when signed.
+      if (hasSignedAsset(zip)) {
+        release.portable = asset(zip, true);
+      }
+      platforms[platform] = release;
+    } else {
+      // Legacy releases made before setup installers retain their ZIP installer.
+      platforms[platform] = { update: asset(`${windows}.exe`, true), installer: asset(zip, true) };
+    }
   } else {
     throw new Error(`不支持的平台：${platform}`);
   }
@@ -77,6 +96,13 @@ for (const [platform, release] of Object.entries(platforms)) {
     if (!entry || !entry.url?.startsWith("https://") || !Number.isSafeInteger(entry.size) || entry.size <= 0 ||
         !/^[0-9a-f]{64}$/i.test(entry.sha256 ?? "") || typeof entry.signature !== "string" || !entry.signature.trim()) {
       throw new Error(`${platform}.${name} 制品的地址、大小、哈希或签名无效`);
+    }
+  }
+  if (release.portable) {
+    const entry = release.portable;
+    if (!entry.url?.startsWith("https://") || !Number.isSafeInteger(entry.size) || entry.size <= 0 ||
+        !/^[0-9a-f]{64}$/i.test(entry.sha256 ?? "") || typeof entry.signature !== "string" || !entry.signature.trim()) {
+      throw new Error(`${platform}.portable has an invalid URL, size, hash, or signature`);
     }
   }
 }

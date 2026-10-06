@@ -74,8 +74,10 @@ if (-not $SkipTests) {
 Run "cargo" @("build", "--release", "--locked", "-p", "buddy-app", "--bin", "buddy")
 & "$PSScriptRoot/bundle-windows.ps1" -Version $Version
 $windowsDir = "$outDir/windows/x86_64"
-foreach ($extension in @("exe", "zip")) {
-    Run $signer @("signer", "sign", "-f", $keyPath, "$windowsDir/Buddy_${Version}_x86_64.$extension")
+foreach ($suffix in @(".exe", "_setup.exe", ".zip")) {
+    $asset = "$windowsDir/Buddy_${Version}_x86_64$suffix"
+    Run $signer @("signer", "sign", "-f", $keyPath, $asset)
+    Run "cargo" @("run", "--locked", "-p", "buddy-update", "--example", "verify-artifact", "--", $asset, "$asset.sig")
 }
 $manifestArgs = @("scripts/release/manifest.mjs", "--version", $Version, "--notes-file", "$outDir/notes.txt", "--base-url", $baseUrl,
     "--source-url", "https://github.com/dcdyouget/buddy/tree/v$Version", "--dir", $outDir, "--output", "$outDir/manifest.json", "--platforms", "windows-x86_64")
@@ -83,8 +85,8 @@ if ($MergeManifest) { $manifestArgs += @("--merge", $MergeManifest) }
 Run "node" $manifestArgs
 $manifest = Get-Content -Raw -Encoding UTF8 -LiteralPath "$outDir/manifest.json" | ConvertFrom-Json
 if (-not $SkipPublish -and -not $manifest.platforms.'darwin-aarch64') { throw "正式发布必须包含同版本的 macOS 包" }
-foreach ($extension in @("exe", "exe.sig", "zip", "zip.sig")) {
-    $file = "$windowsDir/Buddy_${Version}_x86_64.$extension"
+foreach ($suffix in @(".exe", ".exe.sig", "_setup.exe", "_setup.exe.sig", ".zip", ".zip.sig")) {
+    $file = "$windowsDir/Buddy_${Version}_x86_64$suffix"
     Upload $file "buddy/releases/$Version/windows/x86_64/$(Split-Path -Leaf $file)"
     VerifyPublic $file "$baseUrl/windows/x86_64/$(Split-Path -Leaf $file)"
 }

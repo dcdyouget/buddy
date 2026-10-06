@@ -32,7 +32,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node --test scripts/release/manifest.test.mjs
           exit $LASTEXITCODE
-      - name: 构建 Windows 便携包
+      - name: 安装 NSIS 编译器
+        if: github.event_name == 'workflow_dispatch'
+        shell: powershell
+        run: |
+          if (-not (Get-Command makensis.exe -ErrorAction SilentlyContinue) -and -not (Test-Path 'C:\Program Files (x86)\NSIS\makensis.exe')) {
+            choco install nsis --version=3.11 -y --no-progress
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: 构建 Windows 安装器和便携包
         if: github.event_name == 'workflow_dispatch'
         shell: powershell
         run: |
@@ -42,6 +50,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $version = ($metadata.packages | Where-Object name -eq 'buddy-app').version
           ./scripts/release/bundle-windows.ps1 -Version $version
+          ./scripts/release/test-windows-installer.ps1 -Setup ".release/$version/windows/x86_64/Buddy_${version}_x86_64_setup.exe" -AppName Buddy -AppId Buddy
       - uses: actions/upload-artifact@v4
         if: github.event_name == 'workflow_dispatch'
         with:

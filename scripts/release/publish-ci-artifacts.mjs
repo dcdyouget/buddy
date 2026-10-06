@@ -216,17 +216,32 @@ async function assertNewVersion(version) {
   }
 }
 
-function artifactList(version) {
-  return [
+function hasSignedArtifact(dir, relative) {
+  const file = path.join(dir, relative);
+  return existsSync(file) && existsSync(`${file}.sig`) && statSync(file).size > 0 && statSync(`${file}.sig`).size > 0;
+}
+
+function artifactList(dir, version) {
+  const files = [
     `macos/aarch64/Buddy_${version}_aarch64.app.tar.xz`,
     `macos/aarch64/Buddy_${version}_aarch64.dmg`,
     `windows/x86_64/Buddy_${version}_x86_64.exe`,
-    `windows/x86_64/Buddy_${version}_x86_64.zip`,
   ];
+  const setup = `windows/x86_64/Buddy_${version}_x86_64_setup.exe`;
+  const zip = `windows/x86_64/Buddy_${version}_x86_64.zip`;
+  if (existsSync(path.join(dir, setup))) {
+    files.push(setup);
+    // Keep the portable download only when its signature is also available.
+    if (hasSignedArtifact(dir, zip)) files.push(zip);
+  } else {
+    // A release resumed from artifacts created before setup installers uses ZIP.
+    files.push(zip);
+  }
+  return files;
 }
 
 function requireArtifacts(dir, version) {
-  const files = artifactList(version);
+  const files = artifactList(dir, version);
   for (const relative of files) {
     for (const suffix of ["", ".sig"]) {
       const file = path.join(dir, `${relative}${suffix}`);
@@ -279,17 +294,27 @@ function sameGitHubAsset(version, filename, source) {
   }
 }
 
-function ensureGitHubRelease(version, notesFile, dir) {
+function releaseAssets(files, version) {
+  const setup = `windows/x86_64/Buddy_${version}_x86_64_setup.exe`;
+  const zip = `windows/x86_64/Buddy_${version}_x86_64.zip`;
+  const selected = [`macos/aarch64/Buddy_${version}_aarch64.dmg`];
+  if (files.includes(setup)) {
+    selected.push(setup);
+    if (files.includes(zip)) selected.push(zip);
+  } else {
+    selected.push(zip);
+  }
+  return selected;
+}
+
+function ensureGitHubRelease(version, notesFile, dir, files) {
   if (!releaseExists(version)) {
     runVisible("gh", ["release", "create", `v${version}`, "--repo", REPOSITORY, "--verify-tag", "--latest",
       "--title", `Buddy ${version}`, "--notes-file", notesFile]);
   } else {
     runVisible("gh", ["release", "edit", `v${version}`, "--repo", REPOSITORY, "--latest", "--title", `Buddy ${version}`, "--notes-file", notesFile]);
   }
-  for (const relative of [
-    `macos/aarch64/Buddy_${version}_aarch64.dmg`,
-    `windows/x86_64/Buddy_${version}_x86_64.zip`,
-  ]) {
+  for (const relative of releaseAssets(files, version)) {
     const source = path.join(dir, relative);
     const filename = path.basename(source);
     const assets = JSON.parse(run("gh", ["release", "view", `v${version}`, "--repo", REPOSITORY, "--json", "assets"])).assets;
@@ -356,7 +381,7 @@ async function publish() {
     uploadNotes: async () => putAndVerify(client, notesFile, `buddy/releases/${version}/notes.txt`, { contentType: "text/plain; charset=utf-8", attempts: 2 }),
     uploadManifest: async () => putAndVerify(client, manifest, `buddy/releases/${version}/manifest.json`, { contentType: "application/json; charset=utf-8", attempts: 2 }),
     // The GitHub mirror must be usable before updater clients see stable.json.
-    ensureRelease: async () => ensureGitHubRelease(version, notesFile, dir),
+    ensureRelease: async () => ensureGitHubRelease(version, notesFile, dir, files),
     assertVersion: async () => assertNewVersion(version),
     // Do not retry the release switch. A failure is explicit and leaves its
     // outcome inspectable rather than making a second state-changing request.

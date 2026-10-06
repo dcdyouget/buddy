@@ -41,9 +41,23 @@ AssertNewVersion
 $relativeAssets = @(
     "macos/aarch64/Buddy_${Version}_aarch64.app.tar.xz",
     "macos/aarch64/Buddy_${Version}_aarch64.dmg",
-    "windows/x86_64/Buddy_${Version}_x86_64.exe",
-    "windows/x86_64/Buddy_${Version}_x86_64.zip"
+    "windows/x86_64/Buddy_${Version}_x86_64.exe"
 )
+$windowsSetup = "windows/x86_64/Buddy_${Version}_x86_64_setup.exe"
+$windowsZip = "windows/x86_64/Buddy_${Version}_x86_64.zip"
+if (Test-Path -LiteralPath (Join-Path $Dir $windowsSetup)) {
+    $relativeAssets += $windowsSetup
+    # The portable ZIP is optional for setup releases, but never uploaded unsigned.
+    $windowsZipPath = Join-Path $Dir $windowsZip
+    $windowsZipSignaturePath = "$windowsZipPath.sig"
+    if ((Test-Path -LiteralPath $windowsZipPath) -and (Test-Path -LiteralPath $windowsZipSignaturePath) -and
+        (Get-Item -LiteralPath $windowsZipPath).Length -gt 0 -and (Get-Item -LiteralPath $windowsZipSignaturePath).Length -gt 0) {
+        $relativeAssets += $windowsZip
+    }
+} else {
+    # Compatibility with releases whose CI artifacts predate setup installers.
+    $relativeAssets += $windowsZip
+}
 # The client verifier rejects a different signing key, even if files have .sig names.
 foreach ($relative in $relativeAssets) {
     $file = Join-Path $Dir $relative
@@ -58,17 +72,22 @@ foreach ($relative in $relativeAssets) {
 }
 UploadVerified "$Dir/manifest.json" "buddy/releases/$Version/manifest.json"
 # Publish the download mirrors before switching the updater channel.
+$releaseAssets = @("$Dir/macos/aarch64/Buddy_${Version}_aarch64.dmg")
+if ($relativeAssets -contains $windowsSetup) {
+    $releaseAssets += (Join-Path $Dir $windowsSetup)
+    if ($relativeAssets -contains $windowsZip) { $releaseAssets += (Join-Path $Dir $windowsZip) }
+} else {
+    $releaseAssets += (Join-Path $Dir $windowsZip)
+}
 $ErrorActionPreference = "Continue"
 & gh release view "v$Version" --repo dcdyouget/buddy --json tagName 2>$null | Out-Null
 $releaseExists = $LASTEXITCODE -eq 0
 $ErrorActionPreference = "Stop"
 if ($releaseExists) {
-    Run "gh" @("release", "upload", "v$Version", "$Dir/macos/aarch64/Buddy_${Version}_aarch64.dmg",
-        "$Dir/windows/x86_64/Buddy_${Version}_x86_64.zip", "--repo", "dcdyouget/buddy", "--clobber")
+    Run "gh" (@("release", "upload", "v$Version") + $releaseAssets + @("--repo", "dcdyouget/buddy", "--clobber"))
 } else {
-    Run "gh" @("release", "create", "v$Version", "$Dir/macos/aarch64/Buddy_${Version}_aarch64.dmg",
-        "$Dir/windows/x86_64/Buddy_${Version}_x86_64.zip", "--repo", "dcdyouget/buddy", "--verify-tag", "--latest",
-        "--title", "Buddy $Version", "--notes-file", $NotesFile)
+    Run "gh" (@("release", "create", "v$Version") + $releaseAssets + @("--repo", "dcdyouget/buddy", "--verify-tag", "--latest",
+        "--title", "Buddy $Version", "--notes-file", $NotesFile))
 }
 AssertNewVersion
 UploadVerified "$Dir/manifest.json" "buddy/channels/stable.json"
