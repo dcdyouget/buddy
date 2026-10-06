@@ -71,11 +71,36 @@ npm run release -- 0.2.0 --notes-file notes.txt --yes
 
 ## Windows 构建与双平台发布
 
-正式发布默认在 Mac 上执行，此路径在 Mac 本地使用更新私钥。脚本在写入版本号并通过本地测试后，先将该精确提交推送到 `main`，再以该完整 SHA 作为 `ref` 触发 `.github/workflows/windows.yml`。脚本只接受 `head_sha` 完全相同、由刚刚触发的 `workflow_dispatch` 运行产生的 `Buddy-windows-x86_64` 制品；它等待该运行成功后下载其中未签名的 EXE 和 ZIP。这样不会误用其它分支、旧提交或普通 push 检查的制品。
+推荐在 GitHub 的 **Actions → Release version → Run workflow** 发版：先把开发完成的代码推送到 `main`，选择 `main`，填入新版本号（如 `0.1.11`）和中文更新说明。无需手动改版本、创建标签或在本机编译。工作流检查线上版本和 OSS 连通性，自动提交版本号并推送不可变的 `v<版本>` 源码标签；Mac ARM64 和 Windows x64 分别在标准 GitHub runner 上测试、构建、打包和签名。
+
+两平台构建均成功后，Linux 发布任务再次用客户端内置公钥验证四个制品，生成双平台清单，将包、签名、更新说明和版本清单上传 OSS，并从公网回读校验 SHA-256。然后创建包含 Mac DMG 和 Windows ZIP 的 GitHub Release，最后切换 `channels/stable.json`。整次发布串行锁定；构建、签名或上传失败时不会提前切换稳定通道。普通 push 不会自动发布。
+
+失败后优先使用 **Re-run failed jobs**，复用本次已签名制品继续发布。已存在的版本标签不会移动，已上传的包不会被不同内容覆盖。修复应用代码后应使用更高版本号。工作流会向 `main` 提交版本变更；下一次在 Mac 开发前执行 `git pull --ff-only` 同步该提交。
+
+仓库 **Settings → Secrets and variables → Actions** 需要四个 Secrets：
+
+| 名称 | 内容 |
+|---|---|
+| `TAURI_SIGNING_PRIVATE_KEY` | 现有更新签名私钥文件的完整内容，必须与已发布客户端公钥匹配 |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | 私钥密码（无密码则可为空） |
+| `OSS_ACCESS_KEY_ID` | 阿里云 OSS AccessKey ID |
+| `OSS_ACCESS_KEY_SECRET` | 对应 AccessKey Secret，需有 `buddy-release/buddy/*` 的上传、读取权限 |
+
+**Actions → OSS connection check → Run workflow** 可单独验证 GitHub runner 到 OSS 的上传和公网回读，不触碰稳定通道。探测文件写入 `buddy/releases/ci-check/`。发布工作流同样会先执行该检查，避免编译完成后才发现上传凭据无效。
+
+CLI 也可以触发同一完整发版流程：
+
+```bash
+gh workflow run release.yml --ref main -f version=0.1.11 -f notes="更新说明"
+```
+
+Buddy 当前为公开仓库，标准 GitHub 托管 runner 的运行分钟数免费。私有仓库有套餐分钟和存储额度，大型 runner 单独计费；详见 [GitHub Actions 计费](https://docs.github.com/en/billing/concepts/product-billing/github-actions)。临时构建制品只保留 7 天，长期安装包位于 OSS 和 GitHub Release。
+
+Mac 本地发版命令仍可使用，此路径在 Mac 本地使用更新私钥。脚本在写入版本号并通过本地测试后，先将该精确提交推送到 `main`，再以该完整 SHA 作为 `ref` 触发 `.github/workflows/windows.yml`。脚本只接受 `head_sha` 完全相同、由刚刚触发的 `workflow_dispatch` 运行产生的 `Buddy-windows-x86_64` 制品；它等待该运行成功后下载其中未签名的 EXE 和 ZIP。这样不会误用其它分支、旧提交或普通 push 检查的制品。
 
 下载后的 `Buddy_<版本>_x86_64.exe` 和 `Buddy_<版本>_x86_64.zip` 在 Mac 上由与 macOS 更新包相同的私钥签名。脚本随后用 `buddy-update` 客户端内置公钥逐个验证两个 Windows 签名，才会生成清单、上传或切换 `stable.json`。`windows.yml` 从不接触更新私钥；未通过签名验证时发布停止，线上稳定通道保持不变。
 
-生产发布也可走标签 CI：推送 `v<版本>` 会触发 `.github/workflows/release.yml`，它在受信任的 tag/手动调度环境中用 GitHub Secrets 对 macOS 与 Windows 制品签名。构建完成后先下载两个已签名制品到 Windows 发布机的 `.release/<版本>/macos/aarch64` 和 `.release/<版本>/windows/x86_64`，再运行 `scripts/release/publish-artifacts.ps1 -Version <版本> -NotesFile <更新说明>`。脚本以客户端内置公钥验证、上传 OSS 并回读校验、创建 GitHub Release，最后切换 `stable.json`；它必须在与版本标签相同的源代码提交上执行。该路径的私钥只供受信任的 release 工作流读取，普通 `windows.yml` 的 push、PR 和手动构建仍只生成未签名 Windows 制品。
+如需手动接管已签名的 CI 制品，可下载到 Windows 发布机的 `.release/<版本>/macos/aarch64` 和 `.release/<版本>/windows/x86_64`，再运行 `scripts/release/publish-artifacts.ps1 -Version <版本> -NotesFile <更新说明>`。脚本以客户端内置公钥验证、上传 OSS 并回读校验、创建 GitHub Release，最后切换 `stable.json`；必须在与版本标签相同的源代码提交上执行。不要同时运行本地发布和云端发布。普通 `windows.yml` 的 push、PR 和手动构建仍只生成未签名 Windows 制品。
 
 下载命令为 `gh run download <运行ID> --name Buddy-darwin-aarch64-v<版本> --dir .release/<版本>/macos/aarch64`，Windows 包使用名称 `Buddy-windows-x86_64-v<版本>` 和目录 `.release/<版本>/windows/x86_64`。
 
