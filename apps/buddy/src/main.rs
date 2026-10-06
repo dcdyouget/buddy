@@ -6,6 +6,7 @@ use buddy_ui::shell::{self, config::ShellConfig};
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+    install_exit_trace();
     if std::env::args().any(|argument| argument == "--selfcheck-window") {
         // 诊断隔离于真实用户数据和唯一产品实例；内部关闭临时窗口并清理后返回。
         application()
@@ -86,4 +87,20 @@ fn main() {
             })
             .detach();
         });
+}
+
+/// 进程以任何方式调用 `exit()` 时打印调用栈（排查退出码为 0 的不明退出）。
+fn install_exit_trace() {
+    unsafe extern "C" {
+        fn atexit(callback: extern "C" fn()) -> std::ffi::c_int;
+    }
+    extern "C" fn trace() {
+        eprintln!(
+            "[退出诊断] 进程 exit()，调用栈：\n{}",
+            std::backtrace::Backtrace::force_capture()
+        );
+    }
+    unsafe {
+        atexit(trace);
+    }
 }
