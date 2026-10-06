@@ -62,6 +62,7 @@ jobs:
             if (!jobs.some(job => job.name === platform && job.conclusion === 'success')) throw new Error(`${platform} 构建未成功`);
           }
           copyFileSync('scripts/release/publish-ci-artifacts.mjs', `${process.env.RUNNER_TEMP}/publish-ci-artifacts.mjs`);
+          copyFileSync('scripts/release/oss-multipart.mjs', `${process.env.RUNNER_TEMP}/oss-multipart.mjs`);
           appendFileSync(process.env.GITHUB_ENV, `RELEASE_COMMIT=${commit}\n`);
           git('checkout', '--detach', commit);
           NODE

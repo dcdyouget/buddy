@@ -9,6 +9,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync 
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { uploadMultipart } from "./oss-multipart.mjs";
 
 const BUCKET = "buddy-release";
 const REGION_ENDPOINT = "https://buddy-release.oss-cn-beijing.aliyuncs.com";
@@ -119,6 +120,13 @@ function createOssClient() {
   const accessKeyId = requiredEnv("OSS_ACCESS_KEY_ID").trim();
   const accessKeySecret = requiredEnv("OSS_ACCESS_KEY_SECRET").trim();
   async function request(method, key, body, contentType = "application/octet-stream", attempts = 1) {
+    if (method === "PUT" && Buffer.isBuffer(body) && body.length > 8 * 1024 * 1024) {
+      await uploadMultipart({
+        bucket: BUCKET, endpoint: REGION_ENDPOINT, accessKeyId, accessKeySecret,
+        key, data: body, contentType, timeoutMs: FETCH_TIMEOUT_MS,
+      });
+      return;
+    }
     const date = new Date().toUTCString();
     const authorization = ossAuthorization({ accessKeyId, accessKeySecret, method, contentType, date, bucket: BUCKET, key });
     const response = await fetchWithTimeout(ossUrl(key), {
