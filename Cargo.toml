@@ -13,7 +13,7 @@ members = [
 exclude = ["vendor/global-hotkey"]
 
 [workspace.package]
-version = "0.1.11"
+version = "0.1.12"
 edition = "2024"
 authors = ["Buddy"]
 # 注意：许可证是分层的，不能在此统一声明（见 LICENSE）。
