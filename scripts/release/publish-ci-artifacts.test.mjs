@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { canonicalOssResource, compareVersions, fetchWithTimeout, ossAuthorization, ossStringToSign, publishSequence, releaseAssets } from "./publish-ci-artifacts.mjs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { createHash } from "node:crypto";
+import { canonicalOssResource, compareVersions, fetchWithTimeout, ossAuthorization, ossStringToSign, publishSequence, releaseAssets, headPublic, putAndVerify } from "./publish-ci-artifacts.mjs";
 
 test("GitHub Release lists installers while OSS retains update and portable artifacts", () => {
   const files = ["macos/aarch64/Buddy_0.1.16_aarch64.app.tar.xz", "macos/aarch64/Buddy_0.1.16_aarch64.dmg", "windows/x86_64/Buddy_0.1.16_x86_64.exe", "windows/x86_64/Buddy_0.1.16_x86_64_setup.exe", "windows/x86_64/Buddy_0.1.16_x86_64.zip"];
@@ -122,4 +126,48 @@ test("retry limit and stable PUT default both make no extra request", { concurre
     await assert.rejects(fetchWithTimeout("https://example.invalid/stable.json", { method: "PUT", body: "manifest" }), /Network request failed/);
   });
   assert.equal(stablePutCalls, 1);
+});
+
+
+test("publication verifies HEAD only and refuses conflicting immutable files", { concurrency: false }, async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "buddy-head-test-"));
+  const file = path.join(dir, "artifact");
+  const data = Buffer.from("signed artifact");
+  writeFileSync(file, data);
+  const digest = createHash("sha256").update(data).digest("hex");
+  const key = "buddy/releases/test/artifact";
+  let heads = 0;
+  let puts = 0;
+  const client = { request: async (method, object, body, type, attempts, metadata) => {
+    puts += 1;
+    assert.equal(method, "PUT");
+    assert.equal(object, key);
+    assert.deepEqual(body, data);
+    assert.equal(metadata["x-oss-meta-sha256"], digest);
+  } };
+  try {
+    await withMockFetch(async (url, init) => {
+      assert.equal(init.method, "HEAD");
+      heads += 1;
+      if (heads === 1) return new Response(null, { status: 404 });
+      return new Response(null, { headers: { "Content-Length": String(data.length), "x-oss-meta-sha256": digest } });
+    }, async () => {
+      await putAndVerify(client, file, key, { immutable: true });
+      await putAndVerify(client, file, key, { immutable: true });
+    });
+    assert.equal(puts, 1);
+    await withMockFetch(async () => new Response(null, { headers: { "Content-Length": String(data.length), "x-oss-meta-sha256": "different" } }), async () => {
+      await assert.rejects(putAndVerify(client, file, key, { immutable: true }), /Refusing to replace/);
+    });
+    assert.equal(puts, 1);
+    await withMockFetch(async () => new Response(null, { headers: { "Content-Length": "1" } }), async () => {
+      await assert.rejects(putAndVerify(client, file, key), /HEAD size mismatch/);
+    });
+    await withMockFetch(async () => new Response(null), async () => {
+      await assert.rejects(headPublic(key), /Content-Length/);
+    });
+    await withMockFetch(async () => new Response(null, { status: 403 }), async () => {
+      await assert.rejects(headPublic(key), /HTTP 403/);
+    });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

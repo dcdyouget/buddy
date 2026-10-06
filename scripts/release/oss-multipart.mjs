@@ -40,12 +40,18 @@ export function multipartCanonicalResource(bucket, key, query) {
   return `/${bucket}/${object}${encodedQuery ? `?${encodedQuery}` : ""}`;
 }
 
-function stringToSign(method, contentType, date, resource) {
-  return `${method}\n\n${contentType}\n${date}\n${resource}`;
+function stringToSign(method, contentType, date, resource, ossHeaders) {
+  const canonicalHeaders = Object.entries(ossHeaders)
+    .map(([name, value]) => [name.toLowerCase(), String(value).trim()])
+    .filter(([name]) => name.startsWith("x-oss-"))
+    .sort(([a], [b]) => compareRaw(a, b))
+    .map(([name, value]) => `${name}:${value}\n`)
+    .join("");
+  return `${method}\n\n${contentType}\n${date}\n${canonicalHeaders}${resource}`;
 }
 
-function authorization(accessKeyId, accessKeySecret, method, contentType, date, resource) {
-  const signature = createHmac("sha1", accessKeySecret).update(stringToSign(method, contentType, date, resource)).digest("base64");
+function authorization(accessKeyId, accessKeySecret, method, contentType, date, resource, ossHeaders) {
+  const signature = createHmac("sha1", accessKeySecret).update(stringToSign(method, contentType, date, resource, ossHeaders)).digest("base64");
   return `OSS ${accessKeyId}:${signature}`;
 }
 
@@ -121,7 +127,7 @@ function endpointUrl(endpoint, key, query) {
   return new URL(`/${object}${encodedQuery ? `?${encodedQuery}` : ""}`, base);
 }
 
-function createSignedRequester({ bucket, endpoint, accessKeyId, accessKeySecret, key, timeoutMs }) {
+function createSignedRequester({ bucket, endpoint, accessKeyId, accessKeySecret, key, timeoutMs, ossHeaders }) {
   if (!accessKeyId || !accessKeySecret) throw new Error("OSS access key ID and secret are required");
   validateKey(key);
   return async (stage, method, query, body, contentType) => {
@@ -132,7 +138,8 @@ function createSignedRequester({ bucket, endpoint, accessKeyId, accessKeySecret,
       timeoutMs,
       body,
       headers: {
-        Authorization: authorization(accessKeyId, accessKeySecret, method, contentType, date, resource),
+        ...ossHeaders,
+        Authorization: authorization(accessKeyId, accessKeySecret, method, contentType, date, resource, ossHeaders),
         Date: date,
         "Content-Type": contentType,
         "Cache-Control": "no-cache",
@@ -168,10 +175,10 @@ async function uploadParts(parts, uploadPart) {
  * Upload a Buffer as an OSS multipart object.
  * @returns {Promise<true>}
  */
-export async function uploadMultipart({ bucket, endpoint, accessKeyId, accessKeySecret, key, data, contentType = "application/octet-stream", timeoutMs = 600_000 }) {
+export async function uploadMultipart({ bucket, endpoint, accessKeyId, accessKeySecret, key, data, contentType = "application/octet-stream", timeoutMs = 600_000, ossHeaders = {} }) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new Error("timeoutMs must be a positive integer");
   const parts = partsFor(data);
-  const signedRequest = createSignedRequester({ bucket, endpoint, accessKeyId, accessKeySecret, key, timeoutMs });
+  const signedRequest = createSignedRequester({ bucket, endpoint, accessKeyId, accessKeySecret, key, timeoutMs, ossHeaders });
   const initiated = await signedRequest("initiate", "POST", [["uploads", null]], Buffer.alloc(0), contentType);
   const uploadIdText = /<UploadId>([\s\S]*?)<\/UploadId>/.exec(initiated.body.toString("utf8"))?.[1];
   const uploadId = uploadIdText && xmlUnescape(uploadIdText);

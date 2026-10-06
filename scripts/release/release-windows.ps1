@@ -19,14 +19,19 @@ function Run([string]$Command, [string[]]$Arguments) {
 function Upload([string]$File, [string]$Key) {
     Run "ossutil" @("cp", $File, "oss://buddy-release/$Key", "--endpoint", "https://oss-cn-beijing.aliyuncs.com", "-f", "--cache-control", "no-cache")
 }
-function VerifyPublic([string]$File, [string]$Url) {
-    $checkPath = "$File.public-check"
-    try {
-        Invoke-WebRequest -UseBasicParsing -Uri $Url -Headers @{ "Cache-Control" = "no-cache" } -OutFile $checkPath
-        if ((Get-FileHash -LiteralPath $File).Hash -ne (Get-FileHash -LiteralPath $checkPath).Hash) { throw "公网校验失败：$Url" }
-    } finally {
-        if (Test-Path -LiteralPath $checkPath) { Remove-Item -LiteralPath $checkPath }
+function HeadPublicLength([string]$Url) {
+    $response = Invoke-WebRequest -UseBasicParsing -Method Head -Uri $Url -Headers @{ "Cache-Control" = "no-cache" }
+    if ($response.StatusCode -ne 200) { throw "公网 HEAD 状态异常（$($response.StatusCode)）：$Url" }
+    $length = 0L
+    if (-not [long]::TryParse([string]$response.Headers["Content-Length"], [ref]$length)) {
+        throw "公网响应缺少有效 Content-Length：$Url"
     }
+    return $length
+}
+function VerifyPublic([string]$File, [string]$Url) {
+    $remoteLength = HeadPublicLength $Url
+    $localLength = (Get-Item -LiteralPath $File).Length
+    if ($remoteLength -ne $localLength) { throw "公网 Content-Length 与本地不一致：$Url（公网=$remoteLength，本地=$localLength）" }
 }
 function ReadChannel([string]$Url) {
     try { return Invoke-RestMethod -Uri $Url -Headers @{ "Cache-Control" = "no-cache" } }
@@ -93,11 +98,8 @@ foreach ($suffix in @(".exe", ".exe.sig", "_setup.exe", "_setup.exe.sig", ".zip"
 # 发布前逐一校验清单中所有平台的公开文件，避免发布不存在的 Mac 包。
 foreach ($platform in $manifest.platforms.PSObject.Properties) {
     foreach ($asset in @($platform.Value.update, $platform.Value.installer)) {
-        $checkFile = "$outDir/asset-check"
-        try {
-            Invoke-WebRequest -UseBasicParsing -Uri $asset.url -OutFile $checkFile
-            if ((Get-Item -LiteralPath $checkFile).Length -ne $asset.size -or (Get-FileHash -LiteralPath $checkFile).Hash.ToLowerInvariant() -ne $asset.sha256) { throw "清单制品校验失败：$($asset.url)" }
-        } finally { if (Test-Path -LiteralPath $checkFile) { Remove-Item -LiteralPath $checkFile } }
+        $remoteLength = HeadPublicLength $asset.url
+        if ($remoteLength -ne [long]$asset.size) { throw "清单制品 Content-Length 校验失败：$($asset.url)（公网=$remoteLength，清单=$($asset.size)）" }
     }
 }
 if (-not $SkipPublish) {

@@ -56,7 +56,7 @@ jobs:
           }
           NODE
 
-      - name: Verify GitHub runner can upload to and read from OSS
+      - name: Check GitHub runner can upload to OSS and inspect public HEAD metadata
         env:
           OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
           OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
@@ -249,5 +249,5 @@ jobs:
         with:
           name: Buddy-windows-x86_64-v${{ needs.prepare.outputs.version }}
           path: .release/${{ needs.prepare.outputs.version }}/windows/x86_64
-      - name: Verify, upload, read back, and switch stable channel
+      - name: Verify, upload, check public HEAD metadata, and switch stable channel
         run: node scripts/release/publish-ci-artifacts.mjs

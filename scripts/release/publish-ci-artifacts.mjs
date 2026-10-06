@@ -119,19 +119,20 @@ export async function fetchWithTimeout(url, init, { attempts = 1 } = {}) {
 function createOssClient() {
   const accessKeyId = requiredEnv("OSS_ACCESS_KEY_ID").trim();
   const accessKeySecret = requiredEnv("OSS_ACCESS_KEY_SECRET").trim();
-  async function request(method, key, body, contentType = "application/octet-stream", attempts = 1) {
+  async function request(method, key, body, contentType = "application/octet-stream", attempts = 1, ossHeaders = {}) {
     if (method === "PUT" && Buffer.isBuffer(body) && body.length > 8 * 1024 * 1024) {
       await uploadMultipart({
         bucket: BUCKET, endpoint: REGION_ENDPOINT, accessKeyId, accessKeySecret,
-        key, data: body, contentType, timeoutMs: FETCH_TIMEOUT_MS,
+        key, data: body, contentType, timeoutMs: FETCH_TIMEOUT_MS, ossHeaders,
       });
       return;
     }
     const date = new Date().toUTCString();
-    const authorization = ossAuthorization({ accessKeyId, accessKeySecret, method, contentType, date, bucket: BUCKET, key });
+    const authorization = ossAuthorization({ accessKeyId, accessKeySecret, method, contentType, date, bucket: BUCKET, key, ossHeaders });
     const response = await fetchWithTimeout(ossUrl(key), {
       method,
       headers: {
+        ...ossHeaders,
         Authorization: authorization,
         Date: date,
         "Content-Type": contentType,
@@ -159,23 +160,38 @@ async function fetchPublic(key, { attempts = 3 } = {}) {
   return Buffer.from(await response.arrayBuffer());
 }
 
-async function putAndVerify(client, localFile, key, { immutable = false, contentType = "application/octet-stream", attempts = 1 } = {}) {
+export async function headPublic(key) {
+  const response = await fetchWithTimeout(publicUrl(key), {
+    method: "HEAD", headers: { "Cache-Control": "no-cache" }, cache: "no-store",
+  }, { attempts: 3 });
+  if (response.status === 404) return null;
+  if (response.status !== 200) throw new Error(`Public OSS HEAD failed for ${key}: HTTP ${response.status}`);
+  const length = response.headers.get("content-length");
+  if (!length || !/^\d+$/.test(length) || !Number.isSafeInteger(Number(length))) {
+    throw new Error(`Public OSS HEAD missing valid Content-Length: ${key}`);
+  }
+  return { size: Number(length), sha256: response.headers.get("x-oss-meta-sha256") };
+}
+
+export async function putAndVerify(client, localFile, key, { immutable = false, contentType = "application/octet-stream", attempts = 1 } = {}) {
   const data = readFileSync(localFile);
   const expected = sha256(data);
   if (immutable) {
-    const existing = await fetchPublic(key);
+    const existing = await headPublic(key);
     if (existing) {
-      if (sha256(existing) !== expected) {
-        throw new Error(`Refusing to replace an existing release artifact: ${key}`);
+      // Size alone cannot identify an existing immutable artifact. New uploads
+      // carry their local digest as metadata; legacy objects are never replaced.
+      if (existing.size !== data.length || existing.sha256 !== expected) {
+        throw new Error(`Refusing to replace an existing release artifact (size or SHA-256 metadata mismatch): ${key}`);
       }
-      console.log(`Already uploaded and verified: ${key}`);
+      console.log(`Already uploaded; HEAD verified: ${key}`);
       return;
     }
   }
-  await client.request("PUT", key, data, contentType, attempts);
-  const published = await fetchPublic(key);
-  if (!published || sha256(published) !== expected) throw new Error(`Public checksum mismatch: ${key}`);
-  console.log(`Uploaded and verified: ${key}`);
+  await client.request("PUT", key, data, contentType, attempts, { "x-oss-meta-sha256": expected });
+  const published = await headPublic(key);
+  if (!published || published.size !== data.length) throw new Error(`Public OSS HEAD size mismatch: ${key}`);
+  console.log(`Uploaded; HEAD verified: ${key}`);
 }
 
 function workspaceVersion() {

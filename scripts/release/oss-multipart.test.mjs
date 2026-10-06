@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import http from "node:http";
+import { createHmac } from "node:crypto";
 import { test } from "node:test";
 import { canonicalQuery, multipartCanonicalResource, uploadMultipart } from "./oss-multipart.mjs";
 
@@ -25,7 +26,7 @@ function bodyOf(request) {
 function options(endpoint, data) {
   return {
     bucket: "buddy-release", endpoint, accessKeyId: "test-access-id", accessKeySecret: "test-access-secret",
-    key: "buddy/releases/0.2.0/windows/x86_64/Buddy.zip", data, timeoutMs: 5_000,
+    key: "buddy/releases/0.2.0/windows/x86_64/Buddy.zip", data, timeoutMs: 5_000, ossHeaders: { "x-oss-meta-sha256": "test-digest" },
   };
 }
 
@@ -39,7 +40,10 @@ test("multipart upload completes ordered parts over a local HTTP endpoint", asyn
   const fixture = await serverFor(async (request, response) => {
     const url = new URL(request.url, "http://localhost");
     seen.push({ method: request.method, query: url.searchParams, body: await bodyOf(request), authorization: request.headers.authorization });
-    assert.match(request.headers.authorization ?? "", /^OSS test-access-id:/);
+    assert.equal(request.headers["x-oss-meta-sha256"], "test-digest");
+    const resource = multipartCanonicalResource("buddy-release", "buddy/releases/0.2.0/windows/x86_64/Buddy.zip", [...url.searchParams].map(([name, value]) => [name, name === "uploads" ? null : value]));
+    const signature = createHmac("sha1", "test-access-secret").update(`${request.method}\n\n${request.headers["content-type"]}\n${request.headers.date}\nx-oss-meta-sha256:test-digest\n${resource}`).digest("base64");
+    assert.equal(request.headers.authorization, `OSS test-access-id:${signature}`);
     if (request.method === "POST" && url.search === "?uploads") {
       response.end("<InitiateMultipartUploadResult><UploadId>upload%2Bid</UploadId></InitiateMultipartUploadResult>");
     } else if (request.method === "PUT") {

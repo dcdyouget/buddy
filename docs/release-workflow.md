@@ -64,7 +64,7 @@ npm run release -- 0.2.0 --notes "修复 xxx；新增 yyy"
 npm run release -- 0.2.0 --notes-file notes.txt --yes
 ```
 
-`scripts/release/release.sh` 依次：环境与版本检查（新版本须高于线上）→ 写版本号并本地提交 → `scripts/gate.sh` 与全部测试 → 推送该精确提交并触发 GitHub Actions 的 Windows 构建 → 等待并下载该运行的未签名 EXE、安装器和 ZIP → release 构建 → 组装 `Buddy.app`、更新包、DMG，并用 Mac 钥匙串中的同一更新私钥签名全部五个发布制品 → 上传版本目录并公网回读校验 → 确认 → 打标签并推送源码标签 → 覆盖 `channels/stable.json` → 创建附带两平台安装包的 GitHub Release（标记为 Latest）。
+`scripts/release/release.sh` 依次：环境与版本检查（新版本须高于线上）→ 写版本号并本地提交 → `scripts/gate.sh` 与全部测试 → 推送该精确提交并触发 GitHub Actions 的 Windows 构建 → 等待并下载该运行的未签名 EXE、安装器和 ZIP → release 构建 → 组装 `Buddy.app`、更新包、DMG，并用 Mac 钥匙串中的同一更新私钥签名全部五个发布制品 → 上传版本目录并通过公网 HEAD 检查对象可访问性和 Content-Length → 确认 → 打标签并推送源码标签 → 覆盖 `channels/stable.json` → 创建仅附带 macOS DMG 和 Windows setup.exe 的 GitHub Release（标记为 Latest）。
 
 覆盖 `stable.json` 这一步让应用内更新看到新版本；之前任何一步失败都不影响用户，修复后重跑即可。
 源码推送失败时不会切换更新清单；创建 Release 失败时，脚本会打印需要手动补做的命令。开始前脚本会检查 `gh` 已登录、GitHub 上的 `main` 没有本地缺少的提交。
@@ -75,9 +75,9 @@ npm run release -- 0.2.0 --notes-file notes.txt --yes
 
 推荐在 GitHub 的 **Actions → Release version → Run workflow** 发版：先把开发完成的代码推送到 `main`，选择 `main`，填入新版本号（如 `0.1.11`）和中文更新说明。无需手动改版本、创建标签或在本机编译。工作流检查线上版本和 OSS 连通性，自动提交版本号并推送不可变的 `v<版本>` 源码标签；Mac ARM64 和 Windows x64 分别在标准 GitHub runner 上测试、构建、打包和签名。
 
-两平台构建均成功后，Linux 发布任务再次用客户端内置公钥验证五个制品，生成双平台清单，将包、签名、更新说明和版本清单上传 OSS，并从公网回读校验 SHA-256。然后创建包含 Mac DMG、Windows 安装器和 ZIP 的 GitHub Release，最后切换 `channels/stable.json`。整次发布串行锁定；构建、签名或上传失败时不会提前切换稳定通道。普通 push 不会自动发布。
+两平台构建均成功后，Linux 发布任务再次用客户端内置公钥验证五个制品，生成双平台清单，将包、签名、更新说明和版本清单上传 OSS，并通过公网 HEAD 检查对象可访问性和 Content-Length。然后创建仅包含 macOS DMG 和 Windows setup.exe 的 GitHub Release，最后切换 `channels/stable.json`。整次发布串行锁定；构建、签名或上传失败时不会提前切换稳定通道。普通 push 不会自动发布。
 
-超过 8 MiB 的包通过 OSS 原生分片上传（4 MiB 分片、最多四路并发），避免海外 runner 单连接传输 Windows EXE 超时。合并后的完整对象仍须从公网回读并通过 SHA-256 校验；失败的分片上传会尝试中止，不会发布不完整包。
+超过 8 MiB 的包通过 OSS 原生分片上传（4 MiB 分片、最多四路并发），避免海外 runner 单连接传输 Windows EXE 超时。合并后的完整对象仍须通过公网 HEAD 检查可访问性和 Content-Length；失败的分片上传会尝试中止，不会发布不完整包。
 
 失败后优先使用 **Re-run failed jobs**，复用本次已签名制品继续发布。已存在的版本标签不会移动，已上传的包不会被不同内容覆盖。修复应用代码后应使用更高版本号。工作流会向 `main` 提交版本变更；下一次在 Mac 开发前执行 `git pull --ff-only` 同步该提交。
 
@@ -92,7 +92,7 @@ npm run release -- 0.2.0 --notes-file notes.txt --yes
 | `OSS_ACCESS_KEY_ID` | 阿里云 OSS AccessKey ID |
 | `OSS_ACCESS_KEY_SECRET` | 对应 AccessKey Secret，需有 `buddy-release/buddy/*` 的上传、读取权限 |
 
-**Actions → OSS connection check → Run workflow** 可单独验证 GitHub runner 到 OSS 的上传和公网回读，不触碰稳定通道。探测文件写入 `buddy/releases/ci-check/`。发布工作流同样会先执行该检查，避免编译完成后才发现上传凭据无效。
+**Actions → OSS connection check → Run workflow** 可单独验证 GitHub runner 到 OSS 的上传，以及探测对象的公网 HEAD 可访问性和 Content-Length，不触碰稳定通道。探测文件写入 `buddy/releases/ci-check/`。发布工作流同样会先执行该检查，避免编译完成后才发现上传凭据无效。
 
 CLI 也可以触发同一完整发版流程：
 
@@ -106,7 +106,7 @@ Mac 本地发版命令仍可使用，此路径在 Mac 本地使用更新私钥�
 
 下载后的 `Buddy_<版本>_x86_64.exe`、`Buddy_<版本>_x86_64_setup.exe` 和 `Buddy_<版本>_x86_64.zip` 在 Mac 上由与 macOS 更新包相同的私钥签名。脚本随后用 `buddy-update` 客户端内置公钥逐个验证 Windows 签名，才会生成清单、上传或切换 `stable.json`。`windows.yml` 从不接触更新私钥；未通过签名验证时发布停止，线上稳定通道保持不变。
 
-如需手动接管已签名的 CI 制品，可下载到 Windows 发布机的 `.release/<版本>/macos/aarch64` 和 `.release/<版本>/windows/x86_64`，再运行 `scripts/release/publish-artifacts.ps1 -Version <版本> -NotesFile <更新说明>`。脚本以客户端内置公钥验证、上传 OSS 并回读校验、创建 GitHub Release，最后切换 `stable.json`；必须在与版本标签相同的源代码提交上执行。不要同时运行本地发布和云端发布。普通 `windows.yml` 的 push、PR 和手动构建仍只生成未签名 Windows 制品。
+如需手动接管已签名的 CI 制品，可下载到 Windows 发布机的 `.release/<版本>/macos/aarch64` 和 `.release/<版本>/windows/x86_64`，再运行 `scripts/release/publish-artifacts.ps1 -Version <版本> -NotesFile <更新说明>`。脚本以客户端内置公钥验证、上传 OSS 并通过公网 HEAD 检查对象可访问性和 Content-Length、创建 GitHub Release，最后切换 `stable.json`；必须在与版本标签相同的源代码提交上执行。不要同时运行本地发布和云端发布。普通 `windows.yml` 的 push、PR 和手动构建仍只生成未签名 Windows 制品。
 
 下载命令为 `gh run download <运行ID> --name Buddy-darwin-aarch64-v<版本> --dir .release/<版本>/macos/aarch64`，Windows 包使用名称 `Buddy-windows-x86_64-v<版本>` 和目录 `.release/<版本>/windows/x86_64`。
 

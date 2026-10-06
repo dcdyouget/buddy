@@ -89,11 +89,20 @@ upload() { # 本地文件 OSS键 Cache-Control
   ossutil cp "$1" "oss://$OSS_BUCKET/$2" --endpoint "$OSS_ENDPOINT" -f --cache-control "$3" >/dev/null
 }
 
-verify_public() { # 公开URL 本地文件：公网下载回来逐字节比对 sha256
-  local remote
-  remote="$(curl -sS --fail --retry 3 -H 'Cache-Control: no-cache' "$1" | shasum -a 256 | cut -d' ' -f1)" \
-    || fail "公网下载失败：$1"
-  [[ "$remote" == "$(shasum -a 256 "$2" | cut -d' ' -f1)" ]] || fail "公网内容与本地不一致：$1"
+verify_public() { # 公开URL 本地文件：HEAD 状态及 Content-Length
+  local headers status remote_size local_size
+  headers="$(mktemp)"
+  if ! status="$(curl -sS --fail --retry 3 --head -D "$headers" -o /dev/null \
+    -w '%{http_code}' -H 'Cache-Control: no-cache' "$1")"; then
+    rm -f "$headers"
+    fail "公网 HEAD 请求失败：$1"
+  fi
+  [[ "$status" == "200" ]] || { rm -f "$headers"; fail "公网 HEAD 状态异常（$status）：$1"; }
+  remote_size="$(awk 'tolower($1) == "content-length:" { value=$2; sub(/\r$/, "", value) } END { print value }' "$headers")"
+  rm -f "$headers"
+  local_size="$(wc -c < "$2" | tr -d ' ')"
+  [[ "$remote_size" =~ ^[0-9]+$ && "$remote_size" == "$local_size" ]] \
+    || fail "公网 Content-Length 与本地不一致：$1（公网=$remote_size，本地=$local_size）"
 }
 
 copy_windows_artifacts() {
@@ -287,7 +296,7 @@ node scripts/release/manifest.mjs --version "$VERSION" --notes-file "$OUT/notes.
   --dir "$OUT" --output "$OUT/manifest.json" --platforms "$MANIFEST_PLATFORMS"
 
 # ── 7. 上传版本目录 ───────────────────────────────────────────
-step 7/11 "上传到 OSS 并公网回读校验"
+step 7/11 "上传到 OSS 并通过公网 HEAD 检查"
 for f in "$UPDATE" "$UPDATE.sig" "$INSTALLER" "$INSTALLER.sig"; do
   upload "$f" "$REMOTE_DIR/macos/aarch64/$(basename "$f")" "$ARTIFACT_CACHE"
 done

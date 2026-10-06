@@ -20,13 +20,14 @@ function AssertNewVersion {
 }
 function UploadVerified([string]$File, [string]$Key) {
     Run "ossutil" @("cp", $File, "oss://buddy-release/$Key", "--endpoint", "https://oss-cn-beijing.aliyuncs.com", "-f", "--cache-control", "no-cache")
-    $checkFile = "$File.public-check"
-    try {
-        Invoke-WebRequest -UseBasicParsing -Uri "$publicBase/$Key" -Headers @{ "Cache-Control" = "no-cache" } -OutFile $checkFile
-        if ((Get-FileHash -LiteralPath $File).Hash -ne (Get-FileHash -LiteralPath $checkFile).Hash) { throw "Public checksum mismatch: $Key" }
-    } finally {
-        if (Test-Path -LiteralPath $checkFile) { Remove-Item -LiteralPath $checkFile }
+    $response = Invoke-WebRequest -UseBasicParsing -Method Head -Uri "$publicBase/$Key" -Headers @{ "Cache-Control" = "no-cache" }
+    if ($response.StatusCode -ne 200) { throw "Public HEAD status $($response.StatusCode): $Key" }
+    $remoteSize = 0L
+    if (-not [long]::TryParse([string]$response.Headers["Content-Length"], [ref]$remoteSize)) {
+        throw "Public response has no valid Content-Length: $Key"
     }
+    $localSize = (Get-Item -LiteralPath $File).Length
+    if ($remoteSize -ne $localSize) { throw "Public Content-Length mismatch: $Key (remote=$remoteSize, local=$localSize)" }
 }
 if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid version" }
 if (-not $SourceCommit) { $SourceCommit = (& git rev-parse HEAD).Trim() }

@@ -25,7 +25,7 @@ jobs:
           if (!manifest.version) throw new Error('OSS response has no version');
           console.log(`GitHub runner reached OSS; stable version: ${manifest.version}`);
           NODE
-      - name: Upload probe and verify public SHA-256
+      - name: Upload probe and check public HEAD metadata
         env:
           OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
           OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
