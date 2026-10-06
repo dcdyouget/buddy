@@ -913,7 +913,7 @@ mod tests {
                 "document.doc",
                 b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1ole".to_vec(),
             ),
-            ("nul.txt", b"text\0payload".to_vec()),
+            ("binary-control.txt", b"text\0payload".to_vec()),
         ] {
             let path = tmp.path().join(name);
             tokio::fs::write(&path, bytes).await.unwrap();

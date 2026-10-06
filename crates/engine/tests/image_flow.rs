@@ -281,7 +281,39 @@ async fn new_image_is_sent_once_and_history_images_are_json_references() {
             "请求缺少历史附件引用 {marker}: {body}"
         );
     }
-    assert!(body.contains(&stored.path));
+    let request: serde_json::Value = serde_json::from_str(body).unwrap();
+    let paths: Vec<String> = request["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|message| {
+            let content = &message["content"];
+            if let Some(text) = content.as_str() {
+                vec![text.to_string()]
+            } else {
+                content
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|part| part["text"].as_str().map(str::to_owned))
+                    .collect()
+            }
+        })
+        .flat_map(|text| {
+            let Some(references) = text.split("<buddy_attachments>\n").nth(1) else {
+                return Vec::new();
+            };
+            let references: serde_json::Value =
+                serde_json::from_str(references.split("\nUse read_file").next().unwrap()).unwrap();
+            references
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|image| image["path"].as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert!(paths.contains(&stored.path));
     assert!(
         !run.requests[1]
             .body

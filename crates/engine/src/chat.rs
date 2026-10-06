@@ -1980,7 +1980,16 @@ mod tests {
         prepare_images_for_provider(directory.path(), &mut messages, 1024, true).unwrap();
         let image = &messages[0].images[0];
         assert!(Path::new(&image.path).is_file());
-        assert!(messages[0].content.contains(&image.path));
+        let references = messages[0]
+            .content
+            .split("<buddy_attachments>\n")
+            .nth(1)
+            .unwrap()
+            .split("\nUse read_file")
+            .next()
+            .unwrap();
+        let references: serde_json::Value = serde_json::from_str(references).unwrap();
+        assert_eq!(references[0]["path"].as_str(), Some(image.path.as_str()));
         assert!(!image.data_url.is_empty());
     }
 

@@ -1468,19 +1468,44 @@ mod tests {
         assert_eq!(out[0]["role"], "system");
     }
 
+    async fn read_http_request(socket: &mut tokio::net::TcpStream) -> bool {
+        let mut request = Vec::new();
+        let mut chunk = [0_u8; 1024];
+        loop {
+            if let Some(header_end) = request
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .map(|position| position + 4)
+            {
+                let header = String::from_utf8_lossy(&request[..header_end]);
+                let content_length = header
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .unwrap_or(0);
+                if request.len() >= header_end + content_length {
+                    return true;
+                }
+            }
+            let count = socket.read(&mut chunk).await.unwrap();
+            if count == 0 {
+                return false;
+            }
+            request.extend_from_slice(&chunk[..count]);
+        }
+    }
+
     async fn serve_openai_sse(body: &'static str) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
-            let mut request = Vec::new();
-            let mut chunk = [0_u8; 1024];
-            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-                let count = socket.read(&mut chunk).await.unwrap();
-                if count == 0 {
-                    return;
-                }
-                request.extend_from_slice(&chunk[..count]);
+            if !read_http_request(&mut socket).await {
+                return;
             }
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -1497,14 +1522,8 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let task = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
-            let mut request = Vec::new();
-            let mut chunk = [0_u8; 1024];
-            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-                let count = socket.read(&mut chunk).await.unwrap();
-                if count == 0 {
-                    return;
-                }
-                request.extend_from_slice(&chunk[..count]);
+            if !read_http_request(&mut socket).await {
+                return;
             }
             socket
                 .write_all(
