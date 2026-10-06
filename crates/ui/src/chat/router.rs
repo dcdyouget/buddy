@@ -216,9 +216,6 @@ impl PageRouter {
             ),
             cx.subscribe(&empty, |this, _, event: &EmptyPageEvent, cx| match event {
                 EmptyPageEvent::Expand => this.transition(cx, |p| p.set_page(Page::Conversation)),
-                EmptyPageEvent::DismissError => {
-                    this.conversation.update(cx, |c, cx| c.dismiss_error(cx))
-                }
             }),
             cx.subscribe(&no_key, |this, _, NoKeyPageEvent::OpenSettings, cx| {
                 this.open_settings(cx)

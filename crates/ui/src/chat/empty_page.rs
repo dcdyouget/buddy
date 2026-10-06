@@ -5,14 +5,13 @@
 //! | 透明外壳（不再叠第二层玻璃）、内容贴底 | 根节点无底色，纵向 `justify_end` |
 //! | 输入区 `hideBorder` + `disableAutoResize` → 独立气泡 | [`Composer::set_standalone`]（路由器在切页时设置） |
 //! | 顶部居中的「展开」按钮：24×20、圆角 full、`--border-subtle`、`--control-surface`、`--shadow-static`、`ChevronUp` 14；悬停品牌色字 + `--composer-surface` 底；title「展开对话」 | 同，发出 [`EmptyPageEvent::Expand`] |
-//! | 有错误时输入区上方显示 `.chat-error` | [`EmptyPage::set_error`] + [`error_banner`]，关闭发出 [`EmptyPageEvent::DismissError`] |
+//! | 有错误时输入区上方显示 `.chat-error` | 不显示：紧凑窗口只有气泡高度，横幅会挤掉输入框；[`EmptyPage::set_error`] 只记录，错误在对话页显示 |
 //! | 顶部左右两块拖拽区（`.empty-drag-region`） | 按 v1 留出中间展开按钮 真实拖拽 |
 //!
 //! 发送 / 模型选择 / 设置入口来自输入区自身的事件（[`EmptyPage::composer`]），由页面状态机订阅。
 
 use super::composer::Composer;
 use super::drag::{self, DragSource};
-use super::message_row::error_banner;
 use crate::components::TextTooltip;
 use crate::icons::{IconName, icon};
 use crate::theme_system::{BuddyTheme, box_shadows, tokens::metrics as m};
@@ -29,8 +28,6 @@ const EXPAND_TOP: f32 = 2.0;
 pub enum EmptyPageEvent {
     /// 点击顶部「展开」（v1 `setPage('conversation')`）
     Expand,
-    /// 关闭错误提示（v1 `setError(null)`）
-    DismissError,
 }
 
 /// 空态页
@@ -63,7 +60,13 @@ impl EmptyPage {
 
     /// 设置 / 清除错误提示
     pub fn set_error(&mut self, error: Option<String>, cx: &mut Context<Self>) {
-        self.error = error.map(SharedString::from);
+        let error = error.map(SharedString::from);
+        if self.error == error {
+            return;
+        }
+        // 只记录，不绘制：紧凑窗口只有气泡高度，错误横幅会把输入框挤出窗口；
+        // 错误在展开后的对话页显示。
+        self.error = error;
         cx.notify();
     }
 
@@ -87,7 +90,6 @@ impl Render for EmptyPage {
             composer.set_drag_source(drag_source.clone());
         });
         let composer = self.composer.clone();
-        let allow_blank_drag = self.error.is_none();
         let expand_bounds = std::rc::Rc::new(std::cell::Cell::new(None::<gpui::Bounds<gpui::Pixels>>));
         let expand_bounds_for_hit = expand_bounds.clone();
         // v1 `.empty-expand-trigger:hover`：品牌色文字 + `--composer-surface` 底
@@ -97,8 +99,7 @@ impl Render for EmptyPage {
                 // The root owns only the remaining blank canvas. The Composer
                 // records its actual window bounds so text, buttons, and its
                 // padding never become a page-level drag target.
-                if !allow_blank_drag
-                    || expand_bounds_for_hit.get().is_some_and(|bounds| bounds.contains(&event.position))
+                if expand_bounds_for_hit.get().is_some_and(|bounds| bounds.contains(&event.position))
                     || composer
                         .read(cx)
                         .bounds()
@@ -143,16 +144,6 @@ impl Render for EmptyPage {
                     .right_0()
                     .w(px(m::SPACE_2)),
             ])
-            .when_some(self.error.clone(), |d, message| {
-                let this = cx.entity().downgrade();
-                d.child(error_banner(
-                    &message,
-                    move |_, cx| {
-                        let _ = this.update(cx, |_, cx| cx.emit(EmptyPageEvent::DismissError));
-                    },
-                    cx,
-                ))
-            })
             .child(self.composer.clone())
             // 展开按钮盖在输入区之上（v1 `z-index: 2`）：必须排在输入区之后绘制
             .child(

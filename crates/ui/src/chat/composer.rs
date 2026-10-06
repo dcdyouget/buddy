@@ -463,26 +463,30 @@ impl Render for Composer {
             )
             // 紧凑气泡高度固定，排在输入行下方的提示会被裁掉（选了超过 5 MB 的图片看起来「没反应」）；
             // 改为贴着气泡底边的一行提示。
-            .when_some(self.attachment_error.clone().filter(|_| compact), |d, error| {
-                d.child(
-                    div()
-                        .absolute()
-                        .left(px(m::SPACE_4))
-                        .right(px(m::SPACE_4))
-                        .bottom(px(1.))
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .text_ellipsis()
-                        .text_color(c.state_warning)
-                        .text_size(px(m::FONT_SIZE_XS))
-                        .line_height(px(m::FONT_SIZE_XS + 2.))
-                        .child(error),
-                )
-            })
+            .when_some(self.attachment_error.clone().filter(|_| compact), |d, error| d.child(compact_notice_line(error, c)))
             .when(show_sheen, |d| d.child(crate::motion_effects::surface_sheen(("composer-sheen", self.streaming as usize), c.buddy_primary, self.streaming)))
             // 仅记录外层实际边界，不插入 hitbox 或参与布局。
             .child(gpui::canvas(|_, _, _| {}, move |bounds, _, _, _| recorded_bounds.set(Some(bounds))).absolute().top_0().left_0().size_full())
     }
+}
+
+/// 紧凑气泡底边的一行提示：超长省略、悬停看全文。
+fn compact_notice_line(text: SharedString, c: &'static crate::theme_system::tokens::Palette) -> gpui::Stateful<gpui::Div> {
+    let full = text.clone();
+    div()
+        .id("composer-compact-notice")
+        .absolute()
+        .left(px(m::SPACE_4))
+        .right(px(m::SPACE_4))
+        .bottom(px(1.))
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_ellipsis()
+        .text_color(c.state_warning)
+        .text_size(px(m::FONT_SIZE_XS))
+        .line_height(px(m::FONT_SIZE_XS + 2.))
+        .tooltip(move |_, cx| TextTooltip::view(full.clone(), cx))
+        .child(text)
 }
 
 #[cfg(test)]
