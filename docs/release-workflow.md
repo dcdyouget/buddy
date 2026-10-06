@@ -58,92 +58,78 @@ buddy/
 
 ## 发版
 
+发版只走 GitHub Actions 的 **Release** 工作流，本机不需要编译、签名或上传：
+
+1. 代码在本地提交并通过 `scripts/gate.sh`，推送到 `main`。
+2. 在 **Actions → Release → Run workflow** 选 `main`，`mode` 选 `release`，填写新版本号（须高于线上版本）和中文更新说明。也可以用 CLI：
+
 ```bash
-npm run release                                      # 交互输入版本号与更新说明
-npm run release -- 0.2.0 --notes "修复 xxx；新增 yyy"
-npm run release -- 0.2.0 --notes-file notes.txt --yes
+gh workflow run release.yml --ref main -f mode=release -f version=0.2.0 -f notes="更新说明"
 ```
 
-`scripts/release/release.sh` 依次：环境与版本检查（新版本须高于线上）→ 写版本号并本地提交 → `scripts/gate.sh` 与全部测试 → 推送该精确提交并触发 CI 的 Windows 手动构建 → 等待并下载该运行的未签名 EXE、安装器和 ZIP → release 构建 → 组装 `Buddy.app`、更新包、DMG，并用 Mac 钥匙串中的同一更新私钥签名全部五个发布制品 → 上传版本目录并通过公网 HEAD 检查对象可访问性和 Content-Length → 确认 → 打标签并推送源码标签 → 覆盖 `channels/stable.json` → 创建仅附带 macOS DMG 和 Windows setup.exe 的 GitHub Release（标记为 Latest）。
+3. 工作流向 `main` 提交版本号（`chore(release): v<版本>`），本地随后执行 `git pull --ff-only` 同步。
 
-覆盖 `stable.json` 这一步让应用内更新看到新版本；之前任何一步失败都不影响用户，修复后重跑即可。
-源码推送失败时不会切换更新清单；创建 Release 失败时，脚本会打印需要手动补做的命令。开始前脚本会检查 `gh` 已登录、GitHub 上的 `main` 没有本地缺少的提交。
+不要手动改版本号或创建标签，由工作流统一处理。`Cargo.toml`、`Cargo.lock`、`package.json`、`package-lock.json` 的版本号必须一致，否则准备阶段会失败。
 
-其他选项：`--skip-tests`（重跑上传 / 发布时）、`--skip-publish`（只上传版本目录，不发布、不推送）、`--windows-dir <目录>`（改用本地未签名 Windows EXE、安装器与 ZIP，跳过 Actions 下载）。
+### 工作流做什么
 
-## CI 与双平台发布
+- **准备**：检查输入与 Secrets；探测 GitHub runner 到 OSS 的上传与公网 HEAD（探测文件写入 `buddy/releases/ci-check/`，不触碰稳定通道）；提交版本号，并原子推送 `main` 与不可变的 `v<版本>` 源码标签。
+- **构建**：Mac ARM64 与 Windows x64 分别在标准 GitHub runner 上测试、构建、打包，用 `tauri signer`（只用它的签名命令，产物为 minisign 格式）签名全部五个发布制品。
+- **发布**：Linux 任务用客户端内置公钥再次验证五个制品，生成双平台清单，上传包、签名、更新说明和版本清单到 OSS，并通过公网 HEAD 检查可访问性和 Content-Length；然后创建仅附带 macOS DMG 和 Windows setup.exe 的 GitHub Release（标记为 Latest），最后覆盖 `channels/stable.json`。
 
-推荐在 GitHub 的 **Actions → Release → Run workflow** 发版：先把开发完成的代码推送到 `main`，选择 `main`，将 `mode` 设为 `release`，填入新版本号（如 `0.1.11`）和中文更新说明。无需手动改版本、创建标签或在本机编译。工作流会在准备阶段检查 OSS 连通性，自动提交版本号并推送不可变的 `v<版本>` 源码标签；Mac ARM64 和 Windows x64 分别在标准 GitHub runner 上测试、构建、打包和签名。
+整次发布串行锁定；构建、签名或上传失败时不会切换稳定通道，用户不受影响。普通 push 不会发布。
 
-两平台构建均成功后，Linux 发布任务再次用客户端内置公钥验证五个制品，生成双平台清单，将包、签名、更新说明和版本清单上传 OSS，并通过公网 HEAD 检查对象可访问性和 Content-Length。然后创建仅包含 macOS DMG 和 Windows setup.exe 的 GitHub Release，最后切换 `channels/stable.json`。整次发布串行锁定；构建、签名或上传失败时不会提前切换稳定通道。普通 push 不会自动发布。
+超过 8 MiB 的包通过 OSS 原生分片上传（4 MiB 分片、最多四路并发），避免海外 runner 单连接传输超时。失败的分片上传会尝试中止，不会发布不完整包。
 
-超过 8 MiB 的包通过 OSS 原生分片上传（4 MiB 分片、最多四路并发），避免海外 runner 单连接传输 Windows EXE 超时。合并后的完整对象仍须通过公网 HEAD 检查可访问性和 Content-Length；失败的分片上传会尝试中止，不会发布不完整包。
+### 失败后
 
-失败后优先使用 **Re-run failed jobs**，复用本次已签名制品继续发布。已存在的版本标签不会移动，已上传的包不会被不同内容覆盖。修复应用代码后应使用更高版本号。工作流会向 `main` 提交版本变更；下一次在 Mac 开发前执行 `git pull --ff-only` 同步该提交。
+- 优先使用 **Re-run failed jobs**，复用本次已签名制品继续发布。已存在的版本标签不会移动，已上传的包不会被不同内容覆盖。
+- 修复发布脚本后要继续上传同一版本：`mode` 设为 `resume`，填写原版本号、原 Release 运行 ID（`build_run`）和更新说明。要求原两平台构建均成功、运行源码与公开版本标签匹配；不重建、不移动源码标签。
 
-如果需要修复发布脚本后继续上传同一版本，在 **Release** workflow 中将 `mode` 设为 `resume`，填写原版本号、原 Release 运行 ID（`build_run`）和更新说明。该模式要求原两平台构建均成功、运行源码与公开版本标签匹配；使用当前发布脚本恢复原制品的上传，不重建或移动源码标签。
+```bash
+gh workflow run release.yml --ref main -f mode=resume -f version=0.2.0 -f build_run=123456789 -f notes="更新说明"
+```
 
-构建任务使用按平台共享的 Rust 缓存；Linux 发布与 Release 的 `resume` 模式共享 verifier 缓存。发布任务将 `RUSTUP_HOME` 隔离到 runner 临时目录，并由 `dtolnay/rust-toolchain@1.95.0` 安装固定工具链，避免使用 runner 预装版本；缓存首次填充时可能仍需一次冷构建。
+- 修复的是应用代码：使用更高的版本号重新发版。
+
+### Secrets
 
 仓库 **Settings → Secrets and variables → Actions** 需要四个 Secrets：
 
 | 名称 | 内容 |
 |---|---|
-| `TAURI_SIGNING_PRIVATE_KEY` | 现有更新签名私钥文件的完整内容，必须与已发布客户端公钥匹配 |
+| `TAURI_SIGNING_PRIVATE_KEY` | 更新签名私钥文件的完整内容，必须与已发布客户端公钥匹配 |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | 私钥密码（无密码则可为空） |
 | `OSS_ACCESS_KEY_ID` | 阿里云 OSS AccessKey ID |
 | `OSS_ACCESS_KEY_SECRET` | 对应 AccessKey Secret，需有 `buddy-release/buddy/*` 的上传、读取权限 |
 
-OSS 探测已内置在 **Release** workflow 的准备阶段：它验证 GitHub runner 到 OSS 的上传，以及探测对象的公网 HEAD 可访问性和 Content-Length，不触碰稳定通道；探测文件写入 `buddy/releases/ci-check/`，避免编译完成后才发现上传凭据无效。
+更新签名私钥原件为 `~/.tauri/buddy-v2.key`（公钥内置于 `crates/update/src/lib.rs` 的 `PUBLIC_KEY`）。**丢失后已发布客户端无法再验证任何新包**，私钥与密码须离线备份。
 
-CLI 也可以触发同一完整发版流程：
+### 缓存与费用
 
-```bash
-gh workflow run release.yml --ref main -f mode=release -f version=0.1.11 -f notes="更新说明"
-gh workflow run release.yml --ref main -f mode=resume -f version=0.1.11 -f build_run=123456789 -f notes="更新说明"
-```
+构建任务使用按平台共享的 Rust 缓存；Linux 发布与 `resume` 模式共享 verifier 缓存。各任务将 `RUSTUP_HOME` 隔离到 runner 临时目录，由 `dtolnay/rust-toolchain@1.95.0` 安装固定工具链；缓存首次填充时需要一次冷构建。
 
-Buddy 当前为公开仓库，标准 GitHub 托管 runner 的运行分钟数免费。私有仓库有套餐分钟和存储额度，大型 runner 单独计费；详见 [GitHub Actions 计费](https://docs.github.com/en/billing/concepts/product-billing/github-actions)。临时构建制品只保留 7 天，长期安装包位于 OSS 和 GitHub Release。
+Buddy 为公开仓库，标准 GitHub 托管 runner 的运行分钟数免费；私有仓库有套餐分钟和存储额度，详见 [GitHub Actions 计费](https://docs.github.com/en/billing/concepts/product-billing/github-actions)。临时构建制品只保留 7 天，长期安装包位于 OSS 和 GitHub Release。
 
-Mac 本地发版命令仍可使用，此路径在 Mac 本地使用更新私钥。脚本在写入版本号并通过本地测试后，先将该精确提交推送到 `main`，再以该完整 SHA 作为 `ref` 触发 `.github/workflows/ci.yml`。脚本只接受 `head_sha` 完全相同、由刚刚触发的 `workflow_dispatch` 运行产生的 `Buddy-windows-x86_64` 制品；它等待该运行成功后下载其中未签名的 EXE 和 ZIP。这样不会误用其它分支、旧提交或普通 push 检查的制品。
+## CI
 
-下载后的 `Buddy_<版本>_x86_64.exe`、`Buddy_<版本>_x86_64_setup.exe` 和 `Buddy_<版本>_x86_64.zip` 在 Mac 上由与 macOS 更新包相同的私钥签名。脚本随后用 `buddy-update` 客户端内置公钥逐个验证 Windows 签名，才会生成清单、上传或切换 `stable.json`。`ci.yml` 从不接触更新私钥；未通过签名验证时发布停止，线上稳定通道保持不变。
+`.github/workflows/ci.yml` 在 push 到 `main` 与 PR（仅涉及代码、脚本、依赖或工作流时）上做 Windows 编译与测试。`workflow_dispatch` 接收精确 `ref`，手动构建并上传包含未签名 EXE、安装器和 ZIP 的 `Buddy-windows-x86_64` 制品，用于测试安装包，不参与发布。
 
-如需手动接管已签名的 CI 制品，可下载到 Windows 发布机的 `.release/<版本>/macos/aarch64` 和 `.release/<版本>/windows/x86_64`，再运行 `scripts/release/publish-artifacts.ps1 -Version <版本> -NotesFile <更新说明>`。脚本以客户端内置公钥验证、上传 OSS 并通过公网 HEAD 检查对象可访问性和 Content-Length、创建 GitHub Release，最后切换 `stable.json`；必须在与版本标签相同的源代码提交上执行。不要同时运行本地发布和云端发布。普通 `ci.yml` 的 push、PR 和手动构建仍只生成未签名 Windows 制品。
+Windows 普通 push / PR 只恢复共享缓存；完整发版或手动 Windows 打包成功后才保存同时包含 test / release 依赖的缓存，避免 debug-only 缓存占据不可覆盖的键。
 
-下载命令为 `gh run download <运行ID> --name Buddy-darwin-aarch64-v<版本> --dir .release/<版本>/macos/aarch64`，Windows 包使用名称 `Buddy-windows-x86_64-v<版本>` 和目录 `.release/<版本>/windows/x86_64`。
+## 发布包
 
-网络受限或需要重跑时，`--windows-dir` 可替代自动下载。目录须包含同版本、尚未签名的 `Buddy_<版本>_x86_64.exe`、`Buddy_<版本>_x86_64_setup.exe` 和 `Buddy_<版本>_x86_64.zip`；Mac 脚本仍会负责签名和客户端校验：
+清单保持 `schema: 1`。同一 `version` 下所有平台包必须对应同一版本；正式发布必须同时包含 Mac 与 Windows 包。
 
-```bash
-npm run release -- 0.2.0 --notes-file notes.txt --windows-dir /path/to/windows/x86_64
-```
+GitHub Release 仅附加 macOS DMG 和 Windows setup.exe；更新包、便携 ZIP 及签名只保存在 OSS。
 
-清单保持 `schema: 1`。同一 `version` 下所有平台包必须对应同一版本；不能保留旧 Windows 包却把顶层版本改成新版本。正式发布必须同时包含 Mac 与 Windows 包。
+Windows 默认下载 NSIS 的 `_setup.exe`：中文向导，默认安装到 `%LOCALAPPDATA%\Programs\Buddy`，无需管理员权限；添加开始菜单入口，可选创建桌面快捷方式，并登记在「已安装的应用」中。卸载只移除程序、快捷方式及对应注册项，保留 `%APPDATA%\com.buddy.chat` 中的配置和历史消息。`portable` 是可选 ZIP 下载；0.1.11 及更早的清单中 `installer` 为 ZIP，`resume` 恢复旧制品时兼容这一格式。
 
-Windows 默认下载 NSIS 的 `_setup.exe`：双击中文向导，默认安装到 `%LOCALAPPDATA%\Programs\Buddy`，无需管理员权限；添加开始菜单入口，可选创建桌面快捷方式，并登记在 Windows 的“已安装的应用”中。卸载仅移除程序、快捷方式及对应注册项，保留 `%APPDATA%\com.buddy.chat` 中的配置和历史消息。NSIS 3 是 Windows 打包依赖，GitHub Actions 会自动安装；本地打包需安装 NSIS 3 或把 `makensis.exe` 加入 PATH。
+应用内更新始终读取 `update.url`：Mac 为 `.app.tar.xz`，Windows 为原始 EXE（不会把安装器当作更新程序）。Windows 更新链路：下载 `.exe` → 大小 / SHA-256 / minisign 校验 → 同目录暂存 → 退出进程 → 后台 PowerShell 替换旧 EXE 并重启；替换失败保留或恢复旧程序。开发构建与示例不自动更新；安装到不可写目录时会提示暂存失败。
 
-GitHub Release 仅附加 macOS DMG 和 Windows setup.exe。更新包、便携 ZIP 及签名继续保存在 OSS；Actions artifact 只收集这些发布文件，不包含展开后的应用目录。
-
-`portable` 是可选 ZIP 下载；0.1.11 及更早的发布清单中，`installer` 仍为 ZIP，恢复旧制品时兼容这一格式。应用内更新始终读取原始 EXE 的 `update.url`，不会把安装器作为更新程序替换进去。更新链路为：下载 `.exe` → 大小 / SHA-256 / minisign 校验 → 同目录暂存 → 退出进程 → 后台 PowerShell 替换旧 EXE 并重启。替换失败保留或恢复旧程序。开发构建与示例不自动更新；安装到不可写目录时会提示暂存失败，需改用用户目录。
-
-`.github/workflows/ci.yml` 的 push 和 PR 做日常检查与测试；`workflow_dispatch` 接收精确 `ref` 时手动构建并上传包含未签名 EXE、安装器和 ZIP 的 `Buddy-windows-x86_64` 制品。可通过 `target/release/buddy.exe --selfcheck-window` 在已解锁的 Windows 桌面验证窗口创建、隐藏、唤回和聚焦，测试数据目录与用户配置隔离。
-
-这里只采用更新签名，未配置 Windows Authenticode 证书；首次运行可能出现 SmartScreen 提示。
-
-## 凭据
-
-| 凭据 | 位置 |
-|---|---|
-| 更新签名私钥 | `~/.tauri/buddy-v2.key`（公钥内置于 `crates/update/src/lib.rs` 的 `PUBLIC_KEY`）。**丢失后已发布客户端无法再验证任何新包**，私钥与密码须离线备份 |
-| 私钥密码 | 钥匙串 `buddy-updater-key` / 账户 `buddy`（或环境变量 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`） |
-| OSS AccessKey | `~/.ossutilconfig`（ossutil 2.x），需要 `buddy-release/buddy/*` 的 `GetObject`、`PutObject` |
-| GitHub | `gh` 已登录且有 `dcdyouget/buddy` 的推送权限 |
+只采用更新签名：Mac 安装包为 ad-hoc 签名，新用户首次打开会被 Gatekeeper 拦截，需右键「打开」或在系统设置中允许；Windows 未配置 Authenticode 证书，首次运行可能出现 SmartScreen 提示。
 
 ## 出问题时
 
 - 发布后发现问题：不要把 `stable.json` 改回旧版本（已升级的用户不会降级），修复后发布更高的修订版本。
 - 不删除已发布的版本目录与 GitHub Release。
-- 安装包为 ad-hoc 签名：新用户首次打开会被 Gatekeeper 拦截，需右键「打开」或在系统设置中允许。
-
-Windows 普通 push/PR 只恢复共享缓存；完整发版或手动 Windows 打包成功后才保存同时包含 test/release 依赖的缓存，避免 debug-only 缓存占据不可覆盖的键。首次完整构建负责填充缓存。

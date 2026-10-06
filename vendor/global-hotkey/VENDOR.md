@@ -10,4 +10,4 @@
 
 复核：从上述 SHA-256 的发布归档解包，逐文件比较本目录的 `src/`；应仅有该常量、原因注释及一处实参差异。根 workspace 的 `[patch.crates-io]` 使用本副本，`exclude` 防止将上游示例及 dev-dependencies 加入 Buddy 工作区。
 
-验收：`shell_preview --selftest-behavior` 的 T47 独立 Carbon exclusive owner；`scripts/shell/verify_behavior.py` 的 `os-exclusive-registration` 将实参还原为 0，必须得到行为 FAIL。升级上游时重新检查其注册策略；若提供等价独占 API，应移除此补丁。
+验收（目前无自动化检查）：先让另一进程独占注册同一组合键，再在 Buddy 设置中改为该组合键，必须得到冲突错误并保留旧热键。升级上游时重新检查其注册策略；若提供等价独占 API，应移除此补丁。

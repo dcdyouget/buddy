@@ -14,7 +14,7 @@ macOS / Windows 上的 AI 对话小工具：全局快捷键（Mac 默认 ⌘J，
 | `crates/syntax` | 代码高亮：内置 Python / Shell / SQL 语法，其余语言走 `generic` 通用高亮 | MIT |
 | `crates/update` | 自更新：清单、下载、sha256 + minisign 校验、替换安装 | MIT |
 | `vendor/global-hotkey` | 经 `[patch.crates-io]` 使用的 global-hotkey 修改版 | MIT / Apache-2.0 |
-| `scripts/release` | 一键发版，见 `docs/release-workflow.md` | — |
+| `scripts/release` | 发版工作流调用的打包 / 签名 / 上传脚本，见 `docs/release-workflow.md` | — |
 
 ## 常用命令
 
@@ -23,7 +23,7 @@ cargo run -p buddy-app                              # 开发运行
 cargo test --workspace --exclude buddy-markdown     # 全部测试
 scripts/gate.sh >/tmp/gate.log 2>&1; echo $?        # 提交前门禁（不要接管道，会吞掉退出码）
 target/debug/buddy --selfcheck-window               # 原生窗口行为自检（需桌面已解锁）
-npm run release -- <版本号> --notes "更新说明"        # 发版（OSS + 推送 GitHub + GitHub Release）
+gh workflow run release.yml --ref main -f mode=release -f version=<版本号> -f notes="更新说明"   # 发版（先推送 main）
 ```
 
 ## 需要知道的事
@@ -32,4 +32,6 @@ npm run release -- <版本号> --notes "更新说明"        # 发版（OSS + �
 - 修改 `crates/markdown/src` 后必须按 `VENDOR.md` 重新生成 patch，否则门禁失败（GPL 要求记录修改）。
 - 数据目录 Mac 为 `~/Library/Application Support/com.buddy.chat`，Windows 为 `%APPDATA%\com.buddy.chat`，与 v1 共用（标识 `com.buddy.chat` 不要改）；API Key 明文存在 `config.json`。
 - 主窗口在显示前用 AppKit 改样式（无标题栏、无阴影、圆角）；改完必须让 GPUI 视图重新成为第一响应者，否则无法输入文字。自检 T12-01 会检查。
+- 发版只走 GitHub Actions 的 Release 工作流（构建、签名、上传 OSS、GitHub Release 全在云端），不在本机发版；工作流会向 `main` 提交版本号，之后本地 `git pull --ff-only`。
+- 依赖里的 `@tauri-apps/cli` 只用来做更新包签名（`tauri signer`），应用本身不使用 Tauri。
 - v1（Tauri + React）已从仓库移除，可从标签 `v1-final` 找回。
