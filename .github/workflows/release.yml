@@ -206,7 +206,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}-v${{ needs.prepare.outputs.version }}
-          path: .release/${{ needs.prepare.outputs.version }}/${{ matrix.artifact_path }}
+          path: |
+            .release/${{ needs.prepare.outputs.version }}/${{ matrix.artifact_path }}/Buddy_*.app.tar.xz*
+            .release/${{ needs.prepare.outputs.version }}/${{ matrix.artifact_path }}/Buddy_*.dmg*
+            .release/${{ needs.prepare.outputs.version }}/${{ matrix.artifact_path }}/Buddy_*.exe*
+            .release/${{ needs.prepare.outputs.version }}/${{ matrix.artifact_path }}/Buddy_*.zip*
           if-no-files-found: error
           retention-days: 7
 

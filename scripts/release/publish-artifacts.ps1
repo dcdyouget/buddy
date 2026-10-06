@@ -75,15 +75,22 @@ UploadVerified "$Dir/manifest.json" "buddy/releases/$Version/manifest.json"
 $releaseAssets = @("$Dir/macos/aarch64/Buddy_${Version}_aarch64.dmg")
 if ($relativeAssets -contains $windowsSetup) {
     $releaseAssets += (Join-Path $Dir $windowsSetup)
-    if ($relativeAssets -contains $windowsZip) { $releaseAssets += (Join-Path $Dir $windowsZip) }
-} else {
-    $releaseAssets += (Join-Path $Dir $windowsZip)
 }
 $ErrorActionPreference = "Continue"
 & gh release view "v$Version" --repo dcdyouget/buddy --json tagName 2>$null | Out-Null
 $releaseExists = $LASTEXITCODE -eq 0
 $ErrorActionPreference = "Stop"
 if ($releaseExists) {
+    # Reruns must also remove a ZIP attached by an older invocation; clobbering
+    # the desired assets alone would leave the GitHub Release with stale extras.
+    $releaseInfo = (& gh release view "v$Version" --repo "dcdyouget/buddy" --json assets 2>$null | ConvertFrom-Json)
+    if ($LASTEXITCODE -eq 0) {
+        $portableName = Split-Path -Leaf $windowsZip
+        $stalePortable = @($releaseInfo.assets | Where-Object { $_.name -eq $portableName })
+        if ($stalePortable.Count -gt 0) {
+            Run "gh" @("release", "delete-asset", "v$Version", $portableName, "--repo", "dcdyouget/buddy", "--yes")
+        }
+    }
     Run "gh" (@("release", "upload", "v$Version") + $releaseAssets + @("--repo", "dcdyouget/buddy", "--clobber"))
 } else {
     Run "gh" (@("release", "create", "v$Version") + $releaseAssets + @("--repo", "dcdyouget/buddy", "--verify-tag", "--latest",

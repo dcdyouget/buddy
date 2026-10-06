@@ -120,6 +120,8 @@ npm run release -- 0.2.0 --notes-file notes.txt --windows-dir /path/to/windows/x
 
 Windows 默认下载 NSIS 的 `_setup.exe`：双击中文向导，默认安装到 `%LOCALAPPDATA%\Programs\Buddy`，无需管理员权限；添加开始菜单入口，可选创建桌面快捷方式，并登记在 Windows 的“已安装的应用”中。卸载仅移除程序、快捷方式及对应注册项，保留 `%APPDATA%\com.buddy.chat` 中的配置和历史消息。NSIS 3 是 Windows 打包依赖，GitHub Actions 会自动安装；本地打包需安装 NSIS 3 或把 `makensis.exe` 加入 PATH。
 
+GitHub Release 仅附加 macOS DMG 和 Windows setup.exe。更新包、便携 ZIP 及签名继续保存在 OSS；Actions artifact 只收集这些发布文件，不包含展开后的应用目录。
+
 `portable` 是可选 ZIP 下载；0.1.11 及更早的发布清单中，`installer` 仍为 ZIP，恢复旧制品时兼容这一格式。应用内更新始终读取原始 EXE 的 `update.url`，不会把安装器作为更新程序替换进去。更新链路为：下载 `.exe` → 大小 / SHA-256 / minisign 校验 → 同目录暂存 → 退出进程 → 后台 PowerShell 替换旧 EXE 并重启。替换失败保留或恢复旧程序。开发构建与示例不自动更新；安装到不可写目录时会提示暂存失败，需改用用户目录。
 
 `.github/workflows/windows.yml` 的 push 和 PR 仅做检查与测试；`workflow_dispatch` 接收精确 `ref`，才构建并上传包含未签名 EXE、安装器和 ZIP 的 `Buddy-windows-x86_64` 制品。可通过 `target/release/buddy.exe --selfcheck-window` 在已解锁的 Windows 桌面验证窗口创建、隐藏、唤回和聚焦，测试数据目录与用户配置隔离。

@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { canonicalOssResource, compareVersions, fetchWithTimeout, ossAuthorization, ossStringToSign, publishSequence } from "./publish-ci-artifacts.mjs";
+import { canonicalOssResource, compareVersions, fetchWithTimeout, ossAuthorization, ossStringToSign, publishSequence, releaseAssets } from "./publish-ci-artifacts.mjs";
+
+test("GitHub Release lists installers while OSS retains update and portable artifacts", () => {
+  const files = ["macos/aarch64/Buddy_0.1.16_aarch64.app.tar.xz", "macos/aarch64/Buddy_0.1.16_aarch64.dmg", "windows/x86_64/Buddy_0.1.16_x86_64.exe", "windows/x86_64/Buddy_0.1.16_x86_64_setup.exe", "windows/x86_64/Buddy_0.1.16_x86_64.zip"];
+  assert.deepEqual(releaseAssets(files, "0.1.16"), [files[1], files[3]]);
+  assert.deepEqual(releaseAssets(files.filter((file) => !file.endsWith("_setup.exe")), "0.1.16"), [files[1]]);
+});
 
 test("OSS V1 canonical resource rejects unsafe object keys", () => {
   assert.equal(canonicalOssResource("buddy-release", "buddy/releases/0.2.0/manifest.json"), "/buddy-release/buddy/releases/0.2.0/manifest.json");

@@ -294,15 +294,11 @@ function sameGitHubAsset(version, filename, source) {
   }
 }
 
-function releaseAssets(files, version) {
+export function releaseAssets(files, version) {
   const setup = `windows/x86_64/Buddy_${version}_x86_64_setup.exe`;
-  const zip = `windows/x86_64/Buddy_${version}_x86_64.zip`;
   const selected = [`macos/aarch64/Buddy_${version}_aarch64.dmg`];
   if (files.includes(setup)) {
     selected.push(setup);
-    if (files.includes(zip)) selected.push(zip);
-  } else {
-    selected.push(zip);
   }
   return selected;
 }

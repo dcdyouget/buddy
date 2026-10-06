@@ -337,7 +337,9 @@ if [[ "$HAS_WINDOWS" == true ]]; then
   printf '\nWindows 10/11 x64：下载 `Buddy_%s_x86_64_setup.exe`，双击按向导安装。默认快捷键 Ctrl+J；ZIP 为可选便携版。\n' "$VERSION" >>"$OUT/github-notes.md"
 fi
 RELEASE_ASSETS=("$INSTALLER")
-if [[ "$HAS_WINDOWS" == true ]]; then RELEASE_ASSETS+=("$WINDOWS_INSTALLER" "$WINDOWS_PORTABLE"); fi
+# GitHub Release 只提供用户直接安装的包；portable ZIP 仍已上传到 OSS，
+# 并由 manifest 作为可选下载项保留。
+if [[ "$HAS_WINDOWS" == true ]]; then RELEASE_ASSETS+=("$WINDOWS_INSTALLER"); fi
 gh release create "v$VERSION" "${RELEASE_ASSETS[@]}" --repo "$GITHUB_REPO" --verify-tag --latest \
   --title "Buddy $VERSION" --notes-file "$OUT/github-notes.md" >/dev/null \
   || fail "创建 GitHub Release 失败（OSS 已发布、标签已推送）。手动执行：gh release create v$VERSION $INSTALLER --title \"Buddy $VERSION\" --notes-file $OUT/github-notes.md"
