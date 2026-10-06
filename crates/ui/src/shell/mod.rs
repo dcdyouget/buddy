@@ -247,6 +247,19 @@ pub async fn open_main_window(
             anyhow::bail!("主窗口外观初始化失败：{error}");
         }
     }
+    #[cfg(target_os = "windows")]
+    {
+        let result = cx
+            .update_window(handle.into(), |_, window, _| {
+                native::apply_windows_main_window_appearance(window)
+            })
+            .map_err(anyhow::Error::from)
+            .and_then(|value| value.map_err(anyhow::Error::from));
+        if let Err(error) = result {
+            let _ = cx.update_window(handle.into(), |_, window, _| window.remove_window());
+            anyhow::bail!("主窗口外观初始化失败：{error}");
+        }
+    }
     cx.update_window(handle.into(), |_, window, _| window.refresh())?;
     Ok(handle)
 }

@@ -4,9 +4,11 @@
 //! 验证工作区、移动与显隐，再清理窗口和目录。它不安装热键、托盘、单实例，
 //! 也不读取或写入用户数据。
 
-use crate::shell::{AppShell, config::ShellConfig, open_main_window};
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use crate::shell::native;
 #[cfg(target_os = "macos")]
-use crate::shell::{native, positioning_native};
+use crate::shell::positioning_native;
+use crate::shell::{AppShell, config::ShellConfig, open_main_window};
 use buddy_engine::chat::ChatEngine;
 use gpui::{AppContext, AsyncApp, WindowHandle};
 use std::path::PathBuf;
@@ -95,6 +97,8 @@ async fn run_windows_checks(cx: &mut AsyncApp) -> bool {
     };
     let initial = probe_visibility(handle, cx);
     let initial_focus = focus_diagnostics(handle, cx);
+    let native = verify_windows_native_appearance(handle, cx);
+    let native_ok = native.is_some_and(|state| state.is_frame_hidden() && state.is_resizable());
     let hidden = super::runtime::hide(handle, cx).await.is_ok()
         && !probe_visibility(handle, cx).is_some_and(|state| state.is_visible);
     let show_requested = super::runtime::show(handle, cx).await.is_ok();
@@ -115,16 +119,20 @@ async fn run_windows_checks(cx: &mut AsyncApp) -> bool {
         .is_ok();
     let sandbox_cleanup = std::fs::remove_dir_all(&data_dir).is_ok();
     let passed = initial.is_some_and(|state| state.is_visible)
+        && native_ok
         && hidden
         && shown
         && window_cleanup
         && sandbox_cleanup;
     println!(
-        "Windows selfcheck: initial={:?} initial_focus={} hidden={} show_requested={} shown={:?} shown_focus={} window_cleanup={} sandbox_cleanup={}",
+        "Windows selfcheck: initial={:?} initial_focus={} native={:?} frame_hidden={} resizable={} hidden={} show_requested={} shown={:?} shown_focus={} window_cleanup={} sandbox_cleanup={}",
         initial,
         initial_focus
             .as_ref()
             .map_or_else(|| "unavailable".to_string(), ToString::to_string),
+        native,
+        native.is_some_and(|state| state.is_frame_hidden()),
+        native.is_some_and(|state| state.is_resizable()),
         hidden,
         show_requested,
         shown_state,
@@ -143,7 +151,7 @@ async fn run_windows_checks(cx: &mut AsyncApp) -> bool {
         );
     }
     println!(
-        "{} Windows 窗口自检（创建 / 隐藏 / 唤回 / 聚焦）",
+        "{} Windows 窗口自检（创建 / 无系统外框 / 保留缩放 / 隐藏 / 唤回 / 聚焦）",
         if passed {
             "PASS"
         } else if foreground_locked {
@@ -153,6 +161,18 @@ async fn run_windows_checks(cx: &mut AsyncApp) -> bool {
         }
     );
     passed
+}
+
+#[cfg(target_os = "windows")]
+fn verify_windows_native_appearance(
+    handle: WindowHandle<AppShell>,
+    cx: &mut AsyncApp,
+) -> Option<native::WindowsNativeWindowSnapshot> {
+    cx.update_window(handle.into(), |_, window, _| {
+        native::apply_windows_main_window_appearance(window).ok()
+    })
+    .ok()
+    .flatten()
 }
 
 #[cfg(target_os = "windows")]

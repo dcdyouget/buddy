@@ -14,6 +14,11 @@ pub type DragSource = Rc<RefCell<DragFn>>;
 
 pub fn default_drag_source() -> DragSource {
     Rc::new(RefCell::new(Rc::new(|window: &mut Window| {
+        #[cfg(target_os = "windows")]
+        if let Err(error) = crate::shell::native::start_window_move(window) {
+            log::warn!("启动 Windows 原生窗口拖动失败：{error}");
+        }
+        #[cfg(not(target_os = "windows"))]
         window.start_window_move();
     })))
 }

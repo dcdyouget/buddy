@@ -80,7 +80,7 @@ env_logger = "0.11"
 objc = "0.2"
 # 主窗口原生句柄；GPUI 闭包已有 0.6.2，不新增包
 raw-window-handle = "0.6"
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security", "Win32_System_Threading", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Security", "Win32_System_Threading", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
 # 系统全局热键，与 实测版本一致
 global-hotkey = "0.8"
 tray-icon = { version = "0.24.1", default-features = false }
