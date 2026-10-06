@@ -114,6 +114,30 @@ pub struct ProviderConfig {
     pub compat: Option<CompatConfig>,
 }
 
+/// 未知服务商的单张图片上限（解码后字节）。
+pub const DEFAULT_IMAGE_BYTES: usize = 5 * 1024 * 1024;
+/// MiniMax 单张图片上限：接口实测按解码后字节计，超出返回
+/// `media exceeds size limit: max 10485760 bytes (2013)`。
+pub const MINIMAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
+/// 所有服务商中最大的单张图片上限；图片在发送前先写盘，写盘按它放行，发送时再按服务商校验。
+pub const MAX_IMAGE_BYTES_CEILING: usize = MINIMAX_IMAGE_BYTES;
+
+impl ProviderConfig {
+    /// 该服务商允许的单张图片大小（解码后字节）。
+    pub fn max_image_bytes(&self) -> usize {
+        if self.base_url.to_ascii_lowercase().contains("minimax") {
+            MINIMAX_IMAGE_BYTES
+        } else {
+            DEFAULT_IMAGE_BYTES
+        }
+    }
+}
+
+/// 图片上限的提示文字，如「单张图片不能超过 10 MB」。
+pub fn image_limit_message(max_bytes: usize) -> String {
+    format!("单张图片不能超过 {} MB", max_bytes / (1024 * 1024))
+}
+
 // `#[serde(default = "...")]` 引用的辅助函数
 // 必须返回 `String`（与字段类型一致）
 // 没有 `pub`，仅模块内使用

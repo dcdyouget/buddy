@@ -456,8 +456,14 @@ impl PageRouter {
     /// 配置 → 输入区（是否支持图片）；无效配置时按 v1 退回空态
     fn apply_config(&mut self, cx: &mut Context<Self>) {
         let vision = self.selected_model().is_some_and(|m| m.supports_vision);
-        self.composer
-            .update(cx, |c, cx| c.set_supports_vision(vision, cx));
+        let max_image_bytes = self
+            .selected_model()
+            .and_then(|m| self.config.providers.iter().find(|p| p.id == m.provider_id))
+            .map_or(buddy_engine::models::DEFAULT_IMAGE_BYTES, |p| p.max_image_bytes());
+        self.composer.update(cx, |c, cx| {
+            c.set_max_image_bytes(max_image_bytes);
+            c.set_supports_vision(vision, cx);
+        });
         if !self.valid_config() {
             self.transition(cx, |p| p.config_changed(false));
         }

@@ -66,6 +66,8 @@ pub struct Composer {
     streaming_model: Option<SharedString>,
     /// 当前模型是否支持图片
     supports_vision: bool,
+    /// 当前服务商的单张图片上限（字节），选择 / 粘贴 / 拖入时按它拒绝。
+    pub(super) max_image_bytes: usize,
     pub(super) images: Vec<super::attachments::DraftImage>,
     pub(super) saving_images: bool,
     pub(super) attachment_error: Option<SharedString>,
@@ -130,7 +132,7 @@ impl Composer {
                 cx.notify();
             }),
         ];
-        Self { text, streaming: false, streaming_model: None, supports_vision: false, images: Vec::new(), saving_images: false, attachment_error: None, engine, save_tasks: Vec::new(), focused: false, hovered: false, standalone: false, model_button: Rc::default(), bounds: Rc::default(), _subscriptions: subscriptions, drag_source: drag::default_drag_source() }
+        Self { text, streaming: false, streaming_model: None, supports_vision: false, max_image_bytes: buddy_engine::models::DEFAULT_IMAGE_BYTES, images: Vec::new(), saving_images: false, attachment_error: None, engine, save_tasks: Vec::new(), focused: false, hovered: false, standalone: false, model_button: Rc::default(), bounds: Rc::default(), _subscriptions: subscriptions, drag_source: drag::default_drag_source() }
     }
 
     /// 模型按钮在窗口中的边界（上一帧；流式中为 `None`）
@@ -185,6 +187,11 @@ impl Composer {
     pub fn set_supports_vision(&mut self, supports: bool, cx: &mut Context<Self>) {
         self.supports_vision = supports;
         cx.notify();
+    }
+
+    /// 当前服务商的单张图片上限（字节）
+    pub fn set_max_image_bytes(&mut self, max_bytes: usize) {
+        self.max_image_bytes = max_bytes;
     }
 
     fn can_send(&self, cx: &App) -> bool {

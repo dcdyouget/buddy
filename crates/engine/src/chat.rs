@@ -250,9 +250,11 @@ fn estimate_message_tokens(message: &Message) -> u32 {
         .saturating_add((message.images.len() as u32).saturating_mul(1_024))
 }
 
-fn validate_image_attachments(images: &[crate::models::ImageAttachment]) -> Result<(), String> {
+fn validate_image_attachments(
+    images: &[crate::models::ImageAttachment],
+    max_image_bytes: usize,
+) -> Result<(), String> {
     const MAX_IMAGES: usize = 4;
-    const MAX_DATA_URL_BYTES: usize = 7 * 1024 * 1024;
     const SUPPORTED_MEDIA_TYPES: [&str; 4] = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 
     if images.len() > MAX_IMAGES {
@@ -270,8 +272,14 @@ fn validate_image_attachments(images: &[crate::models::ImageAttachment]) -> Resu
             if !image.data_url.starts_with(&expected_prefix) {
                 return Err(format!("图片数据格式无效：{}", image.name));
             }
-            if image.data_url.len() > MAX_DATA_URL_BYTES {
-                return Err(format!("图片超过 5 MB 限制：{}", image.name));
+            // base64 每 4 个字符对应 3 字节；按解码后大小与服务商上限比较。
+            let decoded = (image.data_url.len() - expected_prefix.len()) / 4 * 3;
+            if decoded > max_image_bytes {
+                return Err(format!(
+                    "{}：{}",
+                    crate::models::image_limit_message(max_image_bytes),
+                    image.name
+                ));
             }
         }
     }
@@ -383,11 +391,18 @@ fn stored_image_bytes(
 fn hydrate_image_for_provider(
     data_dir: &Path,
     image: &mut crate::models::ImageAttachment,
+    max_image_bytes: usize,
 ) -> Result<(), String> {
     if !image.data_url.is_empty() {
         return Ok(());
     }
-    let bytes = stored_image_bytes(data_dir, image, 5 * 1024 * 1024)?;
+    let bytes = stored_image_bytes(data_dir, image, max_image_bytes).map_err(|error| {
+        if error.starts_with("图片文件过大") {
+            format!("{}：{}", crate::models::image_limit_message(max_image_bytes), image.name)
+        } else {
+            error
+        }
+    })?;
     image.data_url = format!(
         "data:{};base64,{}",
         image.media_type,
@@ -398,7 +413,11 @@ fn hydrate_image_for_provider(
 
 /// Provider API 是无状态的，但无需在每次新提问时重复上传所有历史图片。
 /// 当前消息的图片会临时读取为 Base64；历史图片只保留其之前产生的文本上下文。
-fn prepare_images_for_provider(data_dir: &Path, messages: &mut [Message]) -> Result<(), String> {
+fn prepare_images_for_provider(
+    data_dir: &Path,
+    messages: &mut [Message],
+    max_image_bytes: usize,
+) -> Result<(), String> {
     let current_user_index = messages
         .iter()
         .rposition(|message| message.role == MessageRole::User);
@@ -408,7 +427,7 @@ fn prepare_images_for_provider(data_dir: &Path, messages: &mut [Message]) -> Res
         }
         if Some(index) == current_user_index {
             for image in &mut message.images {
-                hydrate_image_for_provider(data_dir, image)?;
+                hydrate_image_for_provider(data_dir, image, max_image_bytes)?;
             }
         } else {
             message.images.clear();
@@ -488,7 +507,7 @@ impl ChatEngine {
                 &name,
                 &media_type,
                 &data_url,
-                5 * 1024 * 1024,
+                crate::models::MAX_IMAGE_BYTES_CEILING,
                 "upload",
             )
         })
@@ -769,16 +788,16 @@ impl ChatEngine {
             .find(|message| message.role == MessageRole::User)
             .map(|message| message.images.as_slice())
             .unwrap_or_default();
-        validate_image_attachments(current_user_images)?;
-        if !current_user_images.is_empty() && !model.supports_vision {
-            return Err("当前模型未开启图片输入，请在模型设置中启用“支持图片”".to_string());
-        }
-
         let provider = config
             .providers
             .iter()
             .find(|p| p.id == model.provider_id)
             .ok_or_else(|| "未找到对应的 Provider".to_string())?;
+        let max_image_bytes = provider.max_image_bytes();
+        validate_image_attachments(current_user_images, max_image_bytes)?;
+        if !current_user_images.is_empty() && !model.supports_vision {
+            return Err("当前模型未开启图片输入，请在模型设置中启用“支持图片”".to_string());
+        }
 
         let provider_type = ProviderType::from_str(&provider.provider_type);
 
@@ -862,7 +881,7 @@ impl ChatEngine {
             // 丢失用户消息，且前端收不到任何流事件提示。
             let storage_dir = self.data_dir.clone();
             conv_messages = match run_blocking("读取聊天图片", move || {
-                prepare_images_for_provider(&storage_dir, &mut conv_messages)?;
+                prepare_images_for_provider(&storage_dir, &mut conv_messages, max_image_bytes)?;
                 Ok(conv_messages)
             })
             .await
@@ -1617,6 +1636,44 @@ impl ChatEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn data_url_image(decoded_bytes: usize) -> crate::models::ImageAttachment {
+        crate::models::ImageAttachment {
+            id: "img".into(),
+            name: "a.png".into(),
+            media_type: "image/png".into(),
+            path: String::new(),
+            data_url: format!(
+                "data:image/png;base64,{}",
+                BASE64_STANDARD.encode(vec![0u8; decoded_bytes])
+            ),
+        }
+    }
+
+    #[test]
+    fn image_limit_follows_provider() {
+        let mut provider = crate::models::ProviderConfig {
+            id: "minimax".into(),
+            name: "MiniMax".into(),
+            base_url: "https://api.minimaxi.com/v1".into(),
+            api_key: String::new(),
+            enabled_model_ids: vec![],
+            provider_type: "openai_compatible".into(),
+            compat: None,
+        };
+        assert_eq!(provider.max_image_bytes(), crate::models::MINIMAX_IMAGE_BYTES);
+        provider.base_url = "https://api.openai.com/v1".into();
+        assert_eq!(provider.max_image_bytes(), crate::models::DEFAULT_IMAGE_BYTES);
+    }
+
+    #[test]
+    fn send_validation_uses_decoded_size_against_provider_limit() {
+        let eight_mb = 8 * 1024 * 1024;
+        let image = [data_url_image(eight_mb)];
+        assert!(validate_image_attachments(&image, crate::models::MINIMAX_IMAGE_BYTES).is_ok());
+        let error = validate_image_attachments(&image, crate::models::DEFAULT_IMAGE_BYTES).unwrap_err();
+        assert!(error.starts_with("单张图片不能超过 5 MB"), "{error}");
+    }
 
 
     #[test]

@@ -4,15 +4,13 @@
 //! 经 `spawn_engine` 调用 engine 的 `save_chat_image`。这样切换空态 / 对话页时
 //! 仍共用同一份草稿，且消息只带 engine 返回的路径附件。
 
-use buddy_engine::models::ImageAttachment;
+use buddy_engine::models::{ImageAttachment, image_limit_message};
 use gpui::{Image, ImageFormat};
 use std::path::Path;
 use std::sync::Arc;
 
 /// 单条消息最多图片数（与 v1 InputDock 一致）。
 pub const MAX_IMAGE_COUNT: usize = 4;
-/// 单张图片最大字节数（与 engine 的上传限制一致）。
-pub const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 
 /// Composer 中尚未或正在写盘的一张图片。
 #[derive(Clone)]
@@ -24,16 +22,19 @@ pub struct DraftImage {
 }
 
 /// 将合法字节包装为未写盘的附件。
+///
+/// `max_bytes` 为当前服务商的单张上限（[`buddy_engine::models::ProviderConfig::max_image_bytes`]）。
 pub fn draft_from_bytes(
     name: impl Into<String>,
     media_type: &str,
     bytes: Vec<u8>,
+    max_bytes: usize,
 ) -> Result<DraftImage, String> {
     if !supported_media_type(media_type) {
         return Err("仅支持 JPEG、PNG、GIF 和 WebP 图片".into());
     }
-    if bytes.len() > MAX_IMAGE_BYTES {
-        return Err("单张图片不能超过 5 MB".into());
+    if bytes.len() > max_bytes {
+        return Err(image_limit_message(max_bytes));
     }
     let name = name.into();
     let attachment = ImageAttachment {
@@ -52,25 +53,28 @@ pub fn draft_from_bytes(
 }
 
 /// 从一个本地路径读取图片并生成草稿附件。
-pub fn draft_from_path(path: &Path) -> Result<DraftImage, String> {
+pub fn draft_from_path(path: &Path, max_bytes: usize) -> Result<DraftImage, String> {
     let media_type = media_type_for_path(path)
         .ok_or_else(|| "仅支持 JPEG、PNG、GIF 和 WebP 图片".to_string())?;
     let metadata =
         std::fs::metadata(path).map_err(|_| format!("无法读取图片：{}", path.display()))?;
-    if metadata.len() > MAX_IMAGE_BYTES as u64 {
-        return Err("单张图片不能超过 5 MB".into());
+    // 读文件前先按大小拒绝，超大图片不进内存。
+    if metadata.len() > max_bytes as u64 {
+        return Err(image_limit_message(max_bytes));
     }
     let bytes = std::fs::read(path).map_err(|_| format!("无法读取图片：{}", path.display()))?;
     draft_from_bytes(
         path.file_name().and_then(|n| n.to_str()).unwrap_or("图片"),
         media_type,
         bytes,
+        max_bytes,
     )
 }
 
 /// 读取剪贴板中的图片。文本或不支持的条目返回 `None`，调用方继续走文本粘贴。
 pub fn draft_from_clipboard_image(
     item: &gpui::ClipboardItem,
+    max_bytes: usize,
 ) -> Result<Option<DraftImage>, String> {
     for entry in item.entries() {
         if let gpui::ClipboardEntry::Image(image) = entry {
@@ -82,6 +86,7 @@ pub fn draft_from_clipboard_image(
                 format!("粘贴图片.{}", image.format.extension()),
                 media_type,
                 image.bytes.clone(),
+                max_bytes,
             )
             .map(Some);
         }
@@ -89,7 +94,7 @@ pub fn draft_from_clipboard_image(
     for entry in item.entries() {
         if let gpui::ClipboardEntry::ExternalPaths(paths) = entry {
             for path in paths.paths() {
-                return draft_from_path(path).map(Some);
+                return draft_from_path(path, max_bytes).map(Some);
             }
         }
     }
@@ -202,13 +207,16 @@ mod tests {
         assert!(!supported_media_type("image/svg+xml"));
         assert_eq!(media_type_for_path(Path::new("A.JpG")), Some("image/jpeg"));
         let five_mb = 5 * 1024 * 1024;
-        assert!(draft_from_bytes("x.png", "image/png", vec![0; five_mb]).is_ok());
-        assert!(draft_from_bytes("x.png", "image/png", vec![0; five_mb + 1]).is_err());
+        assert!(draft_from_bytes("x.png", "image/png", vec![0; five_mb], five_mb).is_ok());
+        let error = draft_from_bytes("x.png", "image/png", vec![0; five_mb + 1], five_mb).err();
+        assert_eq!(error.as_deref(), Some("单张图片不能超过 5 MB"));
+        let ten_mb = 10 * 1024 * 1024;
+        assert!(draft_from_bytes("x.png", "image/png", vec![0; five_mb + 1], ten_mb).is_ok());
     }
 
     #[test]
     fn encodes_data_url_without_external_dependency() {
-        let image = draft_from_bytes("x.png", "image/png", vec![0, 1, 2, 253]).unwrap();
+        let image = draft_from_bytes("x.png", "image/png", vec![0, 1, 2, 253], 1024).unwrap();
         assert_eq!(image.attachment.data_url, "data:image/png;base64,AAEC/Q==");
     }
 }

@@ -150,7 +150,7 @@ impl Composer {
         let slots = MAX_IMAGE_COUNT.saturating_sub(self.images.len());
         let over_limit = paths.len() > slots;
         for path in paths.iter().take(slots) {
-            match attachments::draft_from_path(path) {
+            match attachments::draft_from_path(path, self.max_image_bytes) {
                 Ok(image) => drafts.push(image),
                 Err(error) => {
                     first_error.get_or_insert(error);
@@ -197,7 +197,7 @@ impl Composer {
         let Some(item) = cx.read_from_clipboard() else {
             return false;
         };
-        match attachments::draft_from_clipboard_image(&item) {
+        match attachments::draft_from_clipboard_image(&item, self.max_image_bytes) {
             Ok(Some(image)) => {
                 self.add_drafts(vec![image], cx);
                 true
