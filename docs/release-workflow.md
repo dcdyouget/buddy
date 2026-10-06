@@ -73,9 +73,9 @@ gh workflow run release.yml --ref main -f mode=release -f version=0.2.0 -f notes
 
 ### 工作流做什么
 
-- **准备**：检查输入与 Secrets；探测 GitHub runner 到 OSS 的上传与公网 HEAD（探测文件写入 `buddy/releases/ci-check/`，不触碰稳定通道）；提交版本号，并原子推送 `main` 与不可变的 `v<版本>` 源码标签。
+- **准备**：检查输入与 Secrets；在自建 runner 上探测到 OSS 的上传与公网 HEAD（探测文件写入 `buddy/releases/ci-check/`，不触碰稳定通道）；提交版本号，并原子推送 `main` 与不可变的 `v<版本>` 源码标签。
 - **构建**：Mac ARM64 与 Windows x64 分别在标准 GitHub runner 上测试、构建、打包，用 `tauri signer`（只用它的签名命令，产物为 minisign 格式）签名全部五个发布制品。
-- **发布**：Linux 任务用客户端内置公钥再次验证五个制品，生成双平台清单，上传包、签名、更新说明和版本清单到 OSS，并通过公网 HEAD 检查可访问性和 Content-Length；然后创建仅附带 macOS DMG 和 Windows setup.exe 的 GitHub Release（标记为 Latest），最后覆盖 `channels/stable.json`。
+- **发布**（自建 runner）：用客户端内置公钥再次验证五个制品，生成双平台清单，上传包、签名、更新说明和版本清单到 OSS，并通过公网 HEAD 检查可访问性和 Content-Length；然后创建仅附带 macOS DMG 和 Windows setup.exe 的 GitHub Release（标记为 Latest），最后覆盖 `channels/stable.json`。
 
 整次发布串行锁定；构建、签名或上传失败时不会切换稳定通道，用户不受影响。普通 push 不会发布。
 
@@ -92,6 +92,33 @@ gh workflow run release.yml --ref main -f mode=resume -f version=0.2.0 -f build_
 
 - 修复的是应用代码：使用更高的版本号重新发版。
 
+### 发版 runner（自建）
+
+GitHub 托管 runner 在海外，到北京 OSS 的跨境链路只有几十 KB/s 且经常卡死，因此**凡是访问 OSS 的任务（准备阶段的 OSS 探测、发布、`resume`）都跑在国内自建 runner 上**（`runs-on: [self-hosted, oss-publisher]`）；Mac / Windows 构建仍用托管 runner。自建 runner 离线时，发版会停在准备阶段排队等待。
+
+| 项 | 值 |
+|---|---|
+| 机器 | 局域网服务器 `192.168.31.219`（Ubuntu 22.04，本机 SSH 别名 `219`） |
+| 部署 | Docker：`/opt/buddy-runner/Dockerfile`（官方 `ghcr.io/actions/actions-runner` + gcc / gh / xz）与 `/opt/buddy-runner/compose.yaml`，容器 `buddy-runner`，`restart: unless-stopped` |
+| 持久卷 | `buddy-runner-home` 挂到 `/home/runner`：runner 注册信息、Rust 工具链、Node、校验程序编译缓存（`CARGO_TARGET_DIR`） |
+| 网络 | 访问 GitHub 走 Mac mini 代理 `192.168.31.162:7890`；`*.aliyuncs.com` 直连（`NO_PROXY`）。Node 的上传请求本身也不走环境变量代理 |
+| GitHub 名称 / 标签 | `oss-publisher-219` / `oss-publisher` |
+
+常用操作（在服务器上）：
+
+```bash
+cd /opt/buddy-runner
+docker compose ps / docker compose logs -f        # 状态与日志
+docker compose restart                            # 重启
+# 重新注册（换机器或注册失效）：在本机取 token 后执行
+#   gh api -X POST repos/dcdyouget/buddy/actions/runners/registration-token --jq .token
+docker compose down && docker compose run --rm --no-deps runner ./config.sh --unattended \
+  --url https://github.com/dcdyouget/buddy --token <token> --name oss-publisher-219 --labels oss-publisher --work _work --replace
+docker compose up -d
+```
+
+仓库为公开仓库，自建 runner 有被外部 PR 利用的风险：仓库已设置 **Settings → Actions → General → Approval for running fork pull request workflows = Require approval for all external contributors**，外部 PR 的工作流须人工批准才会运行，审批时注意其是否修改了 `runs-on`。CI（`ci.yml`）不得使用自建 runner。
+
 ### Secrets
 
 仓库 **Settings → Secrets and variables → Actions** 需要四个 Secrets：
@@ -107,7 +134,7 @@ gh workflow run release.yml --ref main -f mode=resume -f version=0.2.0 -f build_
 
 ### 缓存与费用
 
-构建任务使用按平台共享的 Rust 缓存；Linux 发布与 `resume` 模式共享 verifier 缓存。各任务将 `RUSTUP_HOME` 隔离到 runner 临时目录，由 `dtolnay/rust-toolchain@1.95.0` 安装固定工具链；缓存首次填充时需要一次冷构建。
+构建任务使用按平台共享的 Rust 缓存，并将 `RUSTUP_HOME` 隔离到 runner 临时目录，由 `dtolnay/rust-toolchain@1.95.0` 安装固定工具链；缓存首次填充时需要一次冷构建。发布与 `resume` 在自建 runner 上运行，工具链与校验程序编译产物保存在其持久卷中。
 
 Buddy 为公开仓库，标准 GitHub 托管 runner 的运行分钟数免费；私有仓库有套餐分钟和存储额度，详见 [GitHub Actions 计费](https://docs.github.com/en/billing/concepts/product-billing/github-actions)。临时构建制品只保留 7 天，长期安装包位于 OSS 和 GitHub Release。
 

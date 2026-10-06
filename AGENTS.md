@@ -32,6 +32,6 @@ gh workflow run release.yml --ref main -f mode=release -f version=<版本号> -f
 - 修改 `crates/markdown/src` 后必须按 `VENDOR.md` 重新生成 patch，否则门禁失败（GPL 要求记录修改）。
 - 数据目录 Mac 为 `~/Library/Application Support/com.buddy.chat`，Windows 为 `%APPDATA%\com.buddy.chat`，与 v1 共用（标识 `com.buddy.chat` 不要改）；API Key 明文存在 `config.json`。
 - 主窗口在显示前用 AppKit 改样式（无标题栏、无阴影、圆角）；改完必须让 GPUI 视图重新成为第一响应者，否则无法输入文字。自检 T12-01 会检查。
-- 发版只走 GitHub Actions 的 Release 工作流（构建、签名、上传 OSS、GitHub Release 全在云端），不在本机发版；工作流会向 `main` 提交版本号，之后本地 `git pull --ff-only`。
+- 发版只走 GitHub Actions 的 Release 工作流（构建、签名、上传 OSS、GitHub Release 全在云端），不在本机发版；工作流会向 `main` 提交版本号，之后本地 `git pull --ff-only`。访问 OSS 的任务跑在局域网服务器 `192.168.31.219` 的 Docker 自建 runner（`/opt/buddy-runner`）上，见 `docs/release-workflow.md`。
 - 依赖里的 `@tauri-apps/cli` 只用来做更新包签名（`tauri signer`），应用本身不使用 Tauri。
 - v1（Tauri + React）已从仓库移除，可从标签 `v1-final` 找回。
