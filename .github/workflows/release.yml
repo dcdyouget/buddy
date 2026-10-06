@@ -61,7 +61,7 @@ jobs:
       matrix:
         include:
           - platform: darwin-aarch64
-            runner: macos-15-arm64
+            runner: macos-15
             artifact: Buddy-darwin-aarch64
             artifact_path: macos/aarch64
           - platform: windows-x86_64
