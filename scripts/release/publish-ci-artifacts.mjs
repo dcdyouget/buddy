@@ -161,8 +161,10 @@ async function fetchPublic(key, { attempts = 3 } = {}) {
 }
 
 export async function headPublic(key) {
+  // fetch 默认带 Accept-Encoding: gzip；OSS 会压缩 JSON / 文本并去掉 Content-Length，
+  // 而这里要校验的是对象原始大小。
   const response = await fetchWithTimeout(publicUrl(key), {
-    method: "HEAD", headers: { "Cache-Control": "no-cache" }, cache: "no-store",
+    method: "HEAD", headers: { "Cache-Control": "no-cache", "Accept-Encoding": "identity" }, cache: "no-store",
   }, { attempts: 3 });
   if (response.status === 404) return null;
   if (response.status !== 200) throw new Error(`Public OSS HEAD failed for ${key}: HTTP ${response.status}`);
