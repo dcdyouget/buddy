@@ -127,6 +127,25 @@ fn has_valid_tool_arguments(tool_call: &ToolCall) -> bool {
         )
 }
 
+fn can_complete_on_eof(
+    finish_reason: Option<&str>,
+    tool_calls: &std::collections::HashMap<String, ToolCall>,
+) -> bool {
+    let Some(reason) = finish_reason else {
+        return false;
+    };
+    let valid_reason = matches!(
+        reason,
+        "stop" | "tool_calls" | "function_call" | "length" | "content_filter"
+    );
+    let requires_tool_call = matches!(reason, "tool_calls" | "function_call");
+    let has_tool_calls = !tool_calls.is_empty();
+    let complete_tool_calls = tool_calls.values().all(has_valid_tool_arguments);
+    valid_reason
+        && complete_tool_calls
+        && (!requires_tool_call || has_tool_calls)
+}
+
 impl OpenAICompatibleProvider {
     /// 将内部消息格式转换为 OpenAI API 格式
     ///
@@ -498,6 +517,8 @@ impl LlmProvider for OpenAICompatibleProvider {
             use std::collections::HashMap;
             let mut tool_calls: HashMap<String, ToolCall> = HashMap::new();
             let mut tool_call_indexes: HashMap<String, usize> = HashMap::new();
+            let mut finish_reason: Option<String> = None;
+            let mut termination = "done";
 
             let flush_tool_calls = |tc: &mut HashMap<String, ToolCall>,
                                     tci: &HashMap<String, usize>,
@@ -522,7 +543,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                 ordered.into_iter().map(|(_, t)| t).collect()
             };
 
-            loop {
+            'stream: loop {
                 let chunk = tokio::select! {
                     // 取消分支
                     _ = cancel_rx.changed() => {
@@ -604,38 +625,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                                 let data = data.trim();
                                 // OpenAI 流结束标志
                                 if data == "[DONE]" {
-                                    if text_started {
-                                        emitter.text_end(content_index, &full_response);
-                                    }
-                                    let calls = flush_tool_calls(
-                                        &mut tool_calls,
-                                        &tool_call_indexes,
-                                        emitter,
-                                    );
-                                    info!(
-                                        "[llm][{}] 响应摘要: status=success, total_ms={}, headers_ms={}, first_output_ms={}, sse_bytes={}, chunks={}, text_delta_events={}, answer_bytes={}, answer_chars={}, thinking_bytes={}, thinking_chars={}, tool_calls={}, {}",
-                                        request_id,
-                                        request_started.elapsed().as_millis(),
-                                        headers_ms,
-                                        first_output_ms
-                                            .map(|value| value.to_string())
-                                            .unwrap_or_else(|| "无输出".to_string()),
-                                        response_bytes,
-                                        chunk_count,
-                                        token_count,
-                                        full_response.len(),
-                                        full_response.chars().count(),
-                                        thinking_response.len(),
-                                        thinking_response.chars().count(),
-                                        calls.len(),
-                                        usage_log_summary(final_usage.as_ref()),
-                                    );
-                                    // done 事件由编排层 chat.rs 在整轮 tool 循环结束时统一发射
-                                    return Ok(StreamOutcome::completed(
-                                        full_response,
-                                        thinking_response,
-                                        calls,
-                                    ));
+                                    break 'stream;
                                 }
                                 if data.is_empty() {
                                     continue;
@@ -659,6 +649,13 @@ impl LlmProvider for OpenAICompatibleProvider {
                                         }
                                         if let Some(usage) = parse_prompt_cache_usage(&json) {
                                             final_usage = Some(usage);
+                                        }
+                                        if let Some(reason) = json["choices"]
+                                            .get(0)
+                                            .and_then(|choice| choice["finish_reason"].as_str())
+                                            .filter(|reason| !reason.is_empty())
+                                        {
+                                            finish_reason = Some(reason.to_string());
                                         }
                                         // 检查是否有 reasoning_content（DeepSeek 等支持思考的模型）
                                         // 链式 .get(0).and_then(...).unwrap_or("")：
@@ -803,6 +800,52 @@ impl LlmProvider for OpenAICompatibleProvider {
                                                 }
                                             }
                                         }
+
+                                        // 旧版 OpenAI-compatible API 使用单个 function_call
+                                        // 字段，并以 finish_reason=function_call 结束；统一收敛
+                                        // 到同一 ToolCall，避免该协议分支在 EOF 时被误判截断。
+                                        if let Some(function_call) = json["choices"]
+                                            .get(0)
+                                            .and_then(|choice| choice["delta"]["function_call"].as_object())
+                                        {
+                                            let key = "function_call".to_string();
+                                            let name = function_call
+                                                .get("name")
+                                                .and_then(Value::as_str)
+                                                .filter(|name| !name.is_empty())
+                                                .map(String::from);
+                                            let args_delta = function_call
+                                                .get("arguments")
+                                                .and_then(Value::as_str)
+                                                .unwrap_or("");
+                                            if !tool_calls.contains_key(&key) {
+                                                tool_calls.insert(
+                                                    key.clone(),
+                                                    ToolCall {
+                                                        id: key.clone(),
+                                                        name: name.clone().unwrap_or_default(),
+                                                        arguments: String::new(),
+                                                    },
+                                                );
+                                                tool_call_indexes.insert(key.clone(), 0);
+                                                emitter.tool_call_start(
+                                                    &key,
+                                                    name.as_deref().unwrap_or(""),
+                                                    0,
+                                                );
+                                            }
+                                            if let Some(name) = name {
+                                                if let Some(call) = tool_calls.get_mut(&key) {
+                                                    call.name = name;
+                                                }
+                                            }
+                                            if !args_delta.is_empty() {
+                                                if let Some(call) = tool_calls.get_mut(&key) {
+                                                    call.arguments.push_str(args_delta);
+                                                }
+                                                emitter.tool_call_delta(&key, args_delta);
+                                            }
+                                        }
                                     }
                                     Err(error) => {
                                         warn!(
@@ -831,14 +874,19 @@ impl LlmProvider for OpenAICompatibleProvider {
                         ));
                     }
                     None => {
-                        // 走到这里说明从未收到 [DONE] 终止标记（[DONE] 分支会直接 return）。
-                        // 不得把截断的文本或半截 tool arguments 当成成功结果。
+                        // 一些 OpenAI-compatible endpoint 在最后一个 chunk 后直接关闭连接。
+                        // 只有明确的 finish_reason 且所有 tool call 完整时才可安全接受；
+                        // 否则不得把截断文本或半截 arguments 当成成功结果。
+                        if can_complete_on_eof(finish_reason.as_deref(), &tool_calls) {
+                            termination = "eof_without_done";
+                            break 'stream;
+                        }
                         warn!(
                             "[openai::stream_chat] 流结束但未收到 [DONE] 标记，已收到 {} chunks / {} tokens",
                             chunk_count, token_count
                         );
                         info!(
-                            "[llm][{}] 响应摘要: status=eof_without_done, total_ms={}, headers_ms={}, first_output_ms={}, sse_bytes={}, chunks={}, text_delta_events={}, answer_bytes={}, answer_chars={}, thinking_bytes={}, thinking_chars={}, {}",
+                            "[llm][{}] 响应摘要: status=eof_without_done_error, total_ms={}, headers_ms={}, first_output_ms={}, sse_bytes={}, chunks={}, text_delta_events={}, answer_bytes={}, answer_chars={}, thinking_bytes={}, thinking_chars={}, {}",
                             request_id,
                             request_started.elapsed().as_millis(),
                             headers_ms,
@@ -863,6 +911,36 @@ impl LlmProvider for OpenAICompatibleProvider {
                     }
                 }
             }
+
+            if text_started {
+                emitter.text_end(content_index, &full_response);
+            }
+            let calls = flush_tool_calls(&mut tool_calls, &tool_call_indexes, emitter);
+            info!(
+                "[llm][{}] 响应摘要: status={}, total_ms={}, headers_ms={}, first_output_ms={}, sse_bytes={}, chunks={}, text_delta_events={}, answer_bytes={}, answer_chars={}, thinking_bytes={}, thinking_chars={}, tool_calls={}, {}",
+                request_id,
+                termination,
+                request_started.elapsed().as_millis(),
+                headers_ms,
+                first_output_ms
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "无输出".to_string()),
+                response_bytes,
+                chunk_count,
+                token_count,
+                full_response.len(),
+                full_response.chars().count(),
+                thinking_response.len(),
+                thinking_response.chars().count(),
+                calls.len(),
+                usage_log_summary(final_usage.as_ref()),
+            );
+            // done 事件由编排层 chat.rs 在整轮 tool 循环结束时统一发射
+            return Ok(StreamOutcome::completed(
+                full_response,
+                thinking_response,
+                calls,
+            ));
         })
     }
 
@@ -1514,6 +1592,89 @@ mod tests {
         assert!(!mixed.had_stream_error);
         assert_eq!(mixed.thinking_text, "think");
         assert_eq!(mixed.full_text, "answer");
+
+        let eof_text_url = serve_openai_sse(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"complete\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        )
+        .await;
+        let (emitter, _) = StreamEventEmitter::channel();
+        let (_, cancel_rx) = watch::channel(false);
+        let eof_text = provider
+            .stream_chat(
+                &eof_text_url,
+                "key",
+                "model",
+                "request",
+                &[make_user_message("u", "hi", 0)],
+                &emitter,
+                cancel_rx,
+                None,
+                &[],
+            )
+            .await
+            .unwrap();
+        assert!(!eof_text.had_stream_error);
+        assert_eq!(eof_text.full_text, "complete");
+
+        let eof_tool_url = serve_openai_sse(
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"/tmp/a\"}"}}]}}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}
+
+"#,
+        )
+        .await;
+        let (emitter, _) = StreamEventEmitter::channel();
+        let (_, cancel_rx) = watch::channel(false);
+        let eof_tool = provider
+            .stream_chat(
+                &eof_tool_url,
+                "key",
+                "model",
+                "request",
+                &[make_user_message("u", "hi", 0)],
+                &emitter,
+                cancel_rx,
+                None,
+                &[],
+            )
+            .await
+            .unwrap();
+        assert!(!eof_tool.had_stream_error);
+        assert_eq!(eof_tool.tool_calls.len(), 1);
+        assert_eq!(eof_tool.tool_calls[0].id, "call-1");
+        assert_eq!(eof_tool.tool_calls[0].name, "read_file");
+        assert_eq!(
+            eof_tool.tool_calls[0].arguments,
+            r#"{"path":"/tmp/a"}"#
+        );
+
+        let incomplete_tool_url = serve_openai_sse(
+            r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-bad","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"/tmp/a\""}}]}}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}
+
+"#,
+        )
+        .await;
+        let (emitter, _) = StreamEventEmitter::channel();
+        let (_, cancel_rx) = watch::channel(false);
+        let incomplete_tool = provider
+            .stream_chat(
+                &incomplete_tool_url,
+                "key",
+                "model",
+                "request",
+                &[make_user_message("u", "hi", 0)],
+                &emitter,
+                cancel_rx,
+                None,
+                &[],
+            )
+            .await
+            .unwrap();
+        assert!(incomplete_tool.had_stream_error);
+        assert!(incomplete_tool.tool_calls.is_empty());
     }
 
     #[tokio::test]
