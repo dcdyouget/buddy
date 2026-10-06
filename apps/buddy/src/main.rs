@@ -1,3 +1,8 @@
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+
 //! Buddy 产品入口：装配引擎、真实页面与统一主窗口外壳。
 use buddy_engine::{chat::ChatEngine, storage};
 use buddy_ui::gpui::{App, AsyncApp};
@@ -36,6 +41,21 @@ fn main() {
             }
         }
     };
+    #[cfg(target_os = "windows")]
+    let instance = {
+        use shell::lifecycle::windows::{Acquire, acquire};
+        match acquire() {
+            Ok(Acquire::Owner { guard, receiver }) => (guard, receiver),
+            Ok(Acquire::Forwarded) => {
+                println!("已向运行中的 Buddy 发送唤醒请求");
+                return;
+            }
+            Err(error) => {
+                log::error!("Windows 单实例启动失败：{error}");
+                std::process::exit(1);
+            }
+        }
+    };
     // 上次自更新留下的 `.Buddy.app.update-old` 与下载缓存；只涉及文件删除，放到后台线程
     std::thread::spawn(buddy_update::cleanup_after_launch);
     // 与 v1 相同的应用数据目录；不进行历史迁移。
@@ -43,7 +63,7 @@ fn main() {
         Ok(path) => path,
         Err(error) => {
             log::error!("无法定位应用数据目录：{error}");
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             drop(instance);
             std::process::exit(1);
         }
@@ -76,10 +96,23 @@ fn main() {
                                 cx.quit();
                             });
                         }
+                        #[cfg(target_os = "windows")]
+                        if let Err(error) =
+                            shell::lifecycle::windows::install(handle, instance.0, instance.1, cx)
+                        {
+                            log::error!("安装 Windows 生命周期事件失败：{error}");
+                            cx.update(|cx| {
+                                shell::services::shutdown(cx);
+                                if let Err(error) = shell::runtime::shutdown(cx) {
+                                    log::error!("清理启动失败的运行时失败：{error}");
+                                }
+                                cx.quit();
+                            });
+                        }
                     }
                     Err(error) => {
                         log::error!("创建主窗口失败：{error}");
-                        #[cfg(target_os = "macos")]
+                        #[cfg(any(target_os = "macos", target_os = "windows"))]
                         drop(instance);
                         cx.update(|cx| cx.quit());
                     }

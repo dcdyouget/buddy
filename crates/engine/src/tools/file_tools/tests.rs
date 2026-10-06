@@ -1,6 +1,6 @@
 use super::*;
 use crate::tools::{Tool, ToolContext, ToolError};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 use tempfile::TempDir;
 use tokio::fs;
@@ -42,6 +42,18 @@ async fn list_directory_respects_depth_and_hidden_default() {
     assert!(output.content.contains("\"path\": \"src/nested\""));
     assert!(!output.content.contains("deep.rs"));
     assert!(!output.content.contains(".secret"));
+
+    let listing: Value = serde_json::from_str(&output.content).unwrap();
+    assert!(
+        listing["root"].as_str().unwrap().contains('/')
+            && listing["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|entry| !entry["path"].as_str().unwrap().contains('\\')),
+        "tool paths must use '/' separators: {}",
+        output.content
+    );
 }
 
 #[tokio::test]

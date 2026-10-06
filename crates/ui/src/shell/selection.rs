@@ -4,9 +4,13 @@
 //! 剪贴板并同步发送 Cmd+C，随后由 `finish_after_copy` 在 GPUI 的异步上下文中等待
 //! 剪贴板更新。等待期间不阻塞主线程，也不会触碰正在运行的对话任务。
 
-use gpui::{App, AsyncApp, ClipboardItem};
+#[cfg(target_os = "macos")]
+use gpui::App;
+use gpui::{AsyncApp, ClipboardItem};
+#[cfg(target_os = "macos")]
 use std::time::Duration;
 
+#[cfg(target_os = "macos")]
 const COPY_SETTLE_DELAY: Duration = Duration::from_millis(50);
 
 /// 一次选中文本捕获的临时状态。
@@ -91,6 +95,7 @@ pub fn changed_selection(previous: &str, candidate: Option<&str>) -> Option<Stri
     Some(trimmed.to_owned())
 }
 
+#[cfg(target_os = "macos")]
 fn clipboard_text(cx: &App) -> Option<String> {
     cx.read_from_clipboard().and_then(|item| item.text())
 }

@@ -21,7 +21,7 @@ pub trait AutostartBackend {
 
 /// 使用 macOS LaunchAgent 的真实开机自启后端。
 pub struct SystemAutostart {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     launcher: auto_launch::AutoLaunch,
 }
 
@@ -44,18 +44,26 @@ impl SystemAutostart {
             return Err("开机自启可执行文件路径必须是绝对路径".into());
         }
 
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             let path = app_path.to_string_lossy();
-            let launcher = auto_launch::AutoLaunchBuilder::new()
-                .set_app_name(app_name)
-                .set_app_path(&path)
-                .set_macos_launch_mode(auto_launch::MacOSLaunchMode::LaunchAgent)
-                .build()
-                .map_err(|error| format!("构造 macOS 开机自启失败：{error}"))?;
+            let mut builder = auto_launch::AutoLaunchBuilder::new();
+            builder.set_app_name(app_name).set_app_path(&path);
+            #[cfg(target_os = "macos")]
+            builder.set_macos_launch_mode(auto_launch::MacOSLaunchMode::LaunchAgent);
+            let launcher = builder.build().map_err(|error| {
+                format!(
+                    "构造{}开机自启失败：{error}",
+                    if cfg!(target_os = "windows") {
+                        " Windows"
+                    } else {
+                        " macOS"
+                    }
+                )
+            })?;
             Ok(Self { launcher })
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = (app_name, app_path);
             Err("开机自启目前只支持 macOS".into())
@@ -64,13 +72,13 @@ impl SystemAutostart {
 
     /// 查询 macOS 当前登录项状态。
     pub fn query(&self) -> Result<bool, String> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             self.launcher
                 .is_enabled()
-                .map_err(|error| format!("查询 macOS 开机自启失败：{error}"))
+                .map_err(|error| format!("查询系统开机自启失败：{error}"))
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             Err("开机自启目前只支持 macOS".into())
         }
@@ -103,7 +111,7 @@ impl RawAutostartBackend for SystemAutostart {
     }
 
     fn apply_raw(&self, enabled: bool) -> Result<(), String> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             let result = if enabled {
                 self.launcher.enable()
@@ -112,12 +120,12 @@ impl RawAutostartBackend for SystemAutostart {
             };
             result.map_err(|error| {
                 format!(
-                    "{} macOS 开机自启失败：{error}",
+                    "{}系统开机自启失败：{error}",
                     if enabled { "开启" } else { "关闭" }
                 )
             })
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = enabled;
             Err("开机自启目前只支持 macOS".into())

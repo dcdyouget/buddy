@@ -3,6 +3,8 @@
 pub mod instance;
 #[cfg(target_os = "macos")]
 mod termination;
+#[cfg(target_os = "windows")]
+pub mod windows;
 
 #[cfg(target_os = "macos")]
 mod macos {

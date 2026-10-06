@@ -4,12 +4,17 @@
 //! 验证工作区、移动与显隐，再清理窗口和目录。它不安装热键、托盘、单实例，
 //! 也不读取或写入用户数据。
 
-use crate::shell::{AppShell, config::ShellConfig, native, open_main_window, positioning_native};
+use crate::shell::{AppShell, config::ShellConfig, open_main_window};
+#[cfg(target_os = "macos")]
+use crate::shell::{native, positioning_native};
 use buddy_engine::chat::ChatEngine;
 use gpui::{AppContext, AsyncApp, WindowHandle};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use std::time::Duration;
+#[cfg(target_os = "macos")]
+use std::time::Instant;
 
 static NEXT_SANDBOX: AtomicU64 = AtomicU64::new(0);
 
@@ -18,7 +23,12 @@ static NEXT_SANDBOX: AtomicU64 = AtomicU64::new(0);
 /// macOS 锁屏、事件访问权限不足和非 macOS 平台都会输出明确的 `BLOCKED`
 /// 并返回 `false`，不会把无法观测当作通过。
 pub async fn run(cx: &mut AsyncApp) -> bool {
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        return run_windows_checks(cx).await;
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = cx;
         println!("BLOCKED 窗口自检：当前平台没有 macOS 原生窗口自检实现，Windows 待测");
@@ -60,6 +70,116 @@ pub async fn run(cx: &mut AsyncApp) -> bool {
         }
         result && window_cleanup && sandbox_cleanup
     }
+}
+
+#[cfg(target_os = "windows")]
+async fn run_windows_checks(cx: &mut AsyncApp) -> bool {
+    let data_dir = sandbox_dir();
+    if let Err(error) = std::fs::create_dir(&data_dir) {
+        println!("FAIL Windows 窗口自检：无法创建临时 engine 沙箱：{error}");
+        return false;
+    }
+    let handle = match open_main_window(
+        ChatEngine::new(data_dir.clone()),
+        ShellConfig::default(),
+        cx,
+    )
+    .await
+    {
+        Ok(handle) => handle,
+        Err(error) => {
+            println!("FAIL Windows 窗口自检：创建窗口失败：{error}");
+            let _ = std::fs::remove_dir_all(data_dir);
+            return false;
+        }
+    };
+    let initial = probe_visibility(handle, cx);
+    let initial_focus = focus_diagnostics(handle, cx);
+    let hidden = super::runtime::hide(handle, cx).await.is_ok()
+        && !probe_visibility(handle, cx).is_some_and(|state| state.is_visible);
+    let show_requested = super::runtime::show(handle, cx).await.is_ok();
+    let mut shown_state = probe_visibility(handle, cx);
+    for _ in 0..50 {
+        if shown_state.is_some_and(|state| state.is_visible && state.is_key) {
+            break;
+        }
+        cx.background_executor()
+            .timer(Duration::from_millis(20))
+            .await;
+        shown_state = probe_visibility(handle, cx);
+    }
+    let shown = show_requested && shown_state.is_some_and(|state| state.is_visible && state.is_key);
+    let shown_focus = focus_diagnostics(handle, cx);
+    let window_cleanup = cx
+        .update_window(handle.into(), |_, window, _| window.remove_window())
+        .is_ok();
+    let sandbox_cleanup = std::fs::remove_dir_all(&data_dir).is_ok();
+    let passed = initial.is_some_and(|state| state.is_visible)
+        && hidden
+        && shown
+        && window_cleanup
+        && sandbox_cleanup;
+    println!(
+        "Windows selfcheck: initial={:?} initial_focus={} hidden={} show_requested={} shown={:?} shown_focus={} window_cleanup={} sandbox_cleanup={}",
+        initial,
+        initial_focus
+            .as_ref()
+            .map_or_else(|| "unavailable".to_string(), ToString::to_string),
+        hidden,
+        show_requested,
+        shown_state,
+        shown_focus
+            .as_ref()
+            .map_or_else(|| "unavailable".to_string(), ToString::to_string),
+        window_cleanup,
+        sandbox_cleanup,
+    );
+    let foreground_locked = shown_focus.as_ref().is_some_and(
+        crate::shell::visibility::WindowsFocusDiagnostics::foreground_is_other_process,
+    );
+    if foreground_locked {
+        println!(
+            "BLOCKED Windows 窗口自检：当前前台窗口属于另一进程，Windows 前台锁拒绝非用户手势抢占焦点；请在普通桌面前台环境或通过 Buddy 全局热键重试。"
+        );
+    }
+    println!(
+        "{} Windows 窗口自检（创建 / 隐藏 / 唤回 / 聚焦）",
+        if passed {
+            "PASS"
+        } else if foreground_locked {
+            "BLOCKED"
+        } else {
+            "FAIL"
+        }
+    );
+    passed
+}
+
+#[cfg(target_os = "windows")]
+fn probe_visibility(
+    handle: WindowHandle<AppShell>,
+    cx: &mut AsyncApp,
+) -> Option<crate::shell::visibility::VisibilitySnapshot> {
+    cx.update_window(handle.into(), |_, window, _| {
+        crate::shell::visibility::prepare(window)
+    })
+    .ok()
+    .and_then(Result::ok)
+    .and_then(|prepared| prepared.probe().ok())
+}
+
+#[cfg(target_os = "windows")]
+fn focus_diagnostics(
+    handle: WindowHandle<AppShell>,
+    cx: &mut AsyncApp,
+) -> Option<crate::shell::visibility::WindowsFocusDiagnostics> {
+    cx.update_window(handle.into(), |_, window, _| {
+        crate::shell::visibility::prepare(window)
+            .ok()
+            .map(|prepared| prepared.focus_diagnostics())
+    })
+    .ok()
+    .flatten()
 }
 
 #[cfg(target_os = "macos")]
@@ -125,7 +245,10 @@ async fn run_native_checks(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) ->
     );
 
     let entrance = check_runtime_entrance(handle, cx).await;
-    println!("T12-05 首帧门控 / 呼出落定 / 恢复焦点不重播：{}", if entrance { "PASS" } else { "FAIL" });
+    println!(
+        "T12-05 首帧门控 / 呼出落定 / 恢复焦点不重播：{}",
+        if entrance { "PASS" } else { "FAIL" }
+    );
     let ok = native_ok && workspace_ok && moved && visibility.passed() && entrance;
     println!("{} 窗口行为自检", if ok { "PASS" } else { "FAIL" });
     ok
@@ -144,14 +267,27 @@ async fn check_runtime_entrance(handle: WindowHandle<AppShell>, cx: &mut AsyncAp
     if !shown {
         return false;
     }
-    cx.background_executor().timer(Duration::from_millis(350)).await;
-    let settled = handle.read_with(cx, |shell, _| shell.entrance_phase() == super::entrance::EntrancePhase::Settled).unwrap_or(false);
-    let focused = probe_native(handle, cx).is_some_and(|s| s.is_visible && s.view_is_first_responder);
+    cx.background_executor()
+        .timer(Duration::from_millis(350))
+        .await;
+    let settled = handle
+        .read_with(cx, |shell, _| {
+            shell.entrance_phase() == super::entrance::EntrancePhase::Settled
+        })
+        .unwrap_or(false);
+    let focused =
+        probe_native(handle, cx).is_some_and(|s| s.is_visible && s.view_is_first_responder);
     if super::runtime::show(handle, cx).await.is_err() {
         return false;
     }
-    cx.background_executor().timer(Duration::from_millis(35)).await;
-    let not_replayed = handle.read_with(cx, |shell, _| shell.entrance_phase() == super::entrance::EntrancePhase::Settled).unwrap_or(false);
+    cx.background_executor()
+        .timer(Duration::from_millis(35))
+        .await;
+    let not_replayed = handle
+        .read_with(cx, |shell, _| {
+            shell.entrance_phase() == super::entrance::EntrancePhase::Settled
+        })
+        .unwrap_or(false);
     settled && focused && not_replayed
 }
 
@@ -334,7 +470,7 @@ fn close(actual: f64, expected: f64) -> bool {
     (actual - expected).abs() < 1.0
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn sandbox_dir() -> PathBuf {
     let index = NEXT_SANDBOX.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!("buddy-s07-12-{}-{index}", std::process::id()))

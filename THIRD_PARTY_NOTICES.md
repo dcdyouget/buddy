@@ -26,6 +26,14 @@ Copyright (c) Lucide Icons and Contributors，许可证：https://lucide.dev/lic
 `vendor/global-hotkey` 为 crates.io `global-hotkey 0.8.0` 的修改版：macOS Carbon 注册改为独占，
 避免外部占键时静默成功。保留原许可证文件与版权声明，差异见该目录的 `VENDOR.md`。
 
+## Microsoft Visual C++ Runtime（Microsoft 软件许可条款）
+
+Windows 便携 ZIP 包含未修改的 `VCRUNTIME140.dll`，由发布脚本从已安装的 Visual Studio
+`VC/Redist/MSVC/*/x64/Microsoft.VC143.CRT` 复制。该文件是 Microsoft Visual C++
+Redistributable 的可分发代码，不适用 Buddy 的 GPL/MIT 许可证；其使用与再分发受
+[Microsoft Visual Studio 许可条款](https://visualstudio.microsoft.com/license-terms/)及
+[Visual Studio 可再发行组件说明](https://learn.microsoft.com/visualstudio/releases/2022/redistribution)约束。
+
 ## MPL-2.0 依赖
 
 `cssparser`、`cssparser-macros`、`selectors`、`dtoa-short`、`option-ext` 等为 MPL-2.0（文件级 copyleft），

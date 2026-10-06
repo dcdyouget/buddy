@@ -37,6 +37,21 @@ fn newer_version_is_selected_with_notes() {
 }
 
 #[test]
+fn windows_release_is_selected_from_the_same_manifest() {
+    let mut value: serde_json::Value = serde_json::from_str(&manifest_json("0.2.0")).unwrap();
+    value["platforms"]["windows-x86_64"] = serde_json::json!({
+        "update": asset("https://example.com/Buddy_0.2.0_x86_64.exe"),
+        "installer": asset("https://example.com/Buddy_0.2.0_x86_64.zip"),
+    });
+    let manifest = Manifest::parse(&value.to_string()).unwrap();
+
+    let release = select_release(&manifest, "0.1.0", "windows-x86_64")
+        .unwrap()
+        .unwrap();
+    assert!(release.update.url.ends_with("Buddy_0.2.0_x86_64.exe"));
+}
+
+#[test]
 fn same_or_older_version_is_latest() {
     let manifest = Manifest::parse(&manifest_json("0.1.0")).unwrap();
     assert!(select_release(&manifest, "0.1.0", "darwin-aarch64").unwrap().is_none());

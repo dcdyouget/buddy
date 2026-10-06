@@ -8,34 +8,53 @@ use tokio::sync::mpsc::UnboundedSender;
 
 #[cfg(target_os = "macos")]
 use objc::{sel, sel_impl};
+#[cfg(target_os = "windows")]
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::{
+    Foundation::HWND,
+    System::Threading::{AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId},
+    UI::Input::KeyboardAndMouse::{SetActiveWindow, SetFocus},
+    UI::WindowsAndMessaging::{
+        BringWindowToTop, GWL_EXSTYLE, GWL_STYLE, GetForegroundWindow, GetWindowLongPtrW,
+        GetWindowThreadProcessId, IsWindowVisible, SW_HIDE, SW_RESTORE, SetForegroundWindow,
+        ShowWindow,
+    },
+};
 
 /// 主窗口可见性操作失败的诊断。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum VisibilityError {
     /// 当前平台没有本模块的原生窗口实现。
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     UnsupportedPlatform,
     /// AppKit 对象只能从主线程读取或修改。
+    #[cfg(target_os = "macos")]
     NotMainThread,
     /// GPUI 没有返回可用的原生窗口句柄。
     WindowHandle(String),
     /// 窗口句柄不是 AppKit 的 NSView 句柄。
     UnsupportedWindowHandle,
     /// AppKit 返回了空对象。
+    #[cfg(target_os = "macos")]
     NullObject(&'static str),
     /// NSEvent 全局监听器注册失败。
+    #[cfg(target_os = "macos")]
     MonitorRegistrationFailed,
 }
 
 impl std::fmt::Display for VisibilityError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
             Self::UnsupportedPlatform => f.write_str("当前平台不支持原生窗口可见性控制"),
+            #[cfg(target_os = "macos")]
             Self::NotMainThread => f.write_str("macOS 原生窗口只能从主线程读取或修改"),
             Self::WindowHandle(error) => write!(f, "读取 GPUI 原生窗口句柄失败：{error}"),
             Self::UnsupportedWindowHandle => f.write_str("GPUI 窗口句柄不是 AppKit 类型"),
+            #[cfg(target_os = "macos")]
             Self::NullObject(name) => write!(f, "AppKit 返回空对象：{name}"),
+            #[cfg(target_os = "macos")]
             Self::MonitorRegistrationFailed => f.write_str("注册 macOS 外部点击监听失败"),
         }
     }
@@ -56,11 +75,66 @@ pub(crate) struct VisibilitySnapshot {
     pub(crate) app_is_active: bool,
 }
 
+/// Native state reported by the Windows self-check if the foreground lock denies activation.
+#[cfg(target_os = "windows")]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct WindowsFocusDiagnostics {
+    window_hwnd: isize,
+    foreground_hwnd: isize,
+    window_pid: u32,
+    foreground_pid: u32,
+    window_thread: u32,
+    foreground_thread: u32,
+    style: isize,
+    ex_style: isize,
+}
+
+#[cfg(target_os = "windows")]
+impl WindowsFocusDiagnostics {
+    pub(crate) fn foreground_is_other_process(&self) -> bool {
+        self.foreground_hwnd != self.window_hwnd && self.foreground_pid != self.window_pid
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl std::fmt::Display for WindowsFocusDiagnostics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "hwnd=0x{:X} pid={} thread={} style=0x{:X} ex_style=0x{:X}; foreground=0x{:X} pid={} thread={}",
+            self.window_hwnd,
+            self.window_pid,
+            self.window_thread,
+            self.style,
+            self.ex_style,
+            self.foreground_hwnd,
+            self.foreground_pid,
+            self.foreground_thread,
+        )
+    }
+}
+
 /// 外部鼠标按下事件。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub(crate) enum VisibilityEvent {
     /// 其他应用中的鼠标按下；本应用内的弹窗事件不会经此 monitor 投递。
     ExternalMouseDown,
+}
+
+/// Whether the foreground native window belongs to this Buddy process. A model popup is
+/// a separate native window, so its activation must not count as an external click.
+#[cfg(target_os = "windows")]
+pub(crate) fn foreground_window_belongs_to_current_process() -> bool {
+    unsafe {
+        let foreground = GetForegroundWindow();
+        if foreground.is_null() {
+            return false;
+        }
+        let mut process_id = 0;
+        GetWindowThreadProcessId(foreground, &mut process_id);
+        process_id != 0 && process_id == GetCurrentProcessId()
+    }
 }
 
 /// 已取得原生窗口强引用的可见性操作器。
@@ -70,6 +144,8 @@ pub(crate) enum VisibilityEvent {
 pub(crate) struct PreparedVisibility {
     #[cfg(target_os = "macos")]
     native: objc::rc::StrongPtr,
+    #[cfg(target_os = "windows")]
+    hwnd: HWND,
 }
 
 /// 取得主窗口的原生可见性操作器。
@@ -82,7 +158,18 @@ pub(crate) fn prepare(window: &Window) -> Result<PreparedVisibility, VisibilityE
             native: unsafe { objc::rc::StrongPtr::retain(native) },
         });
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        let handle = <Window as HasWindowHandle>::window_handle(window)
+            .map_err(|error| VisibilityError::WindowHandle(error.to_string()))?;
+        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+            return Err(VisibilityError::UnsupportedWindowHandle);
+        };
+        return Ok(PreparedVisibility {
+            hwnd: handle.hwnd.get() as HWND,
+        });
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = window;
         Err(VisibilityError::UnsupportedPlatform)
@@ -95,11 +182,24 @@ impl PreparedVisibility {
         #[cfg(target_os = "macos")]
         {
             ensure_main_thread()?;
-            unsafe { let _: () = objc::msg_send![*self.native, setAlphaValue: alpha]; }
+            unsafe {
+                let _: () = objc::msg_send![*self.native, setAlphaValue: alpha];
+            }
             Ok(())
         }
-        #[cfg(not(target_os = "macos"))]
-        { let _ = alpha; Err(VisibilityError::UnsupportedPlatform) }
+        #[cfg(target_os = "windows")]
+        {
+            // Windows does not expose an NSWindow-like per-window alpha API through the
+            // minimal Win32 surface used here. GPUI renders the next frame synchronously
+            // before ShowWindow, so keeping the normal opacity avoids a stale drawable.
+            let _ = alpha;
+            return Ok(());
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            let _ = alpha;
+            Err(VisibilityError::UnsupportedPlatform)
+        }
     }
     /// 播放呼入动效（缩放 + 淡入）；须在 `set_alpha(1.0)` 之前调用。
     pub(crate) fn summon(&self) -> Result<(), VisibilityError> {
@@ -109,8 +209,14 @@ impl PreparedVisibility {
             super::window_motion::summon(*self.native);
             Ok(())
         }
-        #[cfg(not(target_os = "macos"))]
-        { Err(VisibilityError::UnsupportedPlatform) }
+        #[cfg(target_os = "windows")]
+        {
+            return Ok(());
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            Err(VisibilityError::UnsupportedPlatform)
+        }
     }
 
     /// 播放呼出动效（收缩 + 淡出），停在透明终帧等待 [`Self::hide`]。
@@ -121,8 +227,14 @@ impl PreparedVisibility {
             super::window_motion::dismiss(*self.native);
             Ok(())
         }
-        #[cfg(not(target_os = "macos"))]
-        { Err(VisibilityError::UnsupportedPlatform) }
+        #[cfg(target_os = "windows")]
+        {
+            return Ok(());
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            Err(VisibilityError::UnsupportedPlatform)
+        }
     }
 
     /// 清除呼入 / 呼出动画，图层回到原尺寸、不透明。
@@ -133,8 +245,14 @@ impl PreparedVisibility {
             super::window_motion::settle(*self.native);
             Ok(())
         }
-        #[cfg(not(target_os = "macos"))]
-        { Err(VisibilityError::UnsupportedPlatform) }
+        #[cfg(target_os = "windows")]
+        {
+            return Ok(());
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            Err(VisibilityError::UnsupportedPlatform)
+        }
     }
 
     /// 隐藏窗口但保留 Router、页面状态与 engine 流式任务。
@@ -150,7 +268,14 @@ impl PreparedVisibility {
                 return snapshot(*self.native);
             }
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            unsafe {
+                ShowWindow(self.hwnd, SW_HIDE);
+            }
+            return self.probe();
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             Err(VisibilityError::UnsupportedPlatform)
         }
@@ -170,9 +295,14 @@ impl PreparedVisibility {
                 self.restore_normal_level()?;
             }
         }
+        #[cfg(target_os = "windows")]
+        {
+            // Windows automatically restores normal Z-order when a window is foreground.
+        }
         Ok(())
     }
 
+    #[cfg(target_os = "macos")]
     fn restore_normal_level(&self) -> Result<(), VisibilityError> {
         #[cfg(target_os = "macos")]
         {
@@ -181,6 +311,8 @@ impl PreparedVisibility {
                 let _: () = objc::msg_send![*self.native, setLevel: 0i64];
             }
         }
+        #[cfg(target_os = "windows")]
+        {}
         Ok(())
     }
 
@@ -204,7 +336,34 @@ impl PreparedVisibility {
                 return snapshot(*self.native);
             }
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            unsafe {
+                // SetForegroundWindow is intentionally restricted by Windows when another
+                // process owns the foreground. Joining that UI input queue briefly is the
+                // documented native path for a user-triggered summon; detach immediately.
+                let foreground = GetForegroundWindow();
+                let foreground_thread = if foreground.is_null() {
+                    0
+                } else {
+                    GetWindowThreadProcessId(foreground, std::ptr::null_mut())
+                };
+                let current_thread = GetCurrentThreadId();
+                let attached = foreground_thread != 0
+                    && foreground_thread != current_thread
+                    && AttachThreadInput(current_thread, foreground_thread, 1) != 0;
+                ShowWindow(self.hwnd, SW_RESTORE);
+                BringWindowToTop(self.hwnd);
+                SetForegroundWindow(self.hwnd);
+                SetActiveWindow(self.hwnd);
+                SetFocus(self.hwnd);
+                if attached {
+                    AttachThreadInput(current_thread, foreground_thread, 0);
+                }
+            }
+            return self.probe();
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             Err(VisibilityError::UnsupportedPlatform)
         }
@@ -217,9 +376,47 @@ impl PreparedVisibility {
             ensure_main_thread()?;
             unsafe { return snapshot(*self.native) }
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            unsafe {
+                let visible = IsWindowVisible(self.hwnd) != 0;
+                let foreground = GetForegroundWindow();
+                return Ok(VisibilitySnapshot {
+                    is_visible: visible,
+                    is_key: foreground == self.hwnd,
+                    is_main: foreground == self.hwnd,
+                    app_is_active: foreground == self.hwnd,
+                });
+            }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             Err(VisibilityError::UnsupportedPlatform)
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn focus_diagnostics(&self) -> WindowsFocusDiagnostics {
+        unsafe {
+            let foreground = GetForegroundWindow();
+            let mut window_pid = 0;
+            let mut foreground_pid = 0;
+            let window_thread = GetWindowThreadProcessId(self.hwnd, &mut window_pid);
+            let foreground_thread = if foreground.is_null() {
+                0
+            } else {
+                GetWindowThreadProcessId(foreground, &mut foreground_pid)
+            };
+            WindowsFocusDiagnostics {
+                window_hwnd: self.hwnd as isize,
+                foreground_hwnd: foreground as isize,
+                window_pid,
+                foreground_pid,
+                window_thread,
+                foreground_thread,
+                style: GetWindowLongPtrW(self.hwnd, GWL_STYLE),
+                ex_style: GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE),
+            }
         }
     }
 }
@@ -230,6 +427,8 @@ pub(crate) struct OutsideClickMonitor {
     token: *mut objc::runtime::Object,
     #[cfg(target_os = "macos")]
     _handler: block::RcBlock<(*mut objc::runtime::Object,), ()>,
+    #[cfg(target_os = "windows")]
+    _private: (),
 }
 
 impl OutsideClickMonitor {
@@ -264,7 +463,15 @@ impl OutsideClickMonitor {
                 _handler: handler,
             });
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            // Win32 activation changes are observed by positioning_controller. A global
+            // low-level mouse hook would require a DLL and causes false positives for
+            // system menus, so keep the monitor alive as a capability marker only.
+            let _ = sender;
+            return Ok(Self { _private: () });
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = sender;
             Err(VisibilityError::UnsupportedPlatform)

@@ -3,11 +3,27 @@
 //! `prepare` 只在 GPUI 借用窗口时取得一个强引用；`snapshot` / `set_rect` 在借用
 //! 释放后同步执行，避免 AppKit 的 resize 回调重入 GPUI 的 `App` 借用。
 
-use super::positioning::{Point, Rect, Screen, appkit_to_top_left, top_left_to_appkit};
+use super::positioning::{Point, Rect, Screen};
+#[cfg(target_os = "macos")]
+use super::positioning::{appkit_to_top_left, top_left_to_appkit};
 use gpui::Window;
 
 #[cfg(target_os = "macos")]
 use objc::{sel, sel_impl};
+#[cfg(target_os = "windows")]
+use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::{
+    Foundation::{HWND, LPARAM, POINT, RECT},
+    Graphics::Gdi::{
+        EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO,
+        MonitorFromPoint, MonitorFromWindow,
+    },
+    UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI},
+    UI::WindowsAndMessaging::{
+        GetCursorPos, GetWindowRect, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos,
+    },
+};
 #[cfg(target_os = "macos")]
 mod ffi;
 
@@ -26,8 +42,14 @@ pub struct PreparedPosition {
     native: objc::rc::StrongPtr,
 }
 
+/// Windows HWND borrowed from GPUI. It remains valid while the corresponding GPUI window exists.
+#[cfg(target_os = "windows")]
+pub struct PreparedPosition {
+    hwnd: HWND,
+}
+
 /// 非 macOS 平台的定位占位类型。
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub struct PreparedPosition;
 
 /// 取得主线程上的 NSWindow 强引用；调用者必须在退出 GPUI `App` borrow 后操作它。
@@ -40,7 +62,18 @@ pub fn prepare(window: &Window) -> Result<PreparedPosition, String> {
             native: unsafe { objc::rc::StrongPtr::retain(native) },
         });
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        let handle = <Window as HasWindowHandle>::window_handle(window)
+            .map_err(|error| error.to_string())?;
+        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+            return Err("GPUI 窗口句柄不是 Win32 类型".into());
+        };
+        return Ok(PreparedPosition {
+            hwnd: handle.hwnd.get() as HWND,
+        });
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = window;
         Err("当前平台不支持 AppKit 窗口定位".into())
@@ -54,7 +87,29 @@ pub fn screens() -> Result<Vec<Screen>, String> {
         ensure_main_thread()?;
         return unsafe { read_screens() };
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        let mut monitors = Vec::new();
+        unsafe {
+            if EnumDisplayMonitors(
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                Some(collect_monitor),
+                &mut monitors as *mut Vec<Screen> as LPARAM,
+            ) == 0
+            {
+                return Err(format!(
+                    "枚举 Windows 显示器失败：{}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+        }
+        if monitors.is_empty() {
+            return Err("没有可用的 Windows 显示器".into());
+        }
+        return Ok(monitors);
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         Err("当前平台不支持 AppKit 屏幕定位".into())
     }
@@ -102,7 +157,29 @@ impl PreparedPosition {
                 .ok_or_else(|| "窗口不属于任何已连接显示器".to_string())?;
             return Ok(Snapshot { rect, screen });
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        unsafe {
+            let mut rect = RECT::default();
+            if GetWindowRect(self.hwnd, &mut rect) == 0 {
+                return Err(format!(
+                    "读取 Windows 窗口位置失败：{}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            return Ok(Snapshot {
+                rect: Rect::new(
+                    rect.left as f64,
+                    rect.top as f64,
+                    (rect.right - rect.left) as f64,
+                    (rect.bottom - rect.top) as f64,
+                ),
+                screen: screen_from_monitor(MonitorFromWindow(
+                    self.hwnd,
+                    MONITOR_DEFAULTTONEAREST,
+                ))?,
+            });
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             Err("当前平台不支持 AppKit 窗口定位".into())
         }
@@ -118,7 +195,26 @@ impl PreparedPosition {
             rect.origin = origin;
             return self.set_rect(rect);
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        unsafe {
+            if SetWindowPos(
+                self.hwnd,
+                std::ptr::null_mut(),
+                origin.x.round() as i32,
+                origin.y.round() as i32,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            ) == 0
+            {
+                return Err(format!(
+                    "移动 Windows 窗口失败：{}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            return Ok(());
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = origin;
             Err("当前平台不支持 AppKit 窗口定位".into())
@@ -138,7 +234,30 @@ impl PreparedPosition {
             }
             return Ok(());
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        unsafe {
+            let x = rect.origin.x.round() as i32;
+            let y = rect.origin.y.round() as i32;
+            let width = rect.size.width.round().max(1.0) as i32;
+            let height = rect.size.height.round().max(1.0) as i32;
+            if SetWindowPos(
+                self.hwnd,
+                std::ptr::null_mut(),
+                x,
+                y,
+                width,
+                height,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            ) == 0
+            {
+                return Err(format!(
+                    "设置 Windows 窗口位置失败：{}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            return Ok(());
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             let _ = rect;
             Err("当前平台不支持 AppKit 窗口定位".into())
@@ -180,6 +299,86 @@ impl From<NSRect> for Rect {
             rect.size.height,
         )
     }
+}
+
+#[cfg(target_os = "windows")]
+fn cursor_screen() -> Result<Screen, String> {
+    unsafe {
+        let mut point = POINT::default();
+        if GetCursorPos(&mut point) == 0 {
+            return Err(format!(
+                "读取鼠标位置失败：{}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        screen_from_monitor(MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST))
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn screen_from_monitor(monitor: HMONITOR) -> Result<Screen, String> {
+    if monitor.is_null() {
+        return Err("找不到可用的 Windows 显示器".into());
+    }
+    unsafe {
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if GetMonitorInfoW(monitor, &mut info) == 0 {
+            return Err(format!(
+                "读取 Windows 显示器信息失败：{}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let frame = Rect::new(
+            info.rcMonitor.left as f64,
+            info.rcMonitor.top as f64,
+            (info.rcMonitor.right - info.rcMonitor.left) as f64,
+            (info.rcMonitor.bottom - info.rcMonitor.top) as f64,
+        );
+        let work_area = Rect::new(
+            info.rcWork.left as f64,
+            info.rcWork.top as f64,
+            (info.rcWork.right - info.rcWork.left) as f64,
+            (info.rcWork.bottom - info.rcWork.top) as f64,
+        );
+        let mut dpi_x = 96u32;
+        let mut dpi_y = 96u32;
+        let dpi_ok = GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) >= 0;
+        let scale = if dpi_ok && dpi_x > 0 {
+            dpi_x as f64 / 96.0
+        } else {
+            1.0
+        };
+        Ok(Screen {
+            key: format!(
+                "monitor:{}:{}:{}:{}",
+                info.rcMonitor.left,
+                info.rcMonitor.top,
+                info.rcMonitor.right,
+                info.rcMonitor.bottom
+            ),
+            frame,
+            work_area,
+            scale,
+            primary: info.rcMonitor.left == 0 && info.rcMonitor.top == 0,
+        })
+    }
+}
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn collect_monitor(
+    monitor: HMONITOR,
+    _hdc: HDC,
+    _rect: *mut RECT,
+    data: LPARAM,
+) -> i32 {
+    let screens = unsafe { &mut *(data as *mut Vec<Screen>) };
+    if let Ok(screen) = screen_from_monitor(monitor) {
+        screens.push(screen);
+    }
+    1
 }
 
 #[cfg(target_os = "macos")]
@@ -317,9 +516,22 @@ fn focused_screen_key() -> Result<Option<String>, String> {
     })))
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn focused_screen_key() -> Result<Option<String>, String> {
     Ok(None)
+}
+
+#[cfg(target_os = "windows")]
+fn focused_screen_key() -> Result<Option<String>, String> {
+    unsafe {
+        let window = windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow();
+        if window.is_null() {
+            return Ok(None);
+        }
+        Ok(Some(
+            screen_from_monitor(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST))?.key,
+        ))
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -338,7 +550,12 @@ fn cursor_screen_key() -> Result<Option<String>, String> {
     Ok(key)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn cursor_screen_key() -> Result<Option<String>, String> {
     Ok(None)
+}
+
+#[cfg(target_os = "windows")]
+fn cursor_screen_key() -> Result<Option<String>, String> {
+    Ok(Some(cursor_screen()?.key))
 }

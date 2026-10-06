@@ -1,8 +1,10 @@
-use super::{bounded_usize, include_hidden, is_hidden, relative_display, required_path};
+use super::{
+    bounded_usize, include_hidden, is_hidden, relative_display, required_path, tool_path_display,
+};
 use crate::tools::{Tool, ToolContext, ToolError, ToolOutput, ToolSafety};
 use async_trait::async_trait;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::fs;
 
 const DEFAULT_MAX_ENTRIES: usize = 200;
@@ -143,7 +145,7 @@ impl Tool for ListDirectoryTool {
 
         entries.sort_by(|left, right| left.path.cmp(&right.path));
         let output = DirectoryListing {
-            root: root.to_string_lossy().to_string(),
+            root: tool_path_display(&root),
             entries,
             truncated,
         };

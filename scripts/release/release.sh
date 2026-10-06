@@ -10,6 +10,7 @@
 #   --skip-tests                           跳过测试（仅用于重跑失败的上传 / 发布）
 #   --skip-publish                         只构建、上传版本目录，不改 channels/stable.json
 #   --yes                                  发布前不再询问确认
+#   --windows-dir <目录>                    使用本地未签名 Windows 制品，跳过 GitHub Actions 下载
 #
 # 签名私钥密码读取顺序：环境变量 TAURI_SIGNING_PRIVATE_KEY_PASSWORD →
 #   钥匙串（security add-generic-password -s buddy-updater-key -a buddy -w）→ 终端输入。
@@ -41,6 +42,11 @@ NOTES_FILE=""
 SKIP_TESTS=false
 SKIP_PUBLISH=false
 YES=false
+WINDOWS_DIR=""
+HAS_WINDOWS=false
+SOURCE_PUSHED=false
+WINDOWS_WORKFLOW="Windows"
+WINDOWS_ARTIFACT="Buddy-windows-x86_64"
 
 fail() { printf '\n错误：%s\n' "$*" >&2; exit 1; }
 step() { printf '\n==> [%s] %s\n' "$1" "$2"; }
@@ -52,6 +58,7 @@ while [[ $# -gt 0 ]]; do
     --skip-tests) SKIP_TESTS=true ;;
     --skip-publish) SKIP_PUBLISH=true ;;
     --yes) YES=true ;;
+    --windows-dir) WINDOWS_DIR="${2:?--windows-dir 需要 Windows 制品目录}"; shift ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     v[0-9]*|[0-9]*) VERSION="${1#v}" ;;
     *) fail "未知参数：$1" ;;
@@ -89,8 +96,65 @@ verify_public() { # 公开URL 本地文件：公网下载回来逐字节比对 s
   [[ "$remote" == "$(shasum -a 256 "$2" | cut -d' ' -f1)" ]] || fail "公网内容与本地不一致：$1"
 }
 
+copy_windows_artifacts() {
+  local source="$1" file
+  mkdir -p "$OUT/windows/x86_64"
+  for file in "Buddy_${VERSION}_x86_64.exe" "Buddy_${VERSION}_x86_64.zip"; do
+    [[ -f "$source/$file" ]] || fail "缺少同版本 Windows 制品：$source/$file"
+    cp "$source/$file" "$OUT/windows/x86_64/$file"
+  done
+}
+
+single_windows_artifact() {
+  local root="$1" name="$2"
+  local matches=()
+  while IFS= read -r path; do matches+=("$path"); done < <(find "$root" -type f -name "$name" -print)
+  [[ ${#matches[@]} -eq 1 ]] || fail "GitHub Actions 制品中应恰好有一个 $name，实际为 ${#matches[@]} 个"
+  printf '%s\n' "${matches[0]}"
+}
+
+download_windows_artifacts() {
+  local head="$1" started_at runs run_id download_dir exe zip
+  started_at="$(date -u +%s)"
+  gh workflow run "$WINDOWS_WORKFLOW" --repo "$GITHUB_REPO" --ref main -f ref="$head" \
+    || fail "无法触发 Windows 构建工作流"
+  echo "已触发 Windows 构建，等待提交 ${head:0:12} 的工作流..."
+
+  run_id=""
+  for _ in {1..60}; do
+    runs="$(gh run list --repo "$GITHUB_REPO" --workflow "$WINDOWS_WORKFLOW" --event workflow_dispatch \
+      --commit "$head" --limit 20 --json databaseId,headSha,createdAt 2>/dev/null)" || runs="[]"
+    run_id="$(node -e '
+      const [head, started, runs] = process.argv.slice(1);
+      const candidates = JSON.parse(runs).filter(run =>
+        run.headSha === head && Date.parse(run.createdAt) >= (Number(started) - 5) * 1000
+      ).sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+      if (candidates[0]) process.stdout.write(String(candidates[0].databaseId));
+    ' "$head" "$started_at" "$runs")"
+    [[ -n "$run_id" ]] && break
+    sleep 2
+  done
+  [[ -n "$run_id" ]] || fail "未找到刚触发且 HEAD 为 $head 的 Windows 工作流"
+
+  gh run watch "$run_id" --repo "$GITHUB_REPO" --exit-status \
+    || fail "Windows 构建失败：gh run view $run_id --repo $GITHUB_REPO --log-failed"
+  [[ "$(gh run view "$run_id" --repo "$GITHUB_REPO" --json headSha --jq .headSha)" == "$head" ]] \
+    || fail "Windows 工作流 $run_id 的 HEAD 与发布提交不一致"
+
+  download_dir="$OUT/windows-ci"
+  rm -rf "$download_dir"
+  mkdir -p "$download_dir"
+  gh run download "$run_id" --repo "$GITHUB_REPO" --name "$WINDOWS_ARTIFACT" --dir "$download_dir" \
+    || fail "无法下载 Windows 构建制品"
+  exe="$(single_windows_artifact "$download_dir" "Buddy_${VERSION}_x86_64.exe")"
+  zip="$(single_windows_artifact "$download_dir" "Buddy_${VERSION}_x86_64.zip")"
+  mkdir -p "$OUT/windows/x86_64"
+  cp "$exe" "$OUT/windows/x86_64/$(basename "$exe")"
+  cp "$zip" "$OUT/windows/x86_64/$(basename "$zip")"
+}
+
 # ── 1. 环境与输入 ─────────────────────────────────────────────
-step 1/10 "环境与仓库检查"
+step 1/11 "环境与仓库检查"
 [[ "$(uname -s)/$(uname -m)" == "Darwin/arm64" ]] || fail "只能在 Apple Silicon Mac 上发布"
 for c in git gh node cargo ossutil curl codesign hdiutil plutil shasum security; do
   command -v "$c" >/dev/null || fail "缺少命令：$c"
@@ -118,6 +182,10 @@ echo "线上版本：${PUBLISHED:-（尚未发布）} → 新版本：$VERSION"
 
 OUT="$ROOT/.release/$VERSION"
 mkdir -p "$OUT"
+if [[ -n "$WINDOWS_DIR" ]]; then
+  copy_windows_artifacts "$WINDOWS_DIR"
+  HAS_WINDOWS=true
+fi
 if [[ -n "$NOTES_FILE" ]]; then
   cp "$NOTES_FILE" "$OUT/notes.txt"
 elif [[ -n "$NOTES" ]]; then
@@ -145,7 +213,7 @@ sign() { "$TAURI" signer sign -f "$KEY_PATH" "$1" </dev/null >/dev/null 2>&1 || 
 PROBE="$(mktemp)"; sign "$PROBE"; rm -f "$PROBE" "$PROBE.sig"
 
 # ── 2. 版本号 ─────────────────────────────────────────────────
-step 2/10 "写入版本号并提交"
+step 2/11 "写入版本号并提交"
 if [[ "$(workspace_version)" != "$VERSION" ]]; then
   node scripts/set-version.mjs "$VERSION"
   cargo metadata --format-version 1 >/dev/null # 同步 Cargo.lock 中的 workspace 版本
@@ -156,9 +224,10 @@ else
   echo "版本号已是 $VERSION，跳过"
 fi
 COMMIT="$(git rev-parse --short HEAD)"
+COMMIT_FULL="$(git rev-parse HEAD)"
 
 # ── 3. 测试 ───────────────────────────────────────────────────
-step 3/10 "提交门禁与测试"
+step 3/11 "提交门禁与测试"
 if [[ "$SKIP_TESTS" == true ]]; then
   echo "已跳过（--skip-tests）"
 else
@@ -168,12 +237,23 @@ else
   echo "门禁与测试通过"
 fi
 
-# ── 4-5. 构建、组装、签名 ─────────────────────────────────────
-step 4/10 "构建 release 二进制"
+# GitHub Actions 必须从已公开的精确提交检出；不能把当前工作目录或后续 main 的
+# 构建产物误当作本次发布制品。显式传入 commit SHA 后，工作流 checkout 该 SHA。
+if [[ "$SKIP_PUBLISH" != true && -z "$WINDOWS_DIR" ]]; then
+  step 4/11 "推送发布源码并构建 Windows 制品"
+  git push -q origin HEAD:main \
+    || fail "无法推送发布提交，Windows 构建未触发"
+  SOURCE_PUSHED=true
+  download_windows_artifacts "$COMMIT_FULL"
+  HAS_WINDOWS=true
+fi
+
+# ── 5-6. 构建、组装、签名 ─────────────────────────────────────
+step 5/11 "构建 release 二进制"
 MACOSX_DEPLOYMENT_TARGET=12.0 cargo build --release --locked -p buddy-app --bin buddy >"$OUT/build.log" 2>&1 \
   || { tail -30 "$OUT/build.log"; fail "构建失败（日志：$OUT/build.log）"; }
 
-step 5/10 "组装 Buddy.app / 更新包 / 安装包并签名"
+step 6/11 "组装 Buddy.app / 更新包 / 安装包并签名"
 MAC_DIR="$OUT/macos/aarch64"
 mkdir -p "$MAC_DIR"
 scripts/release/bundle-macos.sh "$VERSION" "$ROOT/target/release/buddy" "$MAC_DIR"
@@ -183,16 +263,34 @@ UPDATE="$MAC_DIR/Buddy_${VERSION}_aarch64.app.tar.xz"
 INSTALLER="$MAC_DIR/Buddy_${VERSION}_aarch64.dmg"
 sign "$UPDATE"
 sign "$INSTALLER"
+if [[ "$HAS_WINDOWS" == true ]]; then
+  WINDOWS_UPDATE="$OUT/windows/x86_64/Buddy_${VERSION}_x86_64.exe"
+  WINDOWS_INSTALLER="$OUT/windows/x86_64/Buddy_${VERSION}_x86_64.zip"
+  sign "$WINDOWS_UPDATE"
+  sign "$WINDOWS_INSTALLER"
+  cargo run --locked -p buddy-update --example verify-artifact -- "$WINDOWS_UPDATE" "$WINDOWS_UPDATE.sig" \
+    || fail "Windows EXE 更新签名验证失败"
+  cargo run --locked -p buddy-update --example verify-artifact -- "$WINDOWS_INSTALLER" "$WINDOWS_INSTALLER.sig" \
+    || fail "Windows ZIP 更新签名验证失败"
+fi
 REMOTE_DIR="$PREFIX/releases/$VERSION"
+MANIFEST_PLATFORMS="darwin-aarch64"
+if [[ "$HAS_WINDOWS" == true ]]; then MANIFEST_PLATFORMS="darwin-aarch64,windows-x86_64"; fi
 node scripts/release/manifest.mjs --version "$VERSION" --notes-file "$OUT/notes.txt" \
   --base-url "$PUBLIC_BASE/$REMOTE_DIR" --source-url "https://github.com/$GITHUB_REPO/tree/v$VERSION" \
-  --dir "$OUT" --output "$OUT/manifest.json"
+  --dir "$OUT" --output "$OUT/manifest.json" --platforms "$MANIFEST_PLATFORMS"
 
-# ── 6. 上传版本目录 ───────────────────────────────────────────
-step 6/10 "上传到 OSS 并公网回读校验"
+# ── 7. 上传版本目录 ───────────────────────────────────────────
+step 7/11 "上传到 OSS 并公网回读校验"
 for f in "$UPDATE" "$UPDATE.sig" "$INSTALLER" "$INSTALLER.sig"; do
   upload "$f" "$REMOTE_DIR/macos/aarch64/$(basename "$f")" "$ARTIFACT_CACHE"
 done
+if [[ "$HAS_WINDOWS" == true ]]; then
+  for f in "$OUT/windows/x86_64/"*; do
+    upload "$f" "$REMOTE_DIR/windows/x86_64/$(basename "$f")" "$ARTIFACT_CACHE"
+    verify_public "$PUBLIC_BASE/$REMOTE_DIR/windows/x86_64/$(basename "$f")" "$f"
+  done
+fi
 upload "$OUT/manifest.json" "$REMOTE_DIR/manifest.json" "no-cache"
 for f in "$UPDATE" "$INSTALLER"; do
   verify_public "$PUBLIC_BASE/$REMOTE_DIR/macos/aarch64/$(basename "$f")" "$f"
@@ -205,27 +303,36 @@ if [[ "$SKIP_PUBLISH" == true ]]; then
   exit 0
 fi
 
-# ── 7. 确认并发布 ─────────────────────────────────────────────
-step 7/10 "发布确认"
+# ── 8. 确认并发布 ─────────────────────────────────────────────
+step 8/11 "发布确认"
 if [[ "$YES" != true ]]; then
   [[ -t 0 ]] || fail "非交互模式发布需要 --yes"
   read -r -p "即将正式发布 $VERSION，用户将能看到此更新。确认？(y/N) " answer
   [[ "$answer" == "y" || "$answer" == "Y" ]] || fail "已取消；版本目录已上传但未发布"
 fi
 
-step 8/10 "更新固定地址 channels/stable.json"
+step 9/11 "打标签并推送到 GitHub，确保源码先公开"
+git tag -a "v$VERSION" -m "Buddy v$VERSION" "$COMMIT"
+if [[ "$SOURCE_PUSHED" == true ]]; then
+  git push -q origin "v$VERSION" \
+    || fail "标签推送失败，stable.json 尚未切换。请先修复源码推送，再发布已暂存的清单"
+else
+  git push -q origin main "v$VERSION" \
+    || fail "推送失败，stable.json 尚未切换。请先修复源码推送，再发布已暂存的清单"
+fi
+
+step 10/11 "更新固定地址 channels/stable.json"
 upload "$OUT/manifest.json" "$CHANNEL_KEY" "no-cache"
 verify_public "$CHANNEL_URL" "$OUT/manifest.json"
 
-step 9/10 "打标签并推送到 GitHub"
-git tag -a "v$VERSION" -m "Buddy v$VERSION" "$COMMIT"
-# 此时应用内更新已上线；推送失败时按提示手动补做，不影响用户
-git push -q origin main "v$VERSION" \
-  || fail "推送失败（OSS 已发布）。手动执行：git push origin main v$VERSION，再重跑 gh release create"
-
-step 10/10 "创建 GitHub Release"
+step 11/11 "创建 GitHub Release"
 { cat "$OUT/notes.txt"; printf '\n安装：下载 `%s`，打开后把 Buddy 拖进「应用程序」。仅支持 Apple Silicon，macOS 12 及以上；首次打开若被系统拦截，请右键「打开」。\n' "$(basename "$INSTALLER")"; } >"$OUT/github-notes.md"
-gh release create "v$VERSION" "$INSTALLER" --repo "$GITHUB_REPO" --verify-tag --latest \
+if [[ "$HAS_WINDOWS" == true ]]; then
+  printf '\nWindows 10/11 x64：下载 `Buddy_%s_x86_64.zip`，解压整个 Buddy 目录到用户可写目录，运行 buddy.exe。默认快捷键 Ctrl+J。\n' "$VERSION" >>"$OUT/github-notes.md"
+fi
+RELEASE_ASSETS=("$INSTALLER")
+if [[ "$HAS_WINDOWS" == true ]]; then RELEASE_ASSETS+=("$OUT/windows/x86_64/Buddy_${VERSION}_x86_64.zip"); fi
+gh release create "v$VERSION" "${RELEASE_ASSETS[@]}" --repo "$GITHUB_REPO" --verify-tag --latest \
   --title "Buddy $VERSION" --notes-file "$OUT/github-notes.md" >/dev/null \
   || fail "创建 GitHub Release 失败（OSS 已发布、标签已推送）。手动执行：gh release create v$VERSION $INSTALLER --title \"Buddy $VERSION\" --notes-file $OUT/github-notes.md"
 

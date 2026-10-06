@@ -13,3 +13,5 @@ Buddy — 许可证说明
 且不能上架 Mac App Store。
 
 许可证全文：`LICENSE-GPL-3.0-or-later`、`LICENSE-APACHE-2.0`；第三方声明：`THIRD_PARTY_NOTICES.md`。
+
+Windows 便携发布包另含 Microsoft Visual C++ Redistributable 的 `VCRUNTIME140.dll`，该文件保持未修改并受 Microsoft 的单独许可条款约束；见 `THIRD_PARTY_NOTICES.md`。

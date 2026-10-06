@@ -1,11 +1,11 @@
 use super::{
     bounded_usize, include_hidden, is_hidden, is_ignored_directory, relative_display,
-    required_path, required_string,
+    required_path, required_string, tool_path_display,
 };
 use crate::tools::{Tool, ToolContext, ToolError, ToolOutput, ToolSafety};
 use async_trait::async_trait;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::fs;
 
 const DEFAULT_MAX_RESULTS: usize = 50;
@@ -275,7 +275,7 @@ impl Tool for SearchFilesTool {
         }
 
         let output = FileSearchOutput {
-            root: root.to_string_lossy().to_string(),
+            root: tool_path_display(&root),
             query,
             mode: mode.as_str(),
             matches,

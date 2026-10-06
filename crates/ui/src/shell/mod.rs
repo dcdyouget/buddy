@@ -19,7 +19,7 @@ pub mod selfcheck;
 pub mod services;
 pub mod sizing;
 pub mod tray;
-mod visibility;
+pub mod visibility;
 #[cfg(target_os = "macos")]
 mod window_motion;
 pub mod workspaces;
@@ -31,8 +31,8 @@ use crate::theme_system::BuddyTheme;
 use buddy_engine::chat::ChatEngine;
 use config::ShellConfig;
 use gpui::{
-    App, AppContext, AsyncApp, Context, Entity, Hsla, Render, Subscription, Task,
-    Window, WindowHandle, div, linear_color_stop, linear_gradient, prelude::*, px, relative,
+    App, AppContext, AsyncApp, Context, Entity, Hsla, Render, Subscription, Task, Window,
+    WindowHandle, div, linear_color_stop, linear_gradient, prelude::*, px, relative,
 };
 use std::sync::Arc;
 
@@ -45,6 +45,9 @@ pub struct AppShell {
     _page_subscription: Subscription,
     positions: positioning::PositionMemory,
     pending_position_save: Option<Task<()>>,
+    #[cfg(target_os = "windows")]
+    pending_deactivation_hide: Option<Task<()>>,
+    #[cfg(target_os = "macos")]
     pending_resize: Option<Task<()>>,
     _position_subscriptions: [Subscription; 2],
     _focus_order_subscription: Subscription,
@@ -93,6 +96,9 @@ impl AppShell {
             _page_subscription: subscription,
             positions: positioning::PositionMemory::default(),
             pending_position_save: None,
+            #[cfg(target_os = "windows")]
+            pending_deactivation_hide: None,
+            #[cfg(target_os = "macos")]
             pending_resize: None,
             _position_subscriptions: position_subscriptions,
             _focus_order_subscription: focus_order::observe(window, cx),

@@ -1,0 +1,52 @@
+name: Windows
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 要构建并打包的 Git ref（分支、标签或提交 SHA）
+        required: true
+        default: main
+        type: string
+
+jobs:
+  windows-x64:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: 检查 Windows 编译与测试
+        shell: powershell
+        run: |
+          ./scripts/windows-dev.ps1 -Action check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/windows-dev.ps1 -Action test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node --test scripts/release/manifest.test.mjs
+          exit $LASTEXITCODE
+      - name: 构建 Windows 便携包
+        if: github.event_name == 'workflow_dispatch'
+        shell: powershell
+        run: |
+          ./scripts/windows-dev.ps1 -Action build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $version = ($metadata.packages | Where-Object name -eq 'buddy-app').version
+          ./scripts/release/bundle-windows.ps1 -Version $version
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          name: Buddy-windows-x86_64
+          path: |
+            .release/*/windows/x86_64/Buddy_*.exe
+            .release/*/windows/x86_64/Buddy_*.zip
+          if-no-files-found: error

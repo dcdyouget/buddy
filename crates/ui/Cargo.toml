@@ -49,6 +49,10 @@ objc.workspace = true
 raw-window-handle.workspace = true
 block.workspace = true
 
+[target.'cfg(target_os = "windows")'.dependencies]
+raw-window-handle.workspace = true
+windows-sys.workspace = true
+
 [dev-dependencies]
 
 [lints.rust]

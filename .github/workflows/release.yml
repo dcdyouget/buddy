@@ -1,0 +1,172 @@
+name: Release build
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "要构建的已推送版本 tag（例如 v0.2.0）"
+        required: true
+        type: string
+
+# This workflow only creates downloadable build artifacts. Publishing the
+# manifest/channel and GitHub Release stays in the trusted release workflow.
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Validate release source
+    runs-on: ubuntu-24.04
+    outputs:
+      commit: ${{ steps.release.outputs.commit }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+          fetch-depth: 0
+
+      - id: release
+        name: Verify tag, source commit, and workspace version
+        shell: bash
+        env:
+          RELEASE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+        run: |
+          set -euo pipefail
+          tag="${RELEASE_REF#refs/tags/}"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Release ref must be a version tag v<major>.<minor>.<patch>: $RELEASE_REF" >&2
+            exit 1
+          }
+          version="$(awk '/^\[workspace\.package\]/{inside=1; next} /^\[/{inside=0} inside && /^version[[:space:]]*=/{gsub(/.*=[[:space:]]*"|".*/, ""); print; exit}' Cargo.toml)"
+          [[ -n "$version" && "$tag" == "v$version" ]] || {
+            echo "Tag $tag does not match workspace version $version" >&2
+            exit 1
+          }
+          [[ "$(git rev-parse "$tag^{}")" == "$(git rev-parse HEAD)" ]] || {
+            echo "Tag $tag does not resolve to the checked out commit" >&2
+            exit 1
+          }
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: ${{ matrix.platform }}
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: darwin-aarch64
+            runner: macos-15-arm64
+            artifact: Buddy-darwin-aarch64
+            artifact_path: macos/aarch64
+          - platform: windows-x86_64
+            runner: windows-2022
+            artifact: Buddy-windows-x86_64
+            artifact_path: windows/x86_64
+    runs-on: ${{ matrix.runner }}
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      COMMIT: ${{ needs.prepare.outputs.commit }}
+      CARGO_BUILD_JOBS: 2
+      SIGNING_ENABLED: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' && 'true' || 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          fetch-depth: 1
+
+      - uses: dtolnay/rust-toolchain@1.95.0
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.platform }}
+
+      - name: Test and package macOS Apple Silicon
+        if: matrix.platform == 'darwin-aarch64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$COMMIT" ]]
+          [[ "$(uname -m)" == "arm64" || "$(uname -m)" == "aarch64" ]] || {
+            echo "macOS release runner is not Apple Silicon: $(uname -m)" >&2
+            exit 1
+          }
+          cargo test --workspace --exclude buddy-markdown --locked
+          MACOSX_DEPLOYMENT_TARGET=12.0 cargo build --release --locked -p buddy-app --bin buddy
+          out=".release/$VERSION/macos/aarch64"
+          scripts/release/bundle-macos.sh "$VERSION" target/release/buddy "$out"
+
+      - name: Test and package Windows x64
+        if: matrix.platform == 'windows-x86_64'
+        shell: powershell
+        run: |
+          if ((git rev-parse HEAD).Trim() -ne $env:COMMIT) { throw "checked out commit does not match validated release source" }
+          ./scripts/windows-dev.ps1 -Action test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/windows-dev.ps1 -Action build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/release/bundle-windows.ps1 -Version $env:VERSION -OutDir ".release/$env:VERSION/windows/x86_64"
+
+      # Tag and manual-dispatch runs are trusted repository workflows. No pull
+      # request event is accepted, and a missing secret deliberately leaves the
+      # artifacts unsigned for the local release process to sign.
+      - name: Install signer
+        if: env.SIGNING_ENABLED == 'true'
+        run: npm ci
+
+      - name: Sign macOS artifacts when an update key is configured
+        if: matrix.platform == 'darwin-aarch64' && env.SIGNING_ENABLED == 'true'
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          key="$RUNNER_TEMP/buddy-updater.key"
+          trap 'rm -f "$key"' EXIT
+          printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" > "$key"
+          for asset in \
+            ".release/$VERSION/macos/aarch64/Buddy_${VERSION}_aarch64.app.tar.xz" \
+            ".release/$VERSION/macos/aarch64/Buddy_${VERSION}_aarch64.dmg"; do
+            node_modules/.bin/tauri signer sign -f "$key" "$asset" </dev/null
+            cargo run --locked -p buddy-update --example verify-artifact -- "$asset" "$asset.sig"
+          done
+
+      - name: Sign Windows artifacts when an update key is configured
+        if: matrix.platform == 'windows-x86_64' && env.SIGNING_ENABLED == 'true'
+        shell: powershell
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          . ./scripts/windows-env.ps1
+          $ErrorActionPreference = 'Continue'
+          $key = Join-Path $env:RUNNER_TEMP "buddy-updater.key"
+          try {
+            [IO.File]::WriteAllText($key, $env:TAURI_SIGNING_PRIVATE_KEY, [Text.UTF8Encoding]::new($false))
+            $assets = @(
+              ".release/$env:VERSION/windows/x86_64/Buddy_$($env:VERSION)_x86_64.exe",
+              ".release/$env:VERSION/windows/x86_64/Buddy_$($env:VERSION)_x86_64.zip"
+            )
+            foreach ($asset in $assets) {
+              & .\node_modules\.bin\tauri.cmd signer sign -f $key $asset
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              cargo run --locked -p buddy-update --example verify-artifact -- $asset "$asset.sig"
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
+          } finally {
+            if (Test-Path -LiteralPath $key) { Remove-Item -LiteralPath $key -Force }
+          }
+
+      - name: Upload platform artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}-v${{ needs.prepare.outputs.version }}
+          path: .release/${{ needs.prepare.outputs.version }}/${{ matrix.artifact_path }}
+          if-no-files-found: error

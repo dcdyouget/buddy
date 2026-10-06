@@ -102,6 +102,17 @@ fn default_data_dir_matches_v1() {
     println!("default_data_dir = {}", dir.display());
 }
 
+#[cfg(target_os = "windows")]
+#[test]
+fn default_data_dir_uses_roaming_app_data() {
+    let dir = storage::default_data_dir().unwrap();
+    let app_data = std::env::var_os("APPDATA").expect("Windows must provide APPDATA");
+    assert_eq!(
+        dir,
+        std::path::PathBuf::from(app_data).join("com.buddy.chat")
+    );
+}
+
 /// 长会话样本（`scripts/v1-baseline/gen_long_session.py` 生成）可被 v1 格式的 storage 完整读回。
 /// 手动运行：先生成样本，再 `cargo test -p buddy-engine --test storage_roundtrip -- --ignored --nocapture`
 #[test]

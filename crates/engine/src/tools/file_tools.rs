@@ -71,12 +71,26 @@ fn is_ignored_directory(path: &Path) -> bool {
 }
 
 fn relative_display(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .ok()
-        .filter(|relative| !relative.as_os_str().is_empty())
-        .unwrap_or(path)
-        .to_string_lossy()
-        .to_string()
+    tool_path_display(
+        path.strip_prefix(root)
+            .ok()
+            .filter(|relative| !relative.as_os_str().is_empty())
+            .unwrap_or(path),
+    )
+}
+
+/// Produces a path string for tool JSON. Windows accepts `/` as a separator, and
+/// emitting it here keeps paths returned to the model identical across platforms.
+fn tool_path_display(path: &Path) -> String {
+    let display = path.to_string_lossy();
+    #[cfg(windows)]
+    {
+        display.replace('\\', "/")
+    }
+    #[cfg(not(windows))]
+    {
+        display.into_owned()
+    }
 }
 
 #[cfg(test)]

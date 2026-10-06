@@ -81,8 +81,11 @@ impl NativeWindowSnapshot {
 const NS_TITLED: u64 = 1 << 0;
 const NS_CLOSABLE: u64 = 1 << 1;
 const NS_MINIATURIZABLE: u64 = 1 << 2;
+#[cfg(target_os = "macos")]
 const NS_RESIZABLE: u64 = 1 << 3;
+#[cfg(target_os = "macos")]
 const NS_NONACTIVATING_PANEL: u64 = 1 << 7;
+#[cfg(target_os = "macos")]
 const NS_NORMAL_WINDOW_LEVEL: i64 = 0;
 
 /// 仅在主线程短暂持有原生对象；在 GPUI 的 App 借用释放后连续执行补丁和显示。
@@ -289,4 +292,3 @@ unsafe fn probe_native(
         })
     }
 }
-

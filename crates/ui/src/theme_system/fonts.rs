@@ -17,6 +17,11 @@ use std::collections::HashSet;
 /// GPUI 的系统 UI 字体占位名（macOS 映射为 `.AppleSystemUIFont`）
 const SYSTEM_UI: &str = ".SystemUIFont";
 
+#[cfg(target_os = "windows")]
+const SYSTEM_MONO: &str = "Consolas";
+#[cfg(not(target_os = "windows"))]
+const SYSTEM_MONO: &str = "Menlo";
+
 /// CSS 族名 → GPUI 族名；`None` 表示 GPUI 无对应（通用族），跳过
 fn map_family(css: &str) -> Option<&str> {
     match css {
@@ -43,7 +48,9 @@ pub fn resolve_stack(stack: &[&str], installed: &HashSet<String>, default_family
     };
     let mut f = font(family.to_string());
     if !rest.is_empty() {
-        f.fallbacks = Some(FontFallbacks::from_fonts(rest.iter().map(|s| s.to_string()).collect()));
+        f.fallbacks = Some(FontFallbacks::from_fonts(
+            rest.iter().map(|s| s.to_string()).collect(),
+        ));
     }
     f
 }
@@ -81,7 +88,7 @@ pub fn install(cx: &mut App) {
     let names = installed(cx);
     cx.set_global(ResolvedFonts {
         ui: resolve_stack(fonts::FONT_SANS, &names, SYSTEM_UI),
-        mono: resolve_stack(fonts::FONT_MONO, &names, "Menlo"),
+        mono: resolve_stack(fonts::FONT_MONO, &names, SYSTEM_MONO),
     });
 }
 
@@ -97,7 +104,7 @@ pub fn ui_font(cx: &App) -> Font {
 pub fn mono_font(cx: &App) -> Font {
     match cx.try_global::<ResolvedFonts>() {
         Some(f) => f.mono.clone(),
-        None => resolve_stack(fonts::FONT_MONO, &installed(cx), "Menlo"),
+        None => resolve_stack(fonts::FONT_MONO, &installed(cx), SYSTEM_MONO),
     }
 }
 
@@ -121,16 +128,26 @@ mod tests {
     }
 
     fn fallbacks(f: &Font) -> Vec<String> {
-        f.fallbacks.as_ref().map(|fb| fb.fallback_list().to_vec()).unwrap_or_default()
+        f.fallbacks
+            .as_ref()
+            .map(|fb| fb.fallback_list().to_vec())
+            .unwrap_or_default()
     }
 
     #[test]
     fn picks_first_installed_like_webkit() {
         // 本机情形：装了 Fira Code 与 PingFang SC
-        let f = resolve_stack(fonts::FONT_SANS, &set(&["Fira Code", "PingFang SC"]), SYSTEM_UI);
+        let f = resolve_stack(
+            fonts::FONT_SANS,
+            &set(&["Fira Code", "PingFang SC"]),
+            SYSTEM_UI,
+        );
         assert_eq!(f.family.as_ref(), "Fira Code");
         // 其后：-apple-system → .SystemUIFont，再到 PingFang SC；未安装者与通用族被略去
-        assert_eq!(fallbacks(&f), vec![SYSTEM_UI.to_string(), "PingFang SC".to_string()]);
+        assert_eq!(
+            fallbacks(&f),
+            vec![SYSTEM_UI.to_string(), "PingFang SC".to_string()]
+        );
     }
 
     #[test]
@@ -143,8 +160,8 @@ mod tests {
 
     #[test]
     fn mono_uses_default_when_nothing_installed() {
-        let f = resolve_stack(fonts::FONT_MONO, &set(&[]), "Menlo");
-        assert_eq!(f.family.as_ref(), "Menlo");
+        let f = resolve_stack(fonts::FONT_MONO, &set(&[]), SYSTEM_MONO);
+        assert_eq!(f.family.as_ref(), SYSTEM_MONO);
         assert!(f.fallbacks.is_none());
     }
 }

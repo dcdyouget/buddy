@@ -82,7 +82,14 @@ impl ShellConfig {
             focus: false,
             // macOS 先补丁再显示；其他平台沿用 GPUI 不激活的创建路径。
             show: cfg!(not(target_os = "macos")),
-            kind: WindowKind::PopUp,
+            // GPUI's Windows PopUp maps to a non-activating native window. The main
+            // composer must accept keyboard input after the global hotkey, while model
+            // menus remain PopUp windows in their own module.
+            kind: if cfg!(target_os = "windows") {
+                WindowKind::Normal
+            } else {
+                WindowKind::PopUp
+            },
             is_resizable: self.resizable,
             window_min_size: Some(self.min_size.to_gpui()),
             window_background: WindowBackgroundAppearance::Transparent,

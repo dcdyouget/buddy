@@ -11,10 +11,13 @@
 //! 选择结果经回调交给路由器，由它保存配置（v1 `setDefaultModel`）。
 
 use crate::icons::{IconName, icon};
+#[cfg(target_os = "windows")]
+use crate::shell::{AppShell, runtime, visibility};
 use crate::theme_system::{BuddyTheme, tokens::metrics as m};
 use buddy_engine::models::{ModelInfo, ProviderConfig};
 use gpui::{
-    AnyWindowHandle, App, Bounds, Context, FocusHandle, Focusable, FontWeight, KeyDownEvent, Pixels, Render, SharedString, Task, Window, WindowBackgroundAppearance, WindowBounds,
+    AnyWindowHandle, App, Bounds, Context, FocusHandle, Focusable, FontWeight, KeyDownEvent,
+    Pixels, Render, SharedString, Task, Window, WindowBackgroundAppearance, WindowBounds,
     WindowHandle, WindowKind, WindowOptions, div, point, prelude::*, px, size,
 };
 use std::rc::Rc;
@@ -48,7 +51,10 @@ pub struct ModelRow {
 pub fn detail_text(provider: Option<&str>, context_window: u32, latency_ms: Option<u32>) -> String {
     let mut text = provider.map(|p| format!("{p} · ")).unwrap_or_default();
     if context_window > 0 {
-        text.push_str(&format!("{}K 上下文", (context_window as f64 / 1000.0).round() as u32));
+        text.push_str(&format!(
+            "{}K 上下文",
+            (context_window as f64 / 1000.0).round() as u32
+        ));
     }
     if context_window > 0 && latency_ms.is_some() {
         text.push_str(" · ");
@@ -63,17 +69,32 @@ pub fn detail_text(provider: Option<&str>, context_window: u32, latency_ms: Opti
 pub fn menu_rows(models: &[ModelInfo], providers: &[ProviderConfig]) -> Vec<ModelRow> {
     models
         .iter()
-        .filter(|model| providers.iter().any(|p| p.id == model.provider_id && p.enabled_model_ids.contains(&model.id)))
+        .filter(|model| {
+            providers
+                .iter()
+                .any(|p| p.id == model.provider_id && p.enabled_model_ids.contains(&model.id))
+        })
         .map(|model| {
-            let provider = providers.iter().find(|p| p.id == model.provider_id).map(|p| p.name.as_str());
-            ModelRow { id: model.id.clone(), name: model.display_name.clone(), detail: detail_text(provider, model.context_window, model.latency_ms) }
+            let provider = providers
+                .iter()
+                .find(|p| p.id == model.provider_id)
+                .map(|p| p.name.as_str());
+            ModelRow {
+                id: model.id.clone(),
+                name: model.display_name.clone(),
+                detail: detail_text(provider, model.context_window, model.latency_ms),
+            }
         })
         .collect()
 }
 
 /// 面板尺寸（不含阴影边距）
 pub fn menu_size(rows: usize) -> (f32, f32) {
-    let inner = if rows == 0 { EMPTY_HEIGHT } else { (rows as f32 * ROW_HEIGHT).min(MENU_MAX_HEIGHT) };
+    let inner = if rows == 0 {
+        EMPTY_HEIGHT
+    } else {
+        (rows as f32 * ROW_HEIGHT).min(MENU_MAX_HEIGHT)
+    };
     (MENU_WIDTH, inner + 2.0)
 }
 
@@ -92,6 +113,8 @@ pub struct ModelMenu {
     /// 已经历过一次「激活」；之后失去激活才算点击了外部
     seen_active: bool,
     closing: Option<Task<()>>,
+    #[cfg(target_os = "windows")]
+    deactivation_check: Option<Task<()>>,
     _subscription: gpui::Subscription,
 }
 
@@ -102,18 +125,61 @@ impl Focusable for ModelMenu {
 }
 
 impl ModelMenu {
-    fn new(rows: Vec<ModelRow>, selected: String, on_select: OnSelect, parent: AnyWindowHandle, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(
+        rows: Vec<ModelRow>,
+        selected: String,
+        on_select: OnSelect,
+        parent: AnyWindowHandle,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         // 点击外部：窗口失去激活（首次「激活」之前的状态变化忽略，避免刚打开就被关掉）
         let subscription = cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
                 this.seen_active = true;
-            } else if this.seen_active {
+                #[cfg(target_os = "windows")]
+                {
+                    this.deactivation_check = None;
+                }
+            } else if this.seen_active && this.closing.is_none() {
+                #[cfg(target_os = "windows")]
+                {
+                    let parent = this.parent;
+                    this.deactivation_check = Some(cx.spawn_in(window, async move |this, cx| {
+                        cx.background_executor()
+                            .timer(Duration::from_millis(20))
+                            .await;
+                        let _ = this.update_in(cx, |this, window, cx| {
+                            let buddy_window_is_foreground =
+                                visibility::foreground_window_belongs_to_current_process();
+                            this.close_without_parent_focus(window);
+                            if !buddy_window_is_foreground {
+                                if let Some(parent) = parent.downcast::<AppShell>() {
+                                    runtime::request_hide(parent, cx);
+                                }
+                            }
+                        });
+                    }));
+                }
+                #[cfg(not(target_os = "windows"))]
                 this.close(window, cx);
             }
         });
-        Self { rows, selected, pending: None, focus, on_select, parent, seen_active: window.is_window_active(), closing: None, _subscription: subscription }
+        Self {
+            rows,
+            selected,
+            pending: None,
+            focus,
+            on_select,
+            parent,
+            seen_active: window.is_window_active(),
+            closing: None,
+            #[cfg(target_os = "windows")]
+            deactivation_check: None,
+            _subscription: subscription,
+        }
     }
 
     /// 当前行（自检用）
@@ -143,10 +209,14 @@ impl ModelMenu {
     /// 关闭菜单窗口，并把焦点还给父窗口
     pub fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let parent = self.parent;
-        window.remove_window();
+        self.close_without_parent_focus(window);
         cx.defer(move |cx| {
             let _ = parent.update(cx, |_, window, _| window.activate_window());
         });
+    }
+
+    fn close_without_parent_focus(&mut self, window: &mut Window) {
+        window.remove_window();
     }
 }
 
@@ -166,7 +236,13 @@ impl Render for ModelMenu {
             .border_color(c.border_default)
             .bg(c.composer_surface)
             .when(self.rows.is_empty(), |d| {
-                d.flex().items_center().justify_center().px(px(m::SPACE_4)).text_size(px(m::FONT_SIZE_BASE)).text_color(c.text_muted).child("暂无已启用模型，请前往设置添加")
+                d.flex()
+                    .items_center()
+                    .justify_center()
+                    .px(px(m::SPACE_4))
+                    .text_size(px(m::FONT_SIZE_BASE))
+                    .text_color(c.text_muted)
+                    .child("暂无已启用模型，请前往设置添加")
             })
             .children(self.rows.iter().map(|row| {
                 let selected = row.id == highlighted;
@@ -183,15 +259,40 @@ impl Render for ModelMenu {
                     .cursor_pointer()
                     .when(selected, |d| d.bg(c.primary_tint_soft))
                     .when(!selected, |d| d.hover(|s| s.bg(c.bg_sunken)))
-                    .on_click(cx.listener(move |this, _, window, cx| this.select(id.clone(), window, cx)))
+                    .on_click(
+                        cx.listener(move |this, _, window, cx| this.select(id.clone(), window, cx)),
+                    )
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
-                            .child(div().overflow_hidden().whitespace_nowrap().text_ellipsis().text_size(px(m::FONT_SIZE_BASE)).font_weight(FontWeight(500.0)).text_color(c.text_primary).child(SharedString::from(row.name.clone())))
-                            .child(div().overflow_hidden().whitespace_nowrap().text_ellipsis().text_size(px(m::FONT_SIZE_SM)).text_color(c.text_muted).child(SharedString::from(row.detail.clone()))),
+                            .child(
+                                div()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .text_size(px(m::FONT_SIZE_BASE))
+                                    .font_weight(FontWeight(500.0))
+                                    .text_color(c.text_primary)
+                                    .child(SharedString::from(row.name.clone())),
+                            )
+                            .child(
+                                div()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .text_size(px(m::FONT_SIZE_SM))
+                                    .text_color(c.text_muted)
+                                    .child(SharedString::from(row.detail.clone())),
+                            ),
                     )
-                    .when(selected, |d| d.child(div().text_color(c.buddy_primary).child(icon(IconName::Check, px(14.0)))))
+                    .when(selected, |d| {
+                        d.child(
+                            div()
+                                .text_color(c.buddy_primary)
+                                .child(icon(IconName::Check, px(14.0))),
+                        )
+                    })
             }));
         div()
             .id("model-menu-root")
@@ -241,7 +342,9 @@ pub fn open_model_menu(
             window_background: WindowBackgroundAppearance::Transparent,
             ..Default::default()
         },
-        |window, cx| cx.new(|cx| ModelMenu::new(rows, selected, on_select, parent_handle, window, cx)),
+        |window, cx| {
+            cx.new(|cx| ModelMenu::new(rows, selected, on_select, parent_handle, window, cx))
+        },
     )
     .ok()
 }
@@ -266,16 +369,29 @@ mod tests {
 
     #[test]
     fn detail_follows_v1_template() {
-        assert_eq!(detail_text(Some("OpenAI"), 128000, Some(230)), "OpenAI · 128K 上下文 · 230ms");
-        assert_eq!(detail_text(Some("OpenAI"), 128000, None), "OpenAI · 128K 上下文");
+        assert_eq!(
+            detail_text(Some("OpenAI"), 128000, Some(230)),
+            "OpenAI · 128K 上下文 · 230ms"
+        );
+        assert_eq!(
+            detail_text(Some("OpenAI"), 128000, None),
+            "OpenAI · 128K 上下文"
+        );
         assert_eq!(detail_text(None, 200000, Some(5)), "200K 上下文 · 5ms");
-        assert_eq!(detail_text(Some("X"), 0, Some(9)), "X · 9ms", "上下文为 0 时不显示，也没有多余分隔");
+        assert_eq!(
+            detail_text(Some("X"), 0, Some(9)),
+            "X · 9ms",
+            "上下文为 0 时不显示，也没有多余分隔"
+        );
         assert_eq!(detail_text(None, 0, None), "");
     }
 
     #[test]
     fn rows_list_only_models_the_provider_enabled() {
-        let providers = vec![provider("p1", "甲", &["p1::a", "p1::b"]), provider("p2", "乙", &["p2::c"])];
+        let providers = vec![
+            provider("p1", "甲", &["p1::a", "p1::b"]),
+            provider("p2", "乙", &["p2::c"]),
+        ];
         let models = vec![
             model("p1::a", "p1", "A", 8000, None),
             model("p1::x", "p1", "X（未启用）", 8000, None),
@@ -283,7 +399,10 @@ mod tests {
             model("p3::z", "p3", "Z（Provider 已删）", 8000, None),
         ];
         let rows = menu_rows(&models, &providers);
-        assert_eq!(rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["p1::a", "p2::c"]);
+        assert_eq!(
+            rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            ["p1::a", "p2::c"]
+        );
         assert_eq!(rows[1].detail, "乙 · 16K 上下文 · 10ms");
     }
 
@@ -291,6 +410,10 @@ mod tests {
     fn menu_height_is_capped_and_has_room_for_the_empty_hint() {
         assert_eq!(menu_size(0), (272.0, 62.0));
         assert_eq!(menu_size(2), (272.0, 98.0));
-        assert_eq!(menu_size(50), (272.0, 322.0), "最高 320 + 边框，超出部分在框内滚动");
+        assert_eq!(
+            menu_size(50),
+            (272.0, 322.0),
+            "最高 320 + 边框，超出部分在框内滚动"
+        );
     }
 }

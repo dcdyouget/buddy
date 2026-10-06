@@ -11,6 +11,8 @@ mod error;
 mod macos;
 mod manifest;
 mod verify;
+#[cfg(target_os = "windows")]
+mod windows;
 
 pub use download::download;
 pub use error::UpdateError;
@@ -53,7 +55,11 @@ pub fn is_installed_app() -> bool {
     {
         macos::current_app().is_ok()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        windows::current_app().is_ok()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         false
     }
@@ -104,7 +110,11 @@ pub fn install(downloaded: &Downloaded) -> Result<Installed, UpdateError> {
     {
         macos::install(&downloaded.archive, &downloaded.version)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        windows::install(&downloaded.archive, &downloaded.version)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = downloaded;
         Err(UpdateError::UnsupportedPlatform)
@@ -118,7 +128,11 @@ pub fn relaunch_after_exit(installed: &Installed) -> Result<(), UpdateError> {
     {
         macos::relaunch_after_exit(&installed.app)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        windows::relaunch_after_exit(&installed.app)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = installed;
         Err(UpdateError::UnsupportedPlatform)
@@ -129,6 +143,8 @@ pub fn relaunch_after_exit(installed: &Installed) -> Result<(), UpdateError> {
 pub fn cleanup_after_launch() {
     #[cfg(target_os = "macos")]
     macos::cleanup_backups();
+    #[cfg(target_os = "windows")]
+    windows::cleanup_backups();
     if let Ok(dir) = cache_dir()
         && dir.exists()
         && let Err(error) = std::fs::remove_dir_all(&dir)

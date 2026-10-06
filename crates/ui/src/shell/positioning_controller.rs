@@ -1,13 +1,22 @@
 //! GPUI 事件与每屏位置记忆；原生变更一律在退出 App 借用后执行。
 
-use super::{AppShell, config::LogicalSize, positioning, positioning_native, visibility};
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use super::visibility;
+use super::{AppShell, config::LogicalSize, positioning_native};
+#[cfg(any(target_os = "macos", test))]
+use super::positioning;
+#[cfg(target_os = "macos")]
 use crate::{accessibility, theme_system::easing};
 use gpui::{AsyncApp, Context, Subscription, Window, WindowHandle};
 use std::time::Duration;
 
 const SAVE_DELAY: Duration = Duration::from_millis(160);
+#[cfg(target_os = "macos")]
 const RESIZE_STEPS: u32 = 12;
-const RESIZE_STEP: Duration = Duration::from_millis(crate::theme_system::tokens::motion::DURATION_NORMAL as u64 / (RESIZE_STEPS - 1) as u64);
+#[cfg(target_os = "macos")]
+const RESIZE_STEP: Duration = Duration::from_millis(
+    crate::theme_system::tokens::motion::DURATION_NORMAL as u64 / (RESIZE_STEPS - 1) as u64,
+);
 
 pub(super) fn observe(window: &mut Window, cx: &Context<AppShell>) -> [Subscription; 2] {
     let bounds = cx.observe_window_bounds(window, |shell, window, cx| {
@@ -18,10 +27,39 @@ pub(super) fn observe(window: &mut Window, cx: &Context<AppShell>) -> [Subscript
             let _ = handle.update(cx, |shell, window, _| save_current(shell, window));
         }));
     });
-    let activation = cx.observe_window_activation(window, |shell, window, _| {
-        if !window.is_window_active() {
+    let activation = cx.observe_window_activation(window, |shell, window, cx| {
+        if window.is_window_active() {
+            #[cfg(target_os = "windows")]
+            {
+                shell.pending_deactivation_hide = None;
+            }
+        } else {
             shell.pending_position_save = None;
             save_current(shell, window);
+            #[cfg(target_os = "windows")]
+            {
+                // A Buddy popup has its own HWND. Yield before checking foreground state so
+                // switching to that popup does not get mistaken for an external click.
+                let handle = window.window_handle().downcast::<AppShell>().unwrap();
+                let update_handle = handle;
+                let hide_handle = handle;
+                shell.pending_deactivation_hide = Some(cx.spawn(async move |_, cx| {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(30))
+                        .await;
+                    if !visibility::foreground_window_belongs_to_current_process() {
+                        let _ = update_handle.update(cx, |_, window, cx| {
+                            if !window.is_window_active()
+                                && visibility::prepare(window)
+                                    .and_then(|native| native.probe())
+                                    .is_ok_and(|snapshot| snapshot.is_visible)
+                            {
+                                super::runtime::request_hide(hide_handle, cx);
+                            }
+                        });
+                    }
+                }));
+            }
         }
     });
     [bounds, activation]
@@ -109,6 +147,7 @@ pub(super) fn resize(
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn interpolate_rect(
     from: positioning::Rect,
     to: positioning::Rect,
@@ -177,7 +216,23 @@ pub(super) async fn restore(
             .map_err(|error| error.to_string())??;
         native.move_to(origin)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        // Windows native rectangles and monitor work areas use one physical desktop
+        // coordinate system. Only move the HWND; its size is left to WM_DPICHANGED.
+        let (native, origin) = handle
+            .update(cx, |shell, window, _| {
+                let native = positioning_native::prepare(window)?;
+                let snapshot = native.snapshot()?;
+                let screen =
+                    positioning_native::target_screen(focused, Some(&snapshot.screen.key))?;
+                let origin = shell.positions.restore(&screen, snapshot.rect.size);
+                Ok::<_, String>((native, origin))
+            })
+            .map_err(|error| error.to_string())??;
+        native.move_to(origin)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (handle, focused, cx);
         Ok(())
