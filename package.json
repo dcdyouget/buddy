@@ -2,11 +2,6 @@
   "name": "buddy",
   "private": true,
   "type": "module",
-  "scripts": {
-    "release": "bash scripts/release/release.sh",
-    "release:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release/release-windows.ps1",
-    "version:set": "node scripts/set-version.mjs"
-  },
   "devDependencies": {
     "@tauri-apps/cli": "2.11.3"
   },

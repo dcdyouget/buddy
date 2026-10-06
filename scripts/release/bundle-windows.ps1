@@ -1,4 +1,4 @@
-﻿# Windows 便携安装包及原始 EXE 更新包。签名由 release-windows.ps1 完成。
+﻿# Windows 便携安装包及原始 EXE 更新包。签名由 Release 工作流完成。
 param(
     [Parameter(Mandatory)][string]$Version,
     [string]$Binary = "target/release/buddy.exe",
