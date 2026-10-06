@@ -197,6 +197,54 @@ fn anthropic_tool_call_script(
     ]
 }
 
+fn attachment_paths(body: &str) -> Vec<String> {
+    let request: serde_json::Value = serde_json::from_str(body).unwrap();
+    let paths: Vec<String> = request["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|message| {
+            let content = &message["content"];
+            if let Some(text) = content.as_str() {
+                vec![text.to_string()]
+            } else {
+                content
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|part| part["text"].as_str().map(str::to_owned))
+                    .collect()
+            }
+        })
+        .flat_map(|text| {
+            let Some(references) = text.split("<buddy_attachments>\n").nth(1) else {
+                return Vec::new();
+            };
+            let references: serde_json::Value =
+                serde_json::from_str(references.split("\nUse read_file").next().unwrap()).unwrap();
+            references
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|image| image["path"].as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    paths
+}
+
+#[test]
+fn attachment_paths_decode_windows_paths_from_nested_json() {
+    let path = r"\\?\C:\Users\Buddy\attachments\image.png";
+    let references = json!([{"path":path}]);
+    let content =
+        format!("<buddy_attachments>\n{references}\nUse read_file(path)\n</buddy_attachments>");
+    for content in [json!(content), json!([{"type":"text","text":content}])] {
+        let body = json!({"messages":[{"content":content}]}).to_string();
+        assert_eq!(attachment_paths(&body), vec![path]);
+    }
+}
+
 #[tokio::test]
 async fn new_image_is_sent_once_and_history_images_are_json_references() {
     let tmp = TempDir::new().unwrap();
@@ -281,38 +329,7 @@ async fn new_image_is_sent_once_and_history_images_are_json_references() {
             "请求缺少历史附件引用 {marker}: {body}"
         );
     }
-    let request: serde_json::Value = serde_json::from_str(body).unwrap();
-    let paths: Vec<String> = request["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .flat_map(|message| {
-            let content = &message["content"];
-            if let Some(text) = content.as_str() {
-                vec![text.to_string()]
-            } else {
-                content
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|part| part["text"].as_str().map(str::to_owned))
-                    .collect()
-            }
-        })
-        .flat_map(|text| {
-            let Some(references) = text.split("<buddy_attachments>\n").nth(1) else {
-                return Vec::new();
-            };
-            let references: serde_json::Value =
-                serde_json::from_str(references.split("\nUse read_file").next().unwrap()).unwrap();
-            references
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter_map(|image| image["path"].as_str().map(str::to_owned))
-                .collect::<Vec<_>>()
-        })
-        .collect();
+    let paths = attachment_paths(body);
     assert!(paths.contains(&stored.path));
     assert!(
         !run.requests[1]
@@ -385,8 +402,14 @@ async fn read_file_image_is_visible_for_one_follow_up_then_becomes_reference() {
     assert!(run.requests[2].body.contains("call-text"));
     assert!(!run.requests[2].body.contains(&image_marker));
     let managed_attachments = std::fs::canonicalize(tmp.path().join("attachments")).unwrap();
-    let managed_attachments = managed_attachments.to_string_lossy().to_string();
-    for marker in ["read-image", "image/png", managed_attachments.as_str()] {
+    let paths = attachment_paths(&run.requests[2].body);
+    assert!(
+        paths
+            .iter()
+            .any(|path| Path::new(path).starts_with(&managed_attachments)),
+        "请求应保留可回读的附件路径：{paths:?}"
+    );
+    for marker in ["read-image", "image/png"] {
         assert!(
             run.requests[2].body.contains(marker),
             "缺少图片引用 {marker}: {}",
