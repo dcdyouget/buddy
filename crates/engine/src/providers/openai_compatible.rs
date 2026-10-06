@@ -690,14 +690,18 @@ impl LlmProvider for OpenAICompatibleProvider {
                                                     .and_then(|v| v.as_u64())
                                                     .unwrap_or(0)
                                                     as usize;
+                                                // MiniMax 等在后续增量里带 `"id": ""` / `"name": ""`：
+                                                // 空串视为缺省，否则会把已收到的 id 与工具名覆盖成空。
                                                 let id = tc
                                                     .get("id")
                                                     .and_then(|v| v.as_str())
+                                                    .filter(|v| !v.is_empty())
                                                     .map(String::from);
                                                 let name = tc
                                                     .get("function")
                                                     .and_then(|f| f.get("name"))
                                                     .and_then(|v| v.as_str())
+                                                    .filter(|v| !v.is_empty())
                                                     .map(String::from);
                                                 let args_delta = tc
                                                     .get("function")

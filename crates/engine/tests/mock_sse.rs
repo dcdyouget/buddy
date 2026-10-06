@@ -60,3 +60,26 @@ async fn anthropic_streams_to_turn_end() {
     assert_eq!(req.request_line, "POST /v1/messages HTTP/1.1");
     assert!(req.headers.to_ascii_lowercase().contains("x-api-key: test-key"));
 }
+
+/// MiniMax 的工具调用增量：首片带 id 与工具名，后续分片带空串 `"id": ""` / `"name": ""`。
+/// 空串不能覆盖已收到的 id 与工具名，否则工具执行器找不到工具。
+#[tokio::test]
+async fn openai_compatible_ignores_empty_id_and_name_in_later_tool_deltas() {
+    let delta = |tool: serde_json::Value| {
+        let data = serde_json::json!({"choices":[{"index":0,"delta":{"tool_calls":[tool]}}]});
+        (Duration::ZERO, format!("data: {data}\n\n"))
+    };
+    let script = vec![
+        delta(serde_json::json!({"index":0,"id":"call_1","type":"function","function":{"name":"generate_image","arguments":""}})),
+        delta(serde_json::json!({"index":0,"id":"","type":"function","function":{"name":"","arguments":"{\"prompt\":\"lake\","}})),
+        delta(serde_json::json!({"index":0,"id":"","type":"function","function":{"name":"","arguments":"\"aspect_ratio\":\"16:9\"}"}})),
+        (Duration::ZERO, "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n".into()),
+        (Duration::ZERO, "data: [DONE]\n\n".into()),
+    ];
+    let (_, outcome, _) = run("openai_compatible", script).await;
+    assert_eq!(outcome.tool_calls.len(), 1, "{:?}", outcome.tool_calls);
+    let call = &outcome.tool_calls[0];
+    assert_eq!(call.id, "call_1");
+    assert_eq!(call.name, "generate_image");
+    assert_eq!(call.arguments, "{\"prompt\":\"lake\",\"aspect_ratio\":\"16:9\"}");
+}
