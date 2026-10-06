@@ -108,7 +108,8 @@ async function fetchWithTimeout(url, init, { attempts = 1 } = {}) {
       }
     }
   }
-  const reason = lastError?.name === "TimeoutError" ? `timed out after ${FETCH_TIMEOUT_MS / 1000}s` : lastError?.message;
+  const cause = /^[A-Z0-9_]+$/.test(lastError?.cause?.code ?? "") ? ` (${lastError.cause.code})` : "";
+  const reason = lastError?.name === "TimeoutError" ? `timed out after ${FETCH_TIMEOUT_MS / 1000}s` : `${lastError?.message ?? "unknown error"}${cause}`;
   throw new Error(`Network request failed: ${reason ?? "unknown error"}`);
 }
 
@@ -141,7 +142,7 @@ function createOssClient() {
   return { request };
 }
 
-async function fetchPublic(key, { attempts = 1 } = {}) {
+async function fetchPublic(key, { attempts = 3 } = {}) {
   const response = await fetchWithTimeout(publicUrl(key), { headers: { "Cache-Control": "no-cache" }, cache: "no-store" }, { attempts });
   if (response.status === 404) return null;
   if (!response.ok) throw new Error(`Public OSS read failed for ${key}: HTTP ${response.status}`);

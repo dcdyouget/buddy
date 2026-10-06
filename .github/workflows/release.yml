@@ -225,6 +225,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-verifier-linux
+          cache-on-failure: true
       - uses: actions/download-artifact@v4
         with:
           name: Buddy-darwin-aarch64-v${{ needs.prepare.outputs.version }}

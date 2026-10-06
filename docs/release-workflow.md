@@ -77,6 +77,8 @@ npm run release -- 0.2.0 --notes-file notes.txt --yes
 
 失败后优先使用 **Re-run failed jobs**，复用本次已签名制品继续发布。已存在的版本标签不会移动，已上传的包不会被不同内容覆盖。修复应用代码后应使用更高版本号。工作流会向 `main` 提交版本变更；下一次在 Mac 开发前执行 `git pull --ff-only` 同步该提交。
 
+如果需要修复发布脚本后继续上传同一版本，可执行 **Resume release**，填写原版本号、原 `Release version` 的运行 ID 和更新说明。该流程要求原两平台构建均成功、运行源码与公开版本标签匹配；使用当前发布脚本恢复原制品的上传，不重建或移动源码标签。
+
 仓库 **Settings → Secrets and variables → Actions** 需要四个 Secrets：
 
 | 名称 | 内容 |
