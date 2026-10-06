@@ -85,8 +85,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.platform }}
+          cache-on-failure: true
 
       - name: Test and package macOS Apple Silicon
+        id: package_macos
         if: matrix.platform == 'darwin-aarch64'
         shell: bash
         run: |
@@ -102,6 +104,7 @@ jobs:
           scripts/release/bundle-macos.sh "$VERSION" target/release/buddy "$out"
 
       - name: Test and package Windows x64
+        id: package_windows
         if: matrix.platform == 'windows-x86_64'
         shell: powershell
         run: |
@@ -131,6 +134,7 @@ jobs:
           key="$RUNNER_TEMP/buddy-updater.key"
           trap 'rm -f "$key"' EXIT
           printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" > "$key"
+          unset TAURI_SIGNING_PRIVATE_KEY
           for asset in \
             ".release/$VERSION/macos/aarch64/Buddy_${VERSION}_aarch64.app.tar.xz" \
             ".release/$VERSION/macos/aarch64/Buddy_${VERSION}_aarch64.dmg"; do
@@ -150,6 +154,7 @@ jobs:
           $key = Join-Path $env:RUNNER_TEMP "buddy-updater.key"
           try {
             [IO.File]::WriteAllText($key, $env:TAURI_SIGNING_PRIVATE_KEY, [Text.UTF8Encoding]::new($false))
+            $env:TAURI_SIGNING_PRIVATE_KEY = $null
             $assets = @(
               ".release/$env:VERSION/windows/x86_64/Buddy_$($env:VERSION)_x86_64.exe",
               ".release/$env:VERSION/windows/x86_64/Buddy_$($env:VERSION)_x86_64.zip"
@@ -165,6 +170,7 @@ jobs:
           }
 
       - name: Upload platform artifact
+        if: always() && !cancelled() && (steps.package_macos.outcome == 'success' || steps.package_windows.outcome == 'success')
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}-v${{ needs.prepare.outputs.version }}
