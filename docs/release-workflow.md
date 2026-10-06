@@ -83,6 +83,8 @@ npm run release -- 0.2.0 --notes-file notes.txt --yes
 
 如果需要修复发布脚本后继续上传同一版本，可执行 **Resume release**，填写原版本号、原 `Release version` 的运行 ID 和更新说明。该流程要求原两平台构建均成功、运行源码与公开版本标签匹配；使用当前发布脚本恢复原制品的上传，不重建或移动源码标签。
 
+构建任务使用按平台共享的 Rust 缓存；Linux 发布与 Resume release 共享 verifier 缓存。发布任务将 `RUSTUP_HOME` 隔离到 runner 临时目录，并由 `dtolnay/rust-toolchain@1.95.0` 安装固定工具链，避免使用 runner 预装版本；缓存首次填充时可能仍需一次冷构建。
+
 仓库 **Settings → Secrets and variables → Actions** 需要四个 Secrets：
 
 | 名称 | 内容 |
@@ -142,3 +144,5 @@ GitHub Release 仅附加 macOS DMG 和 Windows setup.exe。更新包、便携 ZI
 - 发布后发现问题：不要把 `stable.json` 改回旧版本（已升级的用户不会降级），修复后发布更高的修订版本。
 - 不删除已发布的版本目录与 GitHub Release。
 - 安装包为 ad-hoc 签名：新用户首次打开会被 Gatekeeper 拦截，需右键「打开」或在系统设置中允许。
+
+Windows 普通 push/PR 只恢复共享缓存；完整发版或手动 Windows 打包成功后才保存同时包含 test/release 依赖的缓存，避免 debug-only 缓存占据不可覆盖的键。首次完整构建负责填充缓存。

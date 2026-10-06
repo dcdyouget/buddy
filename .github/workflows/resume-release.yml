@@ -66,10 +66,14 @@ jobs:
           appendFileSync(process.env.GITHUB_ENV, `RELEASE_COMMIT=${commit}\n`);
           git('checkout', '--detach', commit);
           NODE
+      # rust-cache hashes every installed toolchain; exclude runner image tools.
+      - name: Isolate pinned Rust toolchain
+        shell: bash
+        run: echo "RUSTUP_HOME=$RUNNER_TEMP/buddy-rustup" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@1.95.0
       - uses: Swatinem/rust-cache@v2
         with:
-          key: release-verifier-linux
+          shared-key: buddy-release-verifier-linux-v1
           cache-on-failure: true
       - uses: actions/download-artifact@v4
         with:

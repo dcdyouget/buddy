@@ -15,14 +15,26 @@ on:
 jobs:
   windows-x64:
     runs-on: windows-2022
+    env:
+      # Match the release job's environment hash for shared dependency caches.
+      CARGO_BUILD_JOBS: 2
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.sha }}
+      # rust-cache hashes every installed toolchain; exclude runner image tools.
+      - name: Isolate pinned Rust toolchain
+        shell: bash
+        run: echo "RUSTUP_HOME=$RUNNER_TEMP/buddy-rustup" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: buddy-windows-x86_64-v1
+          # Only full builds save both test and release profiles. A check-only
+          # cache would occupy the immutable key without release dependencies.
+          save-if: ${{ github.event_name == 'workflow_dispatch' }}
       - name: 检查 Windows 编译与测试
         shell: powershell
         run: |
