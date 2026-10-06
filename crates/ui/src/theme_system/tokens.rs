@@ -615,6 +615,8 @@ pub mod motion {
     pub const DISMISS_END_SCALE: f32 = 0.96;
     /// 呼出时长（毫秒）。
     pub const DURATION_DISMISS: u64 = 150;
+    /// 呼出缓动（减速）：响应立即可见，不能用先慢后快的 ease-in。
+    pub const EASE_DISMISS: [f32; 4] = [0.2, 0.0, 0.0, 1.0];
     /// Tonal press feedback shared by compact controls.
     pub const BUTTON_PRESS_OPACITY: f32 = 0.88;
     /// Initial opacity for the first settled portion of streaming text.

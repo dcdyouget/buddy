@@ -108,7 +108,7 @@ pub struct Transcript {
     /// 出现未读新消息的时刻：按钮外圈脉冲一次（v1 `.has-new-message::after`）
     unseen_pulse: Option<Instant>,
     /// 点击「回到底部」后的平滑滚动
-    scroll_animation: Option<Task<()>>,
+    scroll_animation: Option<ScrollAnimation>,
     /// 滚轮平滑滚动（v1 `useSmoothWheelScroll`）
     wheel: WheelScroll,
     /// 用户点过的思考块展开状态（按行 id；未点过则默认折叠，v1 `userToggled`）
@@ -368,7 +368,14 @@ impl Transcript {
                 }
                 // 工具详情：调用参数 / 执行结果（紧凑代码块）
                 RowKind::Tool { call, .. } => {
-                    if let Some(tool) = state.tools.get(call) {
+                    if let Some(tool) = state.tools.get(call)
+                        && web_search::is_web_search(&tool.name)
+                    {
+                        // 网络搜索卡不显示调用参数 / 执行结果，只建卡内可选择复制的文字
+                        for (key, source, plain) in web_search::selectable_sources(tool) {
+                            wanted.push((format!("{}#{key}", row.id), Some(source), row.version, plain));
+                        }
+                    } else if let Some(tool) = state.tools.get(call) {
                         let (args, result) = tool_card::detail_sources(tool);
                         wanted.push((format!("{}#args", row.id), Some(args), row.version, false));
                         if let Some((result, _)) = result {
@@ -684,12 +691,19 @@ impl Transcript {
                         .or_default()
                         .clone();
                     self.nested_scroll.borrow_mut().push(scroll.clone());
+                    let markdown = &self.markdown;
+                    let text = |key: &str| {
+                        markdown
+                            .get(&format!("{}#{key}", row.id))
+                            .map(|(md, _)| md.clone())
+                    };
                     let card = web_search::block(
                         SharedString::from(format!("search-{}", row.id)),
                         &tool,
                         expanded,
                         now,
                         &scroll,
+                        &text,
                         move |_, _, cx| {
                             let _ =
                                 weak.update(cx, |t, cx| t.set_tool_expanded(&id, !expanded, cx));
@@ -853,14 +867,46 @@ const WHEEL_EASING: f32 = 0.28;
 const WHEEL_SETTLE_PX: f32 = 0.5;
 const WHEEL_EXTERNAL_TOLERANCE_PX: f32 = 1.0;
 
-/// 滚轮平滑滚动状态：连续滚轮累加目标位置，每帧走剩余距离的 28%（v1 同）
+/// 「回到底部」每个 60Hz 帧走剩余距离的比例，以及最长时长（约 16 帧）
+const SCROLL_TO_BOTTOM_EASING: f32 = 0.3;
+const SCROLL_TO_BOTTOM_MS: u64 = 256;
+
+/// 滚轮平滑滚动状态：连续滚轮累加目标位置，每个 60Hz 帧走剩余距离的 28%（v1 同）；
+/// 实际按显示器刷新逐帧推进，高刷屏上同样的速度、更密的帧。
 #[derive(Default)]
 struct WheelScroll {
     /// 目标滚动位置（距顶部像素）
     target: Pixels,
     /// 上一帧动画写入后的位置；与当前位置不符 = 外部改动了滚动（历史补位、跟随等）→ 放弃旧目标
     last_animated: Option<Pixels>,
-    task: Option<Task<()>>,
+    /// 上一次推进的时刻；`None` = 没有进行中的动画
+    last_frame: Option<Instant>,
+}
+
+impl WheelScroll {
+    fn stop(&mut self) {
+        self.last_frame = None;
+        self.last_animated = None;
+    }
+}
+
+/// 程序化平滑滚动，由渲染逐帧推进（跟随显示器刷新率，不用定时器）
+enum ScrollAnimation {
+    /// 回到问题：按时间缓动走完 `start → end`，最后按行精确落位
+    ToRow {
+        target: gpui::ListOffset,
+        start: Pixels,
+        end: Pixels,
+        started: Instant,
+    },
+    /// 回到底部：逐帧走剩余距离的一部分，结束后恢复跟随
+    ToBottom { started: Instant, last_frame: Instant },
+}
+
+/// 以 60Hz 一帧为单位的「走剩余距离的比例」换算到实际帧间隔，任意刷新率下速度一致
+fn frame_fraction(per_60hz_frame: f32, elapsed: Duration) -> f32 {
+    let frames = elapsed.as_secs_f32() * 60.0;
+    (1.0 - (1.0 - per_60hz_frame).powf(frames)).clamp(0.0, 1.0)
 }
 
 /// v1 `normalizeWheelDelta`：行 × 20px；返回「向下为正」的像素（DOM 约定）。
@@ -895,16 +941,17 @@ impl Transcript {
         }
     }
 
-    /// 接管列表区域的滚轮：换算成像素、累加目标、逐帧缓动（v1 `useSmoothWheelScroll`）
-    fn on_wheel(&mut self, delta: Pixels, cx: &mut Context<Self>) {
+    /// 接管列表区域的滚轮：换算成像素、累加目标、逐帧缓动（v1 `useSmoothWheelScroll`）。
+    /// `precise` = 触控板 / 妙控鼠标的像素增量：系统已逐帧给出带惯性的位移，原样跟手，
+    /// 再叠一层缓动只会拖慢并与刷新错帧。
+    fn on_wheel(&mut self, delta: Pixels, precise: bool, cx: &mut Context<Self>) {
         // 用户滚轮优先：中止「回到问题 / 回到底部」的程序化滚动
         self.scroll_animation = None;
         let current = self.scroll_offset();
         let max = self.list.max_offset_for_scrollbar().y;
         // 已到边缘且继续同向：停止动画（v1）
         if (delta < px(0.) && current <= px(0.)) || (delta > px(0.) && current >= max) {
-            self.wheel.task = None;
-            self.wheel.last_animated = None;
+            self.wheel.stop();
             return;
         }
         // v1 `onUserScrollIntent`：向上滚立即脱离跟随，不等首个动画帧（否则流式跟随会在这一帧把列表拉回）
@@ -912,20 +959,27 @@ impl Transcript {
             self.list.pause_following_tail();
         }
         self.make_position_explicit(current);
-        let animating = self.wheel.task.is_some();
+        if precise {
+            self.wheel.stop();
+            self.list
+                .scroll_by((current + delta).clamp(px(0.), max) - current);
+            cx.notify();
+            return;
+        }
+        let animating = self.wheel.last_frame.is_some();
         if animating
             && self
                 .wheel
                 .last_animated
                 .is_some_and(|last| (current - last).abs() > px(WHEEL_EXTERNAL_TOLERANCE_PX))
         {
-            self.wheel.task = None;
+            self.wheel.stop();
         }
-        if self.wheel.task.is_none() {
+        if self.wheel.last_frame.is_none() {
             self.wheel.target = current;
         }
         self.wheel.target = (self.wheel.target + delta).clamp(px(0.), max);
-        if self.wheel.task.is_some() {
+        if self.wheel.last_frame.is_some() {
             return;
         }
         // 立即走第一步：否则下一次布局时视口仍在底部，列表会重新进入跟随并贴底，
@@ -933,42 +987,89 @@ impl Transcript {
         let first = (self.wheel.target - current) * WHEEL_EASING;
         self.list.scroll_by(first);
         self.wheel.last_animated = Some(self.scroll_offset());
+        self.wheel.last_frame = Some(Instant::now());
         cx.notify();
-        self.wheel.task = Some(cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(16))
-                    .await;
-                let keep = this.update(cx, |t, cx| {
-                    let current = t.scroll_offset();
-                    if t.wheel.last_animated.is_some_and(|last| {
-                        (current - last).abs() > px(WHEEL_EXTERNAL_TOLERANCE_PX)
-                    }) {
-                        t.wheel.last_animated = None;
-                        return false;
-                    }
-                    let max = t.list.max_offset_for_scrollbar().y;
-                    t.wheel.target = t.wheel.target.clamp(px(0.), max);
-                    let distance = t.wheel.target - current;
-                    let step = if distance.abs() <= px(WHEEL_SETTLE_PX) {
-                        distance
-                    } else {
-                        distance * WHEEL_EASING
-                    };
-                    t.list.scroll_by(step);
-                    t.wheel.last_animated = Some(t.scroll_offset());
-                    cx.notify();
-                    distance.abs() > px(WHEEL_SETTLE_PX)
-                });
-                if !matches!(keep, Ok(true)) {
-                    let _ = this.update(cx, |t, _| {
-                        t.wheel.task = None;
-                        t.wheel.last_animated = None;
-                    });
-                    break;
+    }
+
+    /// 渲染时推进滚轮缓动与程序化滚动；未结束则请求下一显示帧。
+    fn advance_scroll(&mut self, window: &mut Window) {
+        let now = Instant::now();
+        let mut animating = false;
+        if let Some(last_frame) = self.wheel.last_frame {
+            let current = self.scroll_offset();
+            if self
+                .wheel
+                .last_animated
+                .is_some_and(|last| (current - last).abs() > px(WHEEL_EXTERNAL_TOLERANCE_PX))
+            {
+                self.wheel.stop();
+            } else {
+                let max = self.list.max_offset_for_scrollbar().y;
+                self.wheel.target = self.wheel.target.clamp(px(0.), max);
+                let distance = self.wheel.target - current;
+                let settled = distance.abs() <= px(WHEEL_SETTLE_PX);
+                let step = if settled {
+                    distance
+                } else {
+                    distance * frame_fraction(WHEEL_EASING, now - last_frame)
+                };
+                self.list.scroll_by(step);
+                if settled {
+                    self.wheel.stop();
+                } else {
+                    self.wheel.last_animated = Some(self.scroll_offset());
+                    self.wheel.last_frame = Some(now);
+                    animating = true;
                 }
             }
-        }));
+        }
+        match self.scroll_animation.as_mut() {
+            Some(ScrollAnimation::ToRow {
+                target,
+                start,
+                end,
+                started,
+            }) => {
+                let t = (started.elapsed().as_secs_f32() / (SCROLL_TO_ROW_MS as f32 / 1000.0))
+                    .min(1.0);
+                if t >= 1.0 {
+                    // 未测量行会让估算距离有偏差；最后按行精确落位。
+                    self.list.scroll_to(*target);
+                    self.scroll_animation = None;
+                } else {
+                    let ease = crate::theme_system::easing::cubic_bezier(
+                        crate::theme_system::tokens::motion::EASE_STANDARD,
+                    );
+                    let desired = *start + (*end - *start) * ease(t);
+                    self.list
+                        .scroll_by(desired + self.list.scroll_px_offset_for_scrollbar().y);
+                    animating = true;
+                }
+            }
+            Some(ScrollAnimation::ToBottom {
+                started,
+                last_frame,
+            }) => {
+                let remaining = self.list.max_offset_for_scrollbar().y
+                    - self.list.scroll_px_offset_for_scrollbar().y.abs();
+                if remaining <= px(1.0)
+                    || started.elapsed() >= Duration::from_millis(SCROLL_TO_BOTTOM_MS)
+                {
+                    self.list.set_follow_mode(FollowMode::Tail);
+                    self.scroll_animation = None;
+                } else {
+                    self.list.scroll_by(
+                        remaining * frame_fraction(SCROLL_TO_BOTTOM_EASING, now - *last_frame),
+                    );
+                    *last_frame = now;
+                    animating = true;
+                }
+            }
+            None => {}
+        }
+        if animating {
+            window.request_animation_frame();
+        }
     }
 
     /// 在捕获阶段接管列表区域的纵向滚轮（先于列表自身的冒泡处理），交给平滑滚动。
@@ -1012,10 +1113,11 @@ impl Transcript {
                             }
                     });
                     if yield_to_inner {
-                        let _ = weak.update(cx, |t, _| t.wheel.task = None);
+                        let _ = weak.update(cx, |t, _| t.wheel.stop());
                         return;
                     }
-                    let _ = weak.update(cx, |t, cx| t.on_wheel(delta, cx));
+                    let precise = matches!(event.delta, gpui::ScrollDelta::Pixels(_));
+                    let _ = weak.update(cx, |t, cx| t.on_wheel(delta, precise, cx));
                     cx.stop_propagation();
                 });
             },
@@ -1062,34 +1164,13 @@ impl Transcript {
         self.list.scroll_to(target);
         let end = -self.list.scroll_px_offset_for_scrollbar().y;
         self.list.scroll_to(origin);
-        let list = self.list.clone();
-        self.scroll_animation = Some(cx.spawn(async move |this, cx| {
-            let ease = crate::theme_system::easing::cubic_bezier(
-                crate::theme_system::tokens::motion::EASE_STANDARD,
-            );
-            let duration = Duration::from_millis(SCROLL_TO_ROW_MS);
-            let started = Instant::now();
-            loop {
-                let t = (started.elapsed().as_secs_f32() / duration.as_secs_f32()).min(1.0);
-                if t >= 1.0 {
-                    break;
-                }
-                let desired = start + (end - start) * ease(t);
-                list.scroll_by(desired + list.scroll_px_offset_for_scrollbar().y);
-                if this.update(cx, |_, cx| cx.notify()).is_err() {
-                    return;
-                }
-                cx.background_executor()
-                    .timer(Duration::from_millis(8))
-                    .await;
-            }
-            // 未测量行会让估算距离有偏差；最后按行精确落位。
-            let _ = this.update(cx, |this, cx| {
-                this.list.scroll_to(target);
-                this.scroll_animation = None;
-                cx.notify();
-            });
-        }));
+        self.scroll_animation = Some(ScrollAnimation::ToRow {
+            target,
+            start,
+            end,
+            started: Instant::now(),
+        });
+        cx.notify();
     }
 
     /// 设置工具卡片展开（用户点击）：记住用户选择并重测该行
@@ -1128,29 +1209,14 @@ impl Transcript {
             cx.notify();
             return;
         }
-        let list = self.list.clone();
-        self.scroll_animation = Some(cx.spawn(async move |this, cx| {
-            // 每帧走剩余距离的一部分，约 250ms 内到底（缓动由距离递减自然形成）
-            for _ in 0..16 {
-                let remaining = list.max_offset_for_scrollbar().y
-                    - list.scroll_px_offset_for_scrollbar().y.abs();
-                if remaining <= px(1.0) {
-                    break;
-                }
-                list.scroll_by(remaining * 0.3);
-                if this.update(cx, |_, cx| cx.notify()).is_err() {
-                    return;
-                }
-                cx.background_executor()
-                    .timer(Duration::from_millis(16))
-                    .await;
-            }
-            let _ = this.update(cx, |this, cx| {
-                this.list.set_follow_mode(FollowMode::Tail);
-                this.scroll_animation = None;
-                cx.notify();
-            });
-        }));
+        // 每帧走剩余距离的一部分，约 250ms 内到底（缓动由距离递减自然形成）。
+        // 上一帧记在一个 60Hz 帧之前，首帧即走出第一步。
+        let now = Instant::now();
+        self.scroll_animation = Some(ScrollAnimation::ToBottom {
+            started: now,
+            last_frame: now.checked_sub(Duration::from_secs(1) / 60).unwrap_or(now),
+        });
+        cx.notify();
     }
 
     /// v1 `.scroll-to-bottom-button`：32px 圆、`--bg-elevated`、`--border-default`、`--shadow-floating-sm`、ChevronDown 16px
@@ -1216,6 +1282,7 @@ impl Transcript {
 
 impl Render for Transcript {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.advance_scroll(window);
         // 到达底部即把现有消息标为已看（v1）；离开底部后新消息到达 → 外圈脉冲一次
         let visible = self.last_visible_message(cx);
         if self.list.is_following_tail() {
@@ -1238,8 +1305,7 @@ impl Render for Transcript {
             && self.scroll_offset() <= px(LOAD_OLDER_THRESHOLD_PX)
         {
             // v1 `loadOlderHistory` 先取消平滑滚轮（并入后位置会整体变化）
-            self.wheel.task = None;
-            self.wheel.last_animated = None;
+            self.wheel.stop();
             let conversation = self.conversation.clone();
             cx.defer(move |cx| conversation.update(cx, |c, cx| c.load_older(cx)));
         }
@@ -1291,4 +1357,21 @@ fn default_open(tool: &super::state::ToolView, streaming: bool, awaiting: bool) 
     !web_search::is_web_search(&tool.name)
         && !image_gen::is_image_gen(&tool.name)
         && tool_card::default_expanded(tool, streaming, awaiting)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_fraction_is_refresh_rate_independent() {
+        let at_60 = frame_fraction(WHEEL_EASING, Duration::from_secs(1) / 60);
+        assert!((at_60 - WHEEL_EASING).abs() < 1e-4, "一个 60Hz 帧即 v1 的 28%");
+        // 144Hz 下 2.4 帧走完的剩余比例与 60Hz 一帧相同
+        let per_144 = frame_fraction(WHEEL_EASING, Duration::from_secs(1) / 144);
+        let composed = 1.0 - (1.0 - per_144).powf(2.4);
+        assert!((composed - at_60).abs() < 1e-4);
+        assert_eq!(frame_fraction(WHEEL_EASING, Duration::ZERO), 0.0);
+        assert_eq!(frame_fraction(WHEEL_EASING, Duration::from_secs(10)), 1.0);
+    }
 }

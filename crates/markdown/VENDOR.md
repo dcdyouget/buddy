@@ -17,6 +17,7 @@
 | `markdown.rs` / `html/html_rendering.rs` | **新增 `MarkdownStyle::decorations`（`MarkdownDecorations`）**：标题 / 引用 / 列表 / 项目符号 / 表格 / 单元格 / 分隔线的可选回调，以及加粗 / 删除线 / 表头的文本样式覆盖；全部默认 `None` = 上游行为。`push_markdown_heading` / `push_markdown_block_quote` 增加 `cx` 参数（HTML 渲染路径同步传入） | 上游在这些位置直接读 zed 主题色（表格边框、表头底色、加粗颜色）且结构固定，做不出 v1 的标题竖条、圆点 / 序号徽章、引用渐变等 |
 | `markdown.rs` | `MarkdownDecorations::copy_text`：`Copy` 动作改由回调根据「选中的渲染行 + 各自源区间」生成剪贴板文本；新增 `RenderedText::lines_for_range`（与 `text_for_range` 同逻辑，保留源区间） | v1 复制为 WebKit 选区纯文本（段落后空行、表格制表符分隔、去掉加粗守卫），上游只按行 `\n` 连接 |
 | `markdown.rs` | `MarkdownDecorations::veil`（`MarkdownVeil`：按源字节位置给非代码文本逐字混合起始色 / 不透明度，`push_text` 中拆分文本运行）与 `overlay`（`MarkdownOverlay`：在某源位置的光标处布局一个元素，prepaint 中布局、paint 中绘制；`PrepaintState` 改为 `(Hitbox, Option<AnyElement>)`，测试包装元素同步） | 流式渐显（v1 `.streaming-char-settle`）与行内星标（v1 `.streaming-next-star`）；只改颜色、星标不参与布局，不改变排版 |
+| `markdown.rs` | 在链接上按下也开始选区（`on_source_click` 仍只对非链接位置调用）；松开时仅当选区为空（未拖动）才打开链接 | 上游按在链接上不开始选区，整段是链接的文字（如网络搜索结果标题）无法拖选复制；单击打开链接的行为不变 |
 | `theme_settings_shim.rs` | **新增**（Buddy 编写） | 提供与 `theme_settings::ThemeSettings` 同名同 API 的替代；字体 / 字号由 buddy-ui 按 Buddy 令牌传入 |
 | `language_stub.rs` | **新增**（Buddy 编写） | 替代 `language`：经 `buddy-syntax` 高亮（Python / Shell / SQL 用 tree-sitter 语法，其余带标签的代码块用通用词法高亮，纯文本 / 日志类标签不着色）；类别归并为 9 类（`SYNTAX_CATEGORIES`） |
 | `mermaid.rs` | **整体替换为 stub**（原 1836 行 → 100 行） | 原实现依赖 node / wasm；Buddy 无 mermaid 功能 |

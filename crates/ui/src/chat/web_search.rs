@@ -13,8 +13,9 @@
 use super::state::{ToolStatus, ToolView};
 use super::think_block::{loader, sheen_layer};
 use crate::icons::{IconName, icon};
+use crate::markdown::zed_markdown::{Markdown, MarkdownElement, MarkdownStyle};
 use crate::theme_system::{BuddyTheme, fonts, tokens::metrics as m};
-use gpui::{AnyElement, App, ClickEvent, FontWeight, Hsla, ScrollHandle, SharedString, Window, div, prelude::*, px};
+use gpui::{AnyElement, App, ClickEvent, Entity, FontWeight, Hsla, ScrollHandle, SharedString, StyleRefinement, TextStyleRefinement, Window, div, prelude::*, px, relative};
 use std::rc::Rc;
 
 /// 走专用卡片的工具名（v1 `ToolSection` 的分派条件）
@@ -165,11 +166,94 @@ pub enum Fetch {
 /// 打开链接的回调
 pub type OpenFn = Rc<dyn Fn(&str, &mut App)>;
 
+/// 按键后缀取卡内可选择文字的 Markdown 实体（见 [`selectable_sources`]）
+pub type TextFn<'a> = &'a dyn Fn(&str) -> Option<Entity<Markdown>>;
+
+/// 关键词：结果里的优先，其次取调用参数
+fn display_query(payload: &Payload, arguments: &str) -> String {
+    Some(payload.query.as_deref().map(str::trim).unwrap_or_default().to_string()).filter(|q| !q.is_empty()).unwrap_or_else(|| parse_query(arguments))
+}
+
+/// 结果标题：缺标题用链接，再缺用「结果 N」
+fn result_title(item: &ResultItem, index: usize) -> String {
+    let rank = item.rank.unwrap_or(index as u32 + 1);
+    item.title.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(str::to_string).or_else(|| item.url.clone()).unwrap_or_else(|| format!("结果 {rank}"))
+}
+
+/// 卡内可选择复制的文字：`(键后缀, 源文本, 是否纯文本)`。有链接的标题写成 Markdown 链接
+/// （点击仍打开、拖动即选择），其余按纯文本。
+pub fn selectable_sources(tool: &ToolView) -> Vec<(String, String, bool)> {
+    let payload = parse_result(tool.result.as_deref());
+    let mut sources = Vec::new();
+    let query = display_query(&payload, &tool.arguments);
+    if !query.is_empty() {
+        sources.push(("search-query".to_string(), query, true));
+    }
+    for (index, item) in payload.results.iter().enumerate() {
+        let title = result_title(item, index);
+        match item.url.as_deref().filter(|u| !u.is_empty()) {
+            Some(url) => sources.push((format!("search-title-{index}"), format!("[{}](<{}>)", escape_markdown(&title), escape_destination(url)), false)),
+            None => sources.push((format!("search-title-{index}"), title, true)),
+        }
+        if let Some(snippet) = item.snippet.as_deref().filter(|s| !s.is_empty()) {
+            sources.push((format!("search-snippet-{index}"), snippet.to_string(), true));
+        }
+    }
+    sources
+}
+
+/// 转义 CommonMark 的 ASCII 标点，标题原样显示
+fn escape_markdown(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if ch.is_ascii_punctuation() {
+            out.push('\\');
+        }
+        out.push(if ch == '\n' { ' ' } else { ch });
+    }
+    out
+}
+
+/// `<…>` 形式的链接目标里不能出现空白与尖括号
+fn escape_destination(url: &str) -> String {
+    url.replace(' ', "%20").replace('<', "%3C").replace('>', "%3E").replace('\n', "")
+}
+
+/// 卡内可选择文字的样式：字号 / 字重 / 颜色同原静态文字，选区色同消息正文
+fn selectable_style(window: &Window, cx: &App, size: f32, weight: f32, color: Hsla, line_clamp: Option<usize>) -> MarkdownStyle {
+    let c = cx.buddy_theme().colors;
+    let font = fonts::ui_font(cx);
+    let mut base_text_style = window.text_style();
+    base_text_style.refine(&TextStyleRefinement {
+        font_family: Some(font.family),
+        font_features: Some(font.features),
+        font_size: Some(px(size).into()),
+        font_weight: Some(FontWeight(weight)),
+        color: Some(color),
+        line_height: Some(relative(m::LINE_HEIGHT_BASE)),
+        ..Default::default()
+    });
+    // 段落的字号与截断取自外层继承的文本样式，须经根容器下发（同 `markdown::message_style`）
+    let mut container_style = StyleRefinement::default();
+    container_style.text.font_size = Some(px(size).into());
+    container_style.text.line_clamp = line_clamp;
+    MarkdownStyle {
+        base_text_style,
+        container_style,
+        link: TextStyleRefinement { color: Some(color), ..Default::default() },
+        selection_background_color: Hsla::from(c.buddy_primary).opacity(crate::markdown::SELECTION_ALPHA),
+        paragraph_spacing: px(0.),
+        paragraph_line_height: relative(m::LINE_HEIGHT_BASE),
+        ..Default::default()
+    }
+}
+
 fn mix(c: gpui::Rgba, alpha: f32) -> Hsla {
     Hsla::from(c).opacity(alpha)
 }
 
-/// 渲染卡片。`scroll` 为展开内容的卡内滚动句柄。
+/// 渲染卡片。`scroll` 为展开内容的卡内滚动句柄；`text` 提供可选择复制的文字实体，
+/// 尚未建好时退回静态文字。
 #[allow(clippy::too_many_arguments)]
 pub fn block(
     id: SharedString,
@@ -177,6 +261,7 @@ pub fn block(
     expanded: bool,
     now_ms: f64,
     scroll: &ScrollHandle,
+    text: TextFn,
     on_toggle: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     open: OpenFn,
     window: &mut Window,
@@ -189,7 +274,7 @@ pub fn block(
     if active && !reduce {
         window.request_animation_frame();
     }
-    let query = Some(payload.query.as_deref().map(str::trim).unwrap_or_default().to_string()).filter(|q| !q.is_empty()).unwrap_or_else(|| parse_query(&tool.arguments));
+    let query = display_query(&payload, &tool.arguments);
     let icon_color = if unavailable { c.text_muted } else { c.tool_ui_accent };
 
     let header = div()
@@ -223,7 +308,12 @@ pub fn block(
         .child(div().flex_none().size(px(m::SPACE_4)).flex().items_center().justify_center().text_color(c.text_tertiary).child(icon(if expanded { IconName::ChevronDown } else { IconName::ChevronRight }, px(13.0))));
 
     let body = expanded.then(|| {
-        let meta_row = |name: &'static str, value: String| {
+        let selectable = |key: &str, style: MarkdownStyle| -> Option<AnyElement> {
+            let md = text(key)?;
+            let open = open.clone();
+            Some(MarkdownElement::new(md, style).on_url_click(move |url, _, cx| open(&url, cx)).into_any_element())
+        };
+        let meta_row = |name: &'static str, value: String, selectable: Option<AnyElement>| {
             div()
                 .min_w_0()
                 .flex()
@@ -231,7 +321,7 @@ pub fn block(
                 .gap(px(m::SPACE_2))
                 .text_size(px(m::FONT_SIZE_XS))
                 .child(div().flex_none().w(px(m::SPACE_12 + m::SPACE_2)).font_weight(FontWeight(600.0)).text_color(c.text_tertiary).child(name))
-                .child(div().flex_1().min_w_0().font_weight(FontWeight(500.0)).text_color(c.text_primary).child(SharedString::from(value)))
+                .child(div().flex_1().min_w_0().font_weight(FontWeight(500.0)).text_color(c.text_primary).child(selectable.unwrap_or_else(|| SharedString::from(value).into_any_element())))
         };
         let chip = |text: SharedString| {
             div()
@@ -276,7 +366,9 @@ pub fn block(
                 .child(div().mb(px(m::SPACE_2)).text_size(px(m::FONT_SIZE_XS)).font_weight(FontWeight(600.0)).text_color(c.text_tertiary).child(SharedString::from(format!("搜索结果（{}）", payload.results.len()))))
                 .child(div().flex().flex_col().gap(px(m::SPACE_2)).children(payload.results.iter().enumerate().map(|(index, item)| {
                     let rank = item.rank.unwrap_or(index as u32 + 1);
-                    let title = item.title.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(str::to_string).or_else(|| item.url.clone()).unwrap_or_else(|| format!("结果 {rank}"));
+                    let title = result_title(item, index);
+                    let title_color: Hsla = if item.url.is_some() { c.tool_ui_accent_strong.into() } else { c.text_primary.into() };
+                    let selectable_title = selectable(&format!("search-title-{index}"), selectable_style(window, cx, m::FONT_SIZE_SM, 600.0, title_color, None));
                     let (fetch_text, fetch) = fetch_state(item);
                     let (fetch_fg, fetch_border): (Hsla, Hsla) = match fetch {
                         Fetch::Fetched => (c.state_success.into(), mix(c.state_success, 0.24)),
@@ -305,8 +397,31 @@ pub fn block(
                                 .child(SharedString::from(rank.to_string())),
                         )
                         .children(item.source.as_deref().filter(|s| !s.is_empty()).map(|s| chip(SharedString::from(provider_name(s)))))
-                        .child(match item.url.clone() {
-                            Some(url) => {
+                        .child(match (item.url.clone(), selectable_title) {
+                            // 可选择的标题：点击链接文字由 Markdown 打开，图标单独可点
+                            (url, Some(title)) => div()
+                                .min_w_0()
+                                .flex_1()
+                                .flex()
+                                .items_start()
+                                .gap(px(m::SPACE_1))
+                                .child(div().flex_1().min_w_0().child(title))
+                                .children(url.map(|url| {
+                                    let open = open.clone();
+                                    div()
+                                        .id(SharedString::from(format!("{id}-link-{index}")))
+                                        .flex_none()
+                                        .h(px(m::FONT_SIZE_SM * m::LINE_HEIGHT_BASE))
+                                        .flex()
+                                        .items_center()
+                                        .text_color(c.tool_ui_accent_strong)
+                                        .cursor_pointer()
+                                        .hover(|s| s.text_color(c.tool_ui_accent))
+                                        .on_click(move |_, _, cx| open(&url, cx))
+                                        .child(icon(IconName::ExternalLink, px(12.0)))
+                                }))
+                                .into_any_element(),
+                            (Some(url), None) => {
                                 let open = open.clone();
                                 div()
                                     .id(SharedString::from(format!("{id}-link-{index}")))
@@ -324,7 +439,7 @@ pub fn block(
                                     .child(div().flex_none().child(icon(IconName::ExternalLink, px(12.0))))
                                     .into_any_element()
                             }
-                            None => div().min_w_0().text_size(px(m::FONT_SIZE_SM)).font_weight(FontWeight(600.0)).text_color(c.text_primary).child(SharedString::from(title)).into_any_element(),
+                            (None, None) => div().min_w_0().text_size(px(m::FONT_SIZE_SM)).font_weight(FontWeight(600.0)).text_color(c.text_primary).child(SharedString::from(title)).into_any_element(),
                         });
                     div()
                         .min_w_0()
@@ -335,6 +450,7 @@ pub fn block(
                         .bg(c.panel_surface)
                         .child(heading)
                         .children(item.snippet.as_deref().filter(|s| !s.is_empty()).map(|snippet| {
+                            let selectable_snippet = selectable(&format!("search-snippet-{index}"), selectable_style(window, cx, m::FONT_SIZE_XS, m::FONT_WEIGHT_REGULAR, c.text_muted.into(), Some(3)));
                             div()
                                 .mt(px(m::SPACE_1))
                                 .ml(px(m::SPACE_5 + m::SPACE_2))
@@ -342,7 +458,7 @@ pub fn block(
                                 .text_size(px(m::FONT_SIZE_XS))
                                 .line_height(px(m::FONT_SIZE_XS * m::LINE_HEIGHT_BASE))
                                 .text_color(c.text_muted)
-                                .child(SharedString::from(snippet.to_string()))
+                                .child(selectable_snippet.unwrap_or_else(|| SharedString::from(snippet.to_string()).into_any_element()))
                         }))
                         .child(
                             div().mt(px(m::SPACE_2)).ml(px(m::SPACE_5 + m::SPACE_2)).flex().child(
@@ -386,8 +502,12 @@ pub fn block(
                     .flex()
                     .flex_col()
                     .gap(px(m::SPACE_2))
-                    .child(meta_row("搜索内容", if query.is_empty() { "未获得搜索关键词".to_string() } else { query.clone() }))
-                    .child(meta_row("搜索引擎", provider_label(&payload))),
+                    .child(meta_row(
+                        "搜索内容",
+                        if query.is_empty() { "未获得搜索关键词".to_string() } else { query.clone() },
+                        selectable("search-query", selectable_style(window, cx, m::FONT_SIZE_XS, 500.0, c.text_primary.into(), None)),
+                    ))
+                    .child(meta_row("搜索引擎", provider_label(&payload), None)),
             )
             .children(payload.note.as_deref().filter(|n| !n.is_empty()).map(|note| {
                 div().text_size(px(m::FONT_SIZE_XS)).line_height(px(m::FONT_SIZE_XS * m::LINE_HEIGHT_BASE)).text_color(c.text_tertiary).child(SharedString::from(note.to_string()))

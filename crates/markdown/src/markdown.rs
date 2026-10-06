@@ -2526,13 +2526,16 @@ impl MarkdownElement {
                             }
                         }
 
-                        if markdown.pressed_footnote_ref.is_none()
-                            && markdown.pressed_link.is_none()
-                        {
+                        // Buddy: a press on a link also starts a selection so link text can be
+                        // dragged over and copied; mouse-up opens the link only without a drag.
+                        if markdown.pressed_footnote_ref.is_none() {
                             let source_index = match position_result {
                                 Ok(ix) | Err(ix) => ix,
                             };
-                            if let Some(handler) = on_source_click.as_ref() {
+                            if let Some(handler) = on_source_click
+                                .as_ref()
+                                .filter(|_| markdown.pressed_link.is_none())
+                            {
                                 let blocked = handler(source_index, event.click_count, window, cx);
                                 if blocked {
                                     markdown.selection = Selection::default();
@@ -2660,6 +2663,7 @@ impl MarkdownElement {
                             cx.notify();
                         }
                     } else if let Some(pressed_link) = markdown.pressed_link.take()
+                        && markdown.selection.start == markdown.selection.end
                         && source_index.and_then(|ix| rendered_text.link_for_source_index(ix))
                             == Some(&pressed_link)
                     {

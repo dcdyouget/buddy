@@ -11,10 +11,10 @@
 //! 被打断时（呼出途中再次呼入，或反之）从屏幕上当前的缩放 / 不透明度继续。
 
 use crate::theme_system::tokens::motion::{
-    DISMISS_END_SCALE, DURATION_DISMISS, DURATION_SUMMON_FADE, SUMMON_DAMPING_RATIO,
+    DISMISS_END_SCALE, DURATION_DISMISS, EASE_DISMISS, DURATION_SUMMON_FADE, SUMMON_DAMPING_RATIO,
     SUMMON_START_SCALE, SUMMON_STIFFNESS,
 };
-use objc::runtime::{Class, NO, Object};
+use objc::runtime::{Class, NO, Object, Sel};
 use objc::{class, msg_send, sel, sel_impl};
 use std::ffi::CString;
 
@@ -96,15 +96,17 @@ unsafe fn dismiss_layer(layer: Id) {
             shrink,
             setToValue: transform_value(Transform3D::scale_about(DISMISS_END_SCALE as f64, center))
         ];
+        // 减速曲线：按键当帧即明显变淡收缩，尾段柔和收住。easeIn 前三分之一几乎不动、
+        // 随后骤降，体感是「卡一下再消失」。
         let _: () = msg_send![shrink, setDuration: duration];
-        let _: () = msg_send![shrink, setTimingFunction: timing("easeIn")];
+        let _: () = msg_send![shrink, setTimingFunction: control_points(EASE_DISMISS)];
         hold_final_frame(shrink);
         add(layer, shrink, DISMISS_KEY);
         let fade = basic("opacity");
         let _: () = msg_send![fade, setFromValue: number(opacity)];
         let _: () = msg_send![fade, setToValue: number(0.0)];
         let _: () = msg_send![fade, setDuration: duration];
-        let _: () = msg_send![fade, setTimingFunction: timing("easeIn")];
+        let _: () = msg_send![fade, setTimingFunction: control_points(EASE_DISMISS)];
         hold_final_frame(fade);
         add(layer, fade, DISMISS_FADE_KEY);
     }
@@ -240,6 +242,26 @@ unsafe fn timing(name: &str) -> Id {
     unsafe { msg_send![class!(CAMediaTimingFunction), functionWithName: ns_string(name)] }
 }
 
+/// `+[CAMediaTimingFunction functionWithControlPoints::::]`；选择子含无名参数，
+/// `msg_send!` 无法表达，按真实签名调用 `objc_msgSend`。
+unsafe fn control_points([x1, y1, x2, y2]: [f32; 4]) -> Id {
+    type Send = unsafe extern "C" fn(*const Class, Sel, f32, f32, f32, f32) -> Id;
+    unsafe extern "C" {
+        fn objc_msgSend();
+    }
+    unsafe {
+        let send: Send = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        send(
+            class!(CAMediaTimingFunction),
+            Sel::register("functionWithControlPoints::::"),
+            x1,
+            y1,
+            x2,
+            y2,
+        )
+    }
+}
+
 unsafe fn number(value: f64) -> Id {
     unsafe { msg_send![class!(NSNumber), numberWithDouble: value] }
 }
@@ -292,6 +314,12 @@ mod tests {
             assert_eq!(key_path_f64(layer, "bounds.size.width"), Some(400.0));
             let (cx, cy) = center(layer);
             assert!(cx.abs() <= 200.0 && cy.abs() <= 120.0);
+
+            let ease = control_points(EASE_DISMISS);
+            assert!(!ease.is_null());
+            let mut point = [0f32; 2];
+            let _: () = msg_send![ease, getControlPointAtIndex: 1usize values: point.as_mut_ptr()];
+            assert_eq!(point, [EASE_DISMISS[0], EASE_DISMISS[1]]);
 
             summon_layer(layer);
             assert_eq!(animation_count(layer), 2);
