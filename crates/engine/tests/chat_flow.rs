@@ -55,13 +55,21 @@ struct Run {
     requests: Vec<CapturedRequest>,
 }
 
-async fn run(engine: &Arc<ChatEngine>, server: tokio::task::JoinHandle<Vec<CapturedRequest>>, respond: Respond) -> Run {
+async fn run(
+    engine: &Arc<ChatEngine>,
+    server: tokio::task::JoinHandle<Vec<CapturedRequest>>,
+    respond: Respond,
+) -> Run {
     let (emitter, mut rx) = StreamEventEmitter::channel();
     let e = engine.clone();
     // 与 v2 UI 相同的用法：Arc clone 后 spawn，future 为 Send + 'static
     let task = tokio::spawn(async move {
-        e.send_message(emitter, vec![user_message("帮我做件事")], MODEL_ID.to_string())
-            .await
+        e.send_message(
+            emitter,
+            vec![user_message("帮我做件事")],
+            MODEL_ID.to_string(),
+        )
+        .await
     });
 
     let mut events = Vec::new();
@@ -73,11 +81,24 @@ async fn run(engine: &Arc<ChatEngine>, server: tokio::task::JoinHandle<Vec<Captu
             (StreamEvent::ToolApprovalRequired { id, .. }, Respond::Approve(ok, all)) => {
                 engine.approve_tool_call(id, ok, all).unwrap()
             }
-            (StreamEvent::ToolQuestionRequired { id, .. }, Respond::Answer(n)) => {
-                engine.answer_tool_question(id, vec![n], None, None).unwrap()
-            }
-            (StreamEvent::ToolApprovalRequired { .. } | StreamEvent::ToolQuestionRequired { .. }, Respond::Stop) => {
-                engine.stop_generation()
+            (StreamEvent::ToolQuestionRequired { id, .. }, Respond::Answer(n)) => engine
+                .answer_tool_question(id, vec![n], None, None)
+                .unwrap(),
+            (
+                StreamEvent::ToolApprovalRequired { id, .. }
+                | StreamEvent::ToolQuestionRequired { id, .. },
+                Respond::Stop,
+            ) => {
+                let saved = engine.load_messages(0, 100).await.unwrap();
+                assert!(
+                    saved.iter().any(|message| message
+                        .tool_calls
+                        .iter()
+                        .flatten()
+                        .any(|call| &call.id == id)),
+                    "等待交互前必须保存工具调用"
+                );
+                engine.stop_generation();
             }
             _ => {}
         }
@@ -85,7 +106,11 @@ async fn run(engine: &Arc<ChatEngine>, server: tokio::task::JoinHandle<Vec<Captu
     }
     let result = task.await.unwrap();
     let requests = server.await.unwrap();
-    Run { result, events, requests }
+    Run {
+        result,
+        events,
+        requests,
+    }
 }
 
 fn terminal(events: &[StreamEvent]) -> &StreamEvent {
@@ -95,7 +120,10 @@ fn terminal(events: &[StreamEvent]) -> &StreamEvent {
         .collect();
     assert_eq!(terminals.len(), 1, "终态事件必须恰好 1 个: {events:?}");
     assert!(
-        matches!(events.last(), Some(StreamEvent::Done { .. } | StreamEvent::Error { .. })),
+        matches!(
+            events.last(),
+            Some(StreamEvent::Done { .. } | StreamEvent::Error { .. })
+        ),
         "终态事件必须是最后一个事件"
     );
     terminals[0]
@@ -116,15 +144,21 @@ async fn persisted(engine: &ChatEngine) -> Vec<Message> {
 #[tokio::test]
 async fn plain_reply_emits_done_and_persists_user_and_assistant() {
     let tmp = TempDir::new().unwrap();
-    let (url, server) = serve_sse_sequence(vec![openai_script(&["你好"], Duration::ZERO)], IDLE).await;
+    let (url, server) =
+        serve_sse_sequence(vec![openai_script(&["你好"], Duration::ZERO)], IDLE).await;
     write_config(tmp.path(), &url, vec![]);
     let engine = ChatEngine::new(tmp.path().to_path_buf());
 
     let r = run(&engine, server, Respond::Approve(true, false)).await;
     assert!(r.result.is_ok());
-    assert!(matches!(terminal(&r.events), StreamEvent::Done { full_text, .. } if full_text == "你好"));
+    assert!(
+        matches!(terminal(&r.events), StreamEvent::Done { full_text, .. } if full_text == "你好")
+    );
     assert_eq!(r.requests.len(), 1);
-    assert_eq!(roles(&persisted(&engine).await), vec![MessageRole::User, MessageRole::Assistant]);
+    assert_eq!(
+        roles(&persisted(&engine).await),
+        vec![MessageRole::User, MessageRole::Assistant]
+    );
 }
 
 #[tokio::test]
@@ -135,7 +169,11 @@ async fn write_tool_approved_executes_then_continues_to_final_answer() {
     let target = out.join("a.txt");
     let (url, server) = serve_sse_sequence(
         vec![
-            openai_tool_calls_script(&[("call_1", "create_file", json!({"path": target, "content": "hi"}))]),
+            openai_tool_calls_script(&[(
+                "call_1",
+                "create_file",
+                json!({"path": target, "content": "hi"}),
+            )]),
             openai_script(&["已创建"], Duration::ZERO),
         ],
         IDLE,
@@ -147,18 +185,50 @@ async fn write_tool_approved_executes_then_continues_to_final_answer() {
     let r = run(&engine, server, Respond::Approve(true, false)).await;
     assert!(r.result.is_ok());
     assert_eq!(std::fs::read_to_string(&target).unwrap(), "hi");
-    assert_eq!(count(&r.events, |e| matches!(e, StreamEvent::ToolApprovalRequired { .. })), 1);
-    assert_eq!(count(&r.events, |e| matches!(e, StreamEvent::ToolExecuting { .. })), 1);
-    assert_eq!(count(&r.events, |e| matches!(e, StreamEvent::ToolResult { is_error: false, .. })), 1);
-    assert!(matches!(terminal(&r.events), StreamEvent::Done { full_text, .. } if full_text == "已创建"));
+    assert_eq!(
+        count(&r.events, |e| matches!(
+            e,
+            StreamEvent::ToolApprovalRequired { .. }
+        )),
+        1
+    );
+    assert_eq!(
+        count(&r.events, |e| matches!(
+            e,
+            StreamEvent::ToolExecuting { .. }
+        )),
+        1
+    );
+    assert_eq!(
+        count(&r.events, |e| matches!(
+            e,
+            StreamEvent::ToolResult {
+                is_error: false,
+                ..
+            }
+        )),
+        1
+    );
+    assert!(
+        matches!(terminal(&r.events), StreamEvent::Done { full_text, .. } if full_text == "已创建")
+    );
     // 第二轮请求把 tool 结果回传给模型
     assert_eq!(r.requests.len(), 2);
-    assert!(r.requests[1].body.contains("\"role\":\"tool\""), "{}", r.requests[1].body);
+    assert!(
+        r.requests[1].body.contains("\"role\":\"tool\""),
+        "{}",
+        r.requests[1].body
+    );
     assert!(r.requests[1].body.contains("call_1"));
     // 持久化：user → assistant(tool_calls) → tool → assistant
     assert_eq!(
         roles(&persisted(&engine).await),
-        vec![MessageRole::User, MessageRole::Assistant, MessageRole::Tool, MessageRole::Assistant]
+        vec![
+            MessageRole::User,
+            MessageRole::Assistant,
+            MessageRole::Tool,
+            MessageRole::Assistant
+        ]
     );
 }
 
@@ -168,7 +238,11 @@ async fn write_tool_rejected_is_not_executed_and_model_is_told() {
     let target = tmp.path().join("b.txt");
     let (url, server) = serve_sse_sequence(
         vec![
-            openai_tool_calls_script(&[("call_1", "create_file", json!({"path": target, "content": "x"}))]),
+            openai_tool_calls_script(&[(
+                "call_1",
+                "create_file",
+                json!({"path": target, "content": "x"}),
+            )]),
             openai_script(&["好的，不创建"], Duration::ZERO),
         ],
         IDLE,
@@ -179,7 +253,13 @@ async fn write_tool_rejected_is_not_executed_and_model_is_told() {
 
     let r = run(&engine, server, Respond::Approve(false, false)).await;
     assert!(!target.exists(), "拒绝后不得执行写操作");
-    assert_eq!(count(&r.events, |e| matches!(e, StreamEvent::ToolExecuting { .. })), 0);
+    assert_eq!(
+        count(&r.events, |e| matches!(
+            e,
+            StreamEvent::ToolExecuting { .. }
+        )),
+        0
+    );
     assert!(r.events.iter().any(
         |e| matches!(e, StreamEvent::ToolResult { is_error: true, content, .. } if content == "用户拒绝执行")
     ));
@@ -206,7 +286,13 @@ async fn approve_all_skips_approval_for_rest_of_turn() {
     let engine = ChatEngine::new(tmp.path().to_path_buf());
 
     let r = run(&engine, server, Respond::Approve(true, true)).await;
-    assert_eq!(count(&r.events, |e| matches!(e, StreamEvent::ToolApprovalRequired { .. })), 1);
+    assert_eq!(
+        count(&r.events, |e| matches!(
+            e,
+            StreamEvent::ToolApprovalRequired { .. }
+        )),
+        1
+    );
     assert!(a.exists() && b.exists());
     assert!(matches!(terminal(&r.events), StreamEvent::Done { .. }));
 }
@@ -247,7 +333,11 @@ async fn stop_while_waiting_approval_aborts_without_executing() {
     let target = tmp.path().join("c.txt");
     let (url, server) = serve_sse_sequence(
         vec![
-            openai_tool_calls_script(&[("call_1", "create_file", json!({"path": target, "content": "x"}))]),
+            openai_tool_calls_script(&[(
+                "call_1",
+                "create_file",
+                json!({"path": target, "content": "x"}),
+            )]),
             openai_script(&["不应到达"], Duration::ZERO),
         ],
         Duration::from_millis(500),
@@ -259,11 +349,18 @@ async fn stop_while_waiting_approval_aborts_without_executing() {
     let r = run(&engine, server, Respond::Stop).await;
     assert!(!target.exists());
     assert_eq!(r.requests.len(), 1, "取消后不得发起下一轮请求");
-    assert!(matches!(terminal(&r.events), StreamEvent::Error { reason: StopReason::Aborted, .. }));
+    assert!(matches!(
+        terminal(&r.events),
+        StreamEvent::Error {
+            reason: StopReason::Aborted,
+            ..
+        }
+    ));
     // 等待槽位已被清理：迟到的审批返回 Err，而不是推进已结束的对话
     assert!(engine.approve_tool_call("call_1", true, false).is_err());
     // 生成占用已释放：可以立即开始下一次对话
-    let (url2, server2) = serve_sse_sequence(vec![openai_script(&["再来"], Duration::ZERO)], IDLE).await;
+    let (url2, server2) =
+        serve_sse_sequence(vec![openai_script(&["再来"], Duration::ZERO)], IDLE).await;
     write_config(tmp.path(), &url2, vec![]);
     let r2 = run(&engine, server2, Respond::Stop).await;
     assert!(matches!(terminal(&r2.events), StreamEvent::Done { .. }));
@@ -283,10 +380,14 @@ async fn second_send_while_generating_is_rejected_without_events() {
     let (emitter1, mut rx1) = StreamEventEmitter::channel();
     let e = engine.clone();
     let first = tokio::spawn(async move {
-        e.send_message(emitter1, vec![user_message("一")], MODEL_ID.to_string()).await
+        e.send_message(emitter1, vec![user_message("一")], MODEL_ID.to_string())
+            .await
     });
     // 等第一次对话真正开始（收到首个事件）
     rx1.recv().await.unwrap();
+    let saved = engine.load_messages(0, 100).await.unwrap();
+    assert_eq!(saved.len(), 1, "流式回复结束前应已保存用户输入");
+    assert_eq!(saved[0].content, "一");
 
     let (emitter2, rx2) = StreamEventEmitter::channel();
     let second = engine
@@ -298,7 +399,13 @@ async fn second_send_while_generating_is_rejected_without_events() {
     engine.stop_generation();
     assert!(first.await.unwrap().is_ok());
     let rest = drain(rx1).await;
-    assert!(matches!(terminal(&rest), StreamEvent::Error { reason: StopReason::Aborted, .. }));
+    assert!(matches!(
+        terminal(&rest),
+        StreamEvent::Error {
+            reason: StopReason::Aborted,
+            ..
+        }
+    ));
     let _ = server.await;
 }
 
@@ -313,5 +420,65 @@ async fn unknown_model_returns_err_before_any_event() {
         .await;
     assert_eq!(r.unwrap_err(), "未找到指定的模型");
     assert!(drain(rx).await.is_empty());
-    assert_eq!(engine.get_message_count().await.unwrap(), 0, "失败的请求不落盘");
+    assert_eq!(
+        engine.get_message_count().await.unwrap(),
+        0,
+        "失败的请求不落盘"
+    );
+}
+
+#[tokio::test]
+async fn engine_context_uses_disk_history_instead_of_ui_page() {
+    let tmp = TempDir::new().unwrap();
+    let (url, server) =
+        serve_sse_sequence(vec![openai_script(&["ok"], Duration::ZERO)], IDLE).await;
+    write_config(tmp.path(), &url, vec![]);
+    let history: Vec<_> = (0..60)
+        .map(|index| {
+            let mut message = user_message(&format!("history-{index}"));
+            message.id = format!("historical-{index}");
+            message
+        })
+        .collect();
+    storage::append_messages(tmp.path(), &history).unwrap();
+    let engine = ChatEngine::new(tmp.path().to_path_buf());
+    let (emitter, mut rx) = StreamEventEmitter::channel();
+    engine
+        .send_message_from_history(emitter, user_message("current"), MODEL_ID.into())
+        .await
+        .unwrap();
+    while rx.recv().await.is_some() {}
+    let requests = server.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].body.contains("history-0"));
+    assert!(requests[0].body.contains("history-59"));
+    assert!(requests[0].body.contains("current"));
+    assert_eq!(engine.get_message_count().await.unwrap(), 62);
+}
+
+#[tokio::test]
+async fn oversized_current_turn_is_rejected_before_network_request() {
+    let tmp = TempDir::new().unwrap();
+    write_config(tmp.path(), "http://127.0.0.1:1", vec![]);
+    let mut config = storage::get_config(tmp.path()).unwrap();
+    config.models[0].context_window = 1024;
+    storage::save_config(tmp.path(), &config).unwrap();
+    let engine = ChatEngine::new(tmp.path().to_path_buf());
+    let (emitter, mut rx) = StreamEventEmitter::channel();
+    engine
+        .send_message(
+            emitter,
+            vec![user_message(&"x".repeat(6000))],
+            MODEL_ID.into(),
+        )
+        .await
+        .unwrap();
+    let mut events = Vec::new();
+    while let Some(event) = rx.recv().await {
+        events.push(event);
+    }
+    assert!(
+        matches!(terminal(&events), StreamEvent::Error { message, .. } if message.contains("上下文预算"))
+    );
+    assert_eq!(engine.get_message_count().await.unwrap(), 1);
 }

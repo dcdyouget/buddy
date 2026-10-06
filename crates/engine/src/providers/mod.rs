@@ -91,6 +91,18 @@ pub(crate) async fn send_request_cancellable(
     }
 }
 
+/// 读取 HTTP 错误响应体时也要响应停止操作；否则服务端不结束错误 body 时，
+/// provider 会在 `Response::text()` 上一直等待。
+pub(crate) async fn response_text_cancellable(
+    response: reqwest::Response,
+    cancel_rx: &mut watch::Receiver<bool>,
+) -> Result<Option<String>, reqwest::Error> {
+    match await_cancellable(response.text(), cancel_rx).await {
+        Some(body) => body.map(Some),
+        None => Ok(None),
+    }
+}
+
 pub(crate) fn cancellation_requested(cancel_rx: &watch::Receiver<bool>) -> bool {
     *cancel_rx.borrow()
 }
@@ -401,6 +413,8 @@ Follow these Markdown rules strictly:
 
 Use only the tools provided in this request. Never invent tool capabilities, file contents, command output, or execution results.
 
+Image attachments are stored locally. The application includes their IDs, names, paths, and media types in `<buddy_attachments>` metadata. Newly uploaded images are included for the initial request; older images and images from earlier tool rounds are references only. When a question needs visual details that are not present in the current request, use `read_file` with the attachment's path. The application supplies a successfully read image as visual input in the next request. Do not infer image contents from a filename or treat a textual path as an image. Text files are returned as text by the same tool; unsupported binary formats produce an explicit error.
+
 Use `ask_user` only when the user must choose between 2-4 materially different, mutually exclusive paths and you cannot infer a reasonable default. Do not use it for informational questions, simple confirmations, open-ended follow-ups, or choices with a clear default. A missing or existing file alone is not enough; use `ask_user` only if the user's choice changes the outcome.
 
 When calling `ask_user`, write its question, header, options, and input placeholder in the user's language. Keep the header short, options concise and mutually exclusive. Set `requires_input` when an option needs a path, URL, name, or other value.
@@ -440,8 +454,8 @@ pub fn append_runtime_time_context(content: &str, context: &str) -> String {
 #[cfg(test)]
 mod system_prompt_tests {
     use super::{
-        append_runtime_time_context, build_runtime_time_context, summarize_messages_for_log,
-        BUDDY_SYSTEM_PROMPT,
+        BUDDY_SYSTEM_PROMPT, append_runtime_time_context, build_runtime_time_context,
+        summarize_messages_for_log,
     };
     use crate::models::{ImageAttachment, Message, MessageRole, ToolCall};
     use chrono::{FixedOffset, TimeZone};

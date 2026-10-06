@@ -6,11 +6,12 @@
 // 3. Message 分块存储 —— 每条消息追加到 chunk 文件，每 100 条自动切新块
 
 use crate::models::*;
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
-use log::warn;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::time::SystemTime;
 
 mod atomic_file;
 mod attachment_files;
@@ -76,23 +77,22 @@ pub fn save_config(data_dir: &Path, config: &AppConfig) -> Result<(), String> {
 
 /// 读取 manifest.json
 ///
-/// 若文件不存在或解析失败，返回空的 Manifest（无分块、无消息），
-/// 后续操作会从空状态开始正常创建分块。
-fn read_manifest(dir: &PathBuf) -> Manifest {
+/// 若文件不存在则返回空 Manifest；文件损坏或无法读取时返回错误，
+/// 避免把已有消息误判为空状态并覆盖掉。
+fn empty_manifest() -> Manifest {
+    Manifest {
+        chunks: vec![],
+        total_messages: 0,
+    }
+}
+
+fn read_manifest(dir: &Path) -> Result<Manifest, String> {
     let path = dir.join("manifest.json");
     if !path.exists() {
-        return Manifest {
-            chunks: vec![],
-            total_messages: 0,
-        };
+        return Ok(empty_manifest());
     }
-    fs::read_to_string(&path)
-        .ok()
-        .and_then(|c| serde_json::from_str(&c).ok())
-        .unwrap_or(Manifest {
-            chunks: vec![],
-            total_messages: 0,
-        })
+    let content = fs::read_to_string(&path).map_err(|e| format!("读取索引文件失败: {e}"))?;
+    serde_json::from_str(&content).map_err(|e| format!("索引文件损坏: {e}"))
 }
 
 /// 写入 manifest.json
@@ -109,6 +109,81 @@ fn write_manifest(dir: &PathBuf, manifest: &Manifest) -> Result<(), String> {
 /// `std::sync::Mutex` 在 `spawn_blocking` 线程中阻塞是预期行为。
 static APPEND_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static ATTACHMENT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ChunkFingerprint {
+    file: String,
+    modified: Option<SystemTime>,
+    len: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ManifestFingerprint {
+    exists: bool,
+    modified: Option<SystemTime>,
+    len: Option<u64>,
+    chunks: Vec<ChunkFingerprint>,
+}
+
+#[derive(Clone)]
+struct CachedManifest {
+    fingerprint: ManifestFingerprint,
+    manifest: Manifest,
+}
+
+static MANIFEST_CACHE: OnceLock<Mutex<std::collections::HashMap<PathBuf, CachedManifest>>> =
+    OnceLock::new();
+
+fn manifest_fingerprint(dir: &Path) -> ManifestFingerprint {
+    let path = dir.join("manifest.json");
+    let (exists, modified, len) = match fs::metadata(path) {
+        Ok(metadata) => (true, metadata.modified().ok(), Some(metadata.len())),
+        Err(_) => (false, None, None),
+    };
+    let mut chunks = fs::read_dir(dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let file = entry.file_name().to_string_lossy().into_owned();
+            if !file.starts_with("chunk_") || !file.ends_with(".json") {
+                return None;
+            }
+            let metadata = entry.metadata().ok()?;
+            Some(ChunkFingerprint {
+                file,
+                modified: metadata.modified().ok(),
+                len: Some(metadata.len()),
+            })
+        })
+        .collect::<Vec<_>>();
+    chunks.sort_by(|left, right| left.file.cmp(&right.file));
+    ManifestFingerprint {
+        exists,
+        modified,
+        len,
+        chunks,
+    }
+}
+
+fn manifest_cache() -> &'static Mutex<std::collections::HashMap<PathBuf, CachedManifest>> {
+    MANIFEST_CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+fn cache_manifest(dir: &Path, manifest: Manifest) {
+    let fingerprint = manifest_fingerprint(dir);
+    let mut cache = manifest_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache.insert(
+        dir.to_path_buf(),
+        CachedManifest {
+            fingerprint,
+            manifest,
+        },
+    );
+}
 
 fn image_extension(media_type: &str) -> Option<&'static str> {
     match media_type {
@@ -223,7 +298,7 @@ pub fn append_messages(data_dir: &Path, messages: &[Message]) -> Result<(), Stri
         p.into_inner()
     });
     let dir = ensure_data_dir(data_dir)?;
-    let mut manifest = read_manifest(&dir);
+    let mut manifest = manifest_for_read_unlocked(&dir)?;
 
     let mut active: Option<(String, ChatChunk)> = None;
     for message in messages {
@@ -237,18 +312,32 @@ pub fn append_messages(data_dir: &Path, messages: &[Message]) -> Result<(), Stri
                 write_chunk(&dir, &file, &chunk)?;
             }
 
-            let file = match manifest.chunks.last() {
-                Some(last) if last.count < CHUNK_SIZE => last.file.clone(),
+            let (file, chunk) = match manifest.chunks.last() {
+                Some(last) if last.count < CHUNK_SIZE => {
+                    let file = last.file.clone();
+                    let chunk = read_chunk(&dir, &file)?;
+                    (file, chunk)
+                }
                 _ => {
-                    let file = format!("chunk_{:03}.json", manifest.chunks.len() + 1);
+                    let next_number = manifest
+                        .chunks
+                        .iter()
+                        .filter_map(|meta| chunk_number(&meta.file))
+                        .max()
+                        .unwrap_or(0)
+                        + 1;
+                    let file = format!("chunk_{next_number:03}.json");
                     manifest.chunks.push(ChunkMeta {
                         file: file.clone(),
                         count: 0,
                     });
-                    file
+                    let chunk = ChatChunk {
+                        id: file.trim_end_matches(".json").to_string(),
+                        messages: vec![],
+                    };
+                    (file, chunk)
                 }
             };
-            let chunk = read_chunk(&dir, &file)?;
             active = Some((file, chunk));
         }
 
@@ -264,29 +353,117 @@ pub fn append_messages(data_dir: &Path, messages: &[Message]) -> Result<(), Stri
         write_chunk(&dir, &file, &chunk)?;
     }
     write_manifest(&dir, &manifest)?;
+    cache_manifest(&dir, manifest);
 
     Ok(())
 }
 
-fn read_chunk(dir: &PathBuf, file: &str) -> Result<ChatChunk, String> {
+fn validate_chunk_file(file: &str) -> Result<(), String> {
+    let path = Path::new(file);
+    let is_safe_name = path.is_relative()
+        && path.components().count() == 1
+        && path
+            .components()
+            .all(|part| matches!(part, Component::Normal(_)))
+        && file.starts_with("chunk_")
+        && file.ends_with(".json")
+        && chunk_number(file).is_some();
+    if is_safe_name {
+        Ok(())
+    } else {
+        Err(format!("索引中的分块路径无效: {file}"))
+    }
+}
+
+fn chunk_number(file: &str) -> Option<u64> {
+    file.strip_prefix("chunk_")?
+        .strip_suffix(".json")?
+        .parse()
+        .ok()
+}
+
+fn read_chunk(dir: &Path, file: &str) -> Result<ChatChunk, String> {
+    validate_chunk_file(file)?;
     let path = dir.join(file);
     if !path.exists() {
-        return Ok(ChatChunk {
-            id: file.trim_end_matches(".json").to_string(),
-            messages: vec![],
-        });
+        return Err(format!("索引引用的消息分块不存在: {file}"));
     }
     let content = fs::read_to_string(&path).map_err(|e| format!("读取消息文件失败: {}", e))?;
-    Ok(serde_json::from_str(&content).unwrap_or_else(|e| {
-        warn!(
-            "[storage::append_messages] 分块 {} JSON 解析失败，将创建空分块: {}",
-            file, e
-        );
-        ChatChunk {
-            id: file.trim_end_matches(".json").to_string(),
-            messages: vec![],
+    serde_json::from_str(&content).map_err(|e| format!("消息分块 {file} 损坏: {e}"))
+}
+
+/// 读取所有消息分块，并用分块实际内容修正 manifest。
+///
+/// manifest 和分块是两个独立的原子文件。进程可能在写完分块后、写 manifest
+/// 前退出，因此不能用 manifest 中的 count/total 做偏移或决定下一块；同时，
+/// 任何已存在但尚未登记的 chunk 也必须纳入读取，避免恢复时隐藏消息。
+fn read_chunks(dir: &Path, mut manifest: Manifest) -> Result<(Manifest, Vec<ChatChunk>), String> {
+    let mut files: Vec<String> = manifest
+        .chunks
+        .iter()
+        .map(|meta| meta.file.clone())
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    for file in &files {
+        validate_chunk_file(file)?;
+        if !seen.insert(file.clone()) {
+            return Err(format!("索引重复引用消息分块: {file}"));
         }
-    }))
+    }
+
+    if dir.exists() {
+        let mut extra_files = Vec::new();
+        for entry in fs::read_dir(dir).map_err(|e| format!("读取消息目录失败: {e}"))? {
+            let entry = entry.map_err(|e| format!("读取消息目录项失败: {e}"))?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with("chunk_") && name.ends_with(".json") && !seen.contains(&name) {
+                validate_chunk_file(&name)?;
+                extra_files.push(name);
+            }
+        }
+        extra_files.sort_by_key(|file| chunk_number(file).unwrap_or(u64::MAX));
+        files.extend(extra_files);
+    }
+    files.sort_by_key(|file| chunk_number(file).unwrap_or(u64::MAX));
+
+    let mut chunks = Vec::with_capacity(files.len());
+    let mut metadata = Vec::with_capacity(files.len());
+    for file in files {
+        let chunk = read_chunk(dir, &file)?;
+        metadata.push(ChunkMeta {
+            file,
+            count: chunk.messages.len() as u32,
+        });
+        chunks.push(chunk);
+    }
+    manifest.chunks = metadata;
+    manifest.total_messages = chunks.iter().map(|chunk| chunk.messages.len() as u64).sum();
+    Ok((manifest, chunks))
+}
+
+fn reconcile_manifest(dir: &Path, manifest: Manifest) -> Result<Manifest, String> {
+    read_chunks(dir, manifest).map(|(manifest, _)| manifest)
+}
+
+/// 返回可用于分页的 manifest。调用方必须持有 APPEND_LOCK。
+/// 首次读取或 manifest/chunk 文件发生变化时，校准一次分块实际计数；同一进程内
+/// 后续分页直接复用校准结果，避免每页重新解析全部历史。
+fn manifest_for_read_unlocked(dir: &Path) -> Result<Manifest, String> {
+    let fingerprint = manifest_fingerprint(dir);
+    {
+        let cache = manifest_cache()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(cached) = cache.get(dir) {
+            if cached.fingerprint == fingerprint {
+                return Ok(cached.manifest.clone());
+            }
+        }
+    }
+
+    let manifest = reconcile_manifest(dir, read_manifest(dir)?)?;
+    cache_manifest(dir, manifest.clone());
+    Ok(manifest)
 }
 
 fn write_chunk(dir: &PathBuf, file: &str, chunk: &ChatChunk) -> Result<(), String> {
@@ -302,13 +479,12 @@ fn write_chunk(dir: &PathBuf, file: &str, chunk: &ChatChunk) -> Result<(), Strin
 /// - `limit`: 最多返回的消息数量
 ///
 /// 返回按时间顺序排列的消息列表。
-pub fn load_messages(
-    data_dir: &Path,
-    offset: u64,
-    limit: u64,
-) -> Result<Vec<Message>, String> {
+pub fn load_messages(data_dir: &Path, offset: u64, limit: u64) -> Result<Vec<Message>, String> {
+    let _guard = APPEND_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let dir = data_dir.to_path_buf();
-    let manifest = read_manifest(&dir);
+    let manifest = manifest_for_read_unlocked(&dir)?;
 
     // 无消息或偏移量超出范围，直接返回空列表
     if manifest.total_messages == 0 || offset >= manifest.total_messages {
@@ -333,28 +509,7 @@ pub fn load_messages(
             continue;
         }
 
-        // 读取分块文件内容
-        let chunk_path = dir.join(&meta.file);
-        if !chunk_path.exists() {
-            messages_before += chunk_count;
-            continue;
-        }
-
-        let content = fs::read_to_string(&chunk_path).unwrap_or_default();
-        let chunk: ChatChunk = serde_json::from_str(&content).unwrap_or_else(|e| {
-            warn!(
-                "[storage::load_messages] 分块 {} JSON 解析失败: {}",
-                meta.file, e
-            );
-            ChatChunk {
-                id: meta.file.trim_end_matches(".json").to_string(),
-                messages: vec![],
-            }
-        });
-
-        // 以实际消息数而非 manifest 计数为准推进偏移。
-        // manifest 计数与实际内容可能不一致（如写入中途崩溃），按 manifest 算偏移
-        // 会静默跳过或重复消息；读取到的分块一律用真实长度。
+        let chunk = read_chunk(&dir, &meta.file)?;
         let actual_count = chunk.messages.len() as u64;
 
         // 计算该分块内的起始索引（跨 chunk offset 修正）
@@ -364,7 +519,6 @@ pub fn load_messages(
             (offset - messages_before) as usize // offset 落在当前分块
         };
 
-        // 防御：若 manifest 计数与实际消息数不一致，跳过无效范围
         if local_start >= chunk.messages.len() {
             messages_before += actual_count;
             continue;
@@ -388,7 +542,10 @@ pub fn load_messages(
 ///
 /// 前端用它从末尾计算首屏偏移量，以便优先加载最新的历史消息。
 pub fn message_count(data_dir: &Path) -> Result<u64, String> {
-    Ok(read_manifest(&data_dir.to_path_buf()).total_messages)
+    let _guard = APPEND_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    Ok(manifest_for_read_unlocked(data_dir)?.total_messages)
 }
 
 // ── 单元测试 ──────────────────────────────────────────────

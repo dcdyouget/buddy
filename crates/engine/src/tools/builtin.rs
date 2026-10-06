@@ -24,14 +24,18 @@
 
 use super::{Tool, ToolContext, ToolError, ToolOutput, ToolSafety};
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use serde_json::{Value, json};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// 覆盖写临时文件的全局序号：保证并发覆盖同一目标时临时文件名不冲突。
 static OVERWRITE_TMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static READ_IMAGE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+const MAX_TEXT_FILE_BYTES: usize = 1024 * 1024;
 
 /// 写工具的统一路径校验：先做词法白名单校验；allowed_paths 非空时，
 /// 再解析「路径上最近已存在祖先」的真实路径并复检一次，堵住符号链接逃逸。
@@ -198,7 +202,7 @@ impl Tool for ReadFileTool {
         "read_file"
     }
     fn description(&self) -> &str {
-        "读取本地文本文件的内容。返回 UTF-8 解码后的文本;二进制文件返回 is_error。"
+        "读取本地 UTF-8 文本或 PNG/JPEG/GIF/WebP 图片。图片在模型支持视觉输入时作为下一请求的视觉内容提供；文本返回 UTF-8 内容。"
     }
     fn parameters_schema(&self) -> Value {
         json!({
@@ -213,18 +217,151 @@ impl Tool for ReadFileTool {
         ToolSafety::ReadOnly
     }
 
-    async fn execute(&self, args: Value, _ctx: ToolContext) -> Result<ToolOutput, ToolError> {
+    async fn execute(&self, args: Value, ctx: ToolContext) -> Result<ToolOutput, ToolError> {
         let path = extract_path(&args)?;
-        let content = fs::read_to_string(&path).await.map_err(|e| {
-            ToolError::Io(match e.kind() {
+        let max_image_bytes = ctx.max_image_bytes.max(1);
+        // 先读固定长度头部，避免在未开启视觉时把整张图片读入内存；
+        // 后续按检测结果分别采用图片或文本上限。
+        let header = read_bounded_file(&path, 12, ctx.cancel_rx.clone()).await?;
+
+        if let Some((media_type, extension)) = sniff_image_media_type(&header) {
+            if !ctx.supports_vision {
+                return Err(ToolError::Other(
+                    "当前模型不支持图片输入，无法读取图片；请改用支持视觉的模型".to_string(),
+                ));
+            }
+            let bytes = read_bounded_file(&path, max_image_bytes, ctx.cancel_rx).await?;
+            if bytes.len() > max_image_bytes {
+                return Err(ToolError::Other(format!(
+                    "图片文件过大：{}（上限 {} 字节）",
+                    path.display(),
+                    max_image_bytes
+                )));
+            }
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_millis())
+                .unwrap_or_default();
+            let id = format!(
+                "read-image-{}-{}",
+                timestamp,
+                READ_IMAGE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+            );
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| format!("image.{extension}"));
+            let display_path = fs::canonicalize(&path)
+                .await
+                .unwrap_or_else(|_| path.clone());
+            let image = crate::models::ImageAttachment {
+                id,
+                name,
+                media_type: media_type.to_string(),
+                path: display_path.to_string_lossy().into_owned(),
+                data_url: format!(
+                    "data:{};base64,{}",
+                    media_type,
+                    BASE64_STANDARD.encode(&bytes)
+                ),
+            };
+            return Ok(
+                ToolOutput::ok(format!("已读取图片：{}", display_path.display()))
+                    .with_images(vec![image.clone()])
+                    .with_model_images(vec![image]),
+            );
+        }
+
+        let bytes = read_bounded_file(&path, MAX_TEXT_FILE_BYTES, ctx.cancel_rx).await?;
+        if bytes.len() > MAX_TEXT_FILE_BYTES {
+            return Err(ToolError::Other(format!(
+                "文本文件过大：{}（上限 1 MB）",
+                path.display()
+            )));
+        }
+        if has_unsupported_binary_signature(&bytes)
+            || bytes
+                .iter()
+                .any(|byte| matches!(byte, 0..=8 | 11..=12 | 14..=31 | 127))
+        {
+            return Err(ToolError::Other(format!(
+                "不支持的二进制文件：{}（仅支持 UTF-8 文本或 PNG/JPEG/GIF/WebP 图片）",
+                path.display()
+            )));
+        }
+        let content = String::from_utf8(bytes).map_err(|_| {
+            ToolError::Other(format!(
+                "不支持的二进制文件：{}（仅支持 UTF-8 文本或 PNG/JPEG/GIF/WebP 图片）",
+                path.display()
+            ))
+        })?;
+        Ok(ToolOutput::ok(content))
+    }
+}
+
+fn has_unsupported_binary_signature(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"%PDF-")
+        || bytes.starts_with(b"PK\x03\x04")
+        || bytes.starts_with(b"PK\x05\x06")
+        || bytes.starts_with(b"PK\x07\x08")
+        || bytes.starts_with(b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1")
+}
+
+fn sniff_image_media_type(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some(("image/png", "png"))
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        Some(("image/jpeg", "jpg"))
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some(("image/gif", "gif"))
+    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some(("image/webp", "webp"))
+    } else {
+        None
+    }
+}
+
+async fn read_bounded_file(
+    path: &Path,
+    max_bytes: usize,
+    cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
+) -> Result<Vec<u8>, ToolError> {
+    let path = path.to_path_buf();
+    let read = async move {
+        let file = fs::File::open(&path).await.map_err(|error| {
+            ToolError::Io(match error.kind() {
                 std::io::ErrorKind::NotFound => std::io::Error::new(
                     std::io::ErrorKind::NotFound,
                     format!("文件不存在: {}", path.display()),
                 ),
-                _ => e,
+                _ => error,
             })
         })?;
-        Ok(ToolOutput::ok(content))
+        let mut bytes = Vec::new();
+        let mut limited = file.take(max_bytes.saturating_add(1) as u64);
+        limited.read_to_end(&mut bytes).await?;
+        Ok(bytes)
+    };
+
+    let Some(mut cancel_rx) = cancel_rx else {
+        return read.await;
+    };
+    if *cancel_rx.borrow() {
+        return Err(ToolError::Other("用户已取消读取文件".to_string()));
+    }
+    tokio::pin!(read);
+    loop {
+        tokio::select! {
+            result = &mut read => return result,
+            changed = cancel_rx.changed() => {
+                if *cancel_rx.borrow() {
+                    return Err(ToolError::Other("用户已取消读取文件".to_string()));
+                }
+                if changed.is_err() {
+                    return read.await;
+                }
+            }
+        }
     }
 }
 
@@ -565,7 +702,8 @@ impl Tool for AskUserTool {
         // ask_user 不走 execute — 由 chat::ChatEngine::send_message 的专门分支处理
         // 如果走到这里,说明调用链出了 bug
         Err(ToolError::Other(
-            "ask_user.execute should not be called; handled by chat::ChatEngine::send_message".to_string(),
+            "ask_user.execute should not be called; handled by chat::ChatEngine::send_message"
+                .to_string(),
         ))
     }
 }
@@ -687,6 +825,144 @@ mod tests {
         let tool = ReadFileTool;
         let out = tool.execute(json!({}), ToolContext::default()).await;
         assert!(matches!(out, Err(ToolError::InvalidArgs(_))));
+    }
+
+    #[tokio::test]
+    async fn test_read_file_png_requires_vision_and_returns_model_image() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("pixel.png");
+        let png = b"\x89PNG\r\n\x1a\nminimal-png";
+        tokio::fs::write(&path, png).await.unwrap();
+        let tool = ReadFileTool;
+
+        let unsupported = tool
+            .execute(
+                json!({ "path": path.to_string_lossy() }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(
+            matches!(unsupported, Err(ToolError::Other(message)) if message.contains("不支持图片"))
+        );
+
+        let out = tool
+            .execute(
+                json!({ "path": path.to_string_lossy() }),
+                ToolContext {
+                    supports_vision: true,
+                    max_image_bytes: 1024,
+                    ..ToolContext::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(out.images.len(), 1);
+        assert_eq!(out.model_images.len(), 1);
+        let image = &out.model_images[0];
+        assert_eq!(out.images[0].id, image.id);
+        assert_eq!(image.media_type, "image/png");
+        assert_eq!(
+            image.path,
+            std::fs::canonicalize(&path).unwrap().to_string_lossy()
+        );
+        assert!(image.data_url.starts_with("data:image/png;base64,"));
+        assert!(!image.id.is_empty());
+        assert!(out.content.contains("已读取图片"));
+    }
+
+    #[tokio::test]
+    async fn test_read_file_rejects_oversized_image_and_binary() {
+        let tmp = TempDir::new().unwrap();
+        let image_path = tmp.path().join("large.png");
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend_from_slice(b"0123456789");
+        tokio::fs::write(&image_path, png).await.unwrap();
+        let tool = ReadFileTool;
+        let too_large = tool
+            .execute(
+                json!({ "path": image_path.to_string_lossy() }),
+                ToolContext {
+                    supports_vision: true,
+                    max_image_bytes: 8,
+                    ..ToolContext::default()
+                },
+            )
+            .await;
+        assert!(
+            matches!(too_large, Err(ToolError::Other(message)) if message.contains("图片文件过大"))
+        );
+
+        let binary_path = tmp.path().join("data.bin");
+        tokio::fs::write(&binary_path, [0xff, 0x00, 0x81])
+            .await
+            .unwrap();
+        let binary = tool
+            .execute(
+                json!({ "path": binary_path.to_string_lossy() }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(
+            matches!(binary, Err(ToolError::Other(message)) if message.contains("不支持的二进制文件"))
+        );
+
+        for (name, bytes) in vec![
+            ("document.pdf", b"%PDF-1.7".to_vec()),
+            ("archive.zip", b"PK\x03\x04archive".to_vec()),
+            (
+                "document.doc",
+                b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1ole".to_vec(),
+            ),
+            ("nul.txt", b"text\0payload".to_vec()),
+        ] {
+            let path = tmp.path().join(name);
+            tokio::fs::write(&path, bytes).await.unwrap();
+            let result = tool
+                .execute(
+                    json!({ "path": path.to_string_lossy() }),
+                    ToolContext::default(),
+                )
+                .await;
+            assert!(
+                matches!(result, Err(ToolError::Other(ref message)) if message.contains("不支持的二进制文件")),
+                "{name}: {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_file_rejects_oversized_text_without_truncation() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("large.txt");
+        tokio::fs::write(&path, "x".repeat(MAX_TEXT_FILE_BYTES + 1))
+            .await
+            .unwrap();
+        let out = ReadFileTool
+            .execute(
+                json!({ "path": path.to_string_lossy() }),
+                ToolContext::default(),
+            )
+            .await;
+        assert!(matches!(out, Err(ToolError::Other(message)) if message.contains("文本文件过大")));
+    }
+
+    #[tokio::test]
+    async fn test_read_file_honors_pre_cancelled_context() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("cancel.txt");
+        tokio::fs::write(&path, "content").await.unwrap();
+        let (tx, rx) = tokio::sync::watch::channel(true);
+        let out = ReadFileTool
+            .execute(
+                json!({ "path": path.to_string_lossy() }),
+                ToolContext {
+                    cancel_rx: Some(rx),
+                    ..ToolContext::default()
+                },
+            )
+            .await;
+        drop(tx);
+        assert!(matches!(out, Err(ToolError::Other(message)) if message.contains("取消")));
     }
 
     // ── create_file ──

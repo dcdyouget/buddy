@@ -80,15 +80,18 @@ pub struct ChatFinished {
 /// - 返回的 `Task` 在对话结束（事件通道关闭）后完成；丢弃它只停止前台交付，不影响生成。
 pub fn start_chat<T: 'static>(
     engine: Arc<ChatEngine>,
-    messages: Vec<Message>,
+    current: Message,
     model_id: String,
     cx: &mut Context<T>,
     on_batch: impl Fn(&mut T, Vec<StreamEvent>, &mut Context<T>) + 'static,
 ) -> Task<ChatFinished> {
     let (emitter, mut rx) = StreamEventEmitter::channel();
     // 分离式 spawn：JoinHandle 被 drop 不会 abort（见模块文档）
-    let join = gpui_tokio::Tokio::handle(cx)
-        .spawn(async move { engine.send_message(emitter, messages, model_id).await });
+    let join = gpui_tokio::Tokio::handle(cx).spawn(async move {
+        engine
+            .send_message_from_history(emitter, current, model_id)
+            .await
+    });
 
     cx.spawn(async move |this: WeakEntity<T>, cx: &mut AsyncApp| {
         let (mut events, mut batches) = (0usize, 0usize);
@@ -104,7 +107,9 @@ pub fn start_chat<T: 'static>(
             events += batch.len();
             if view_alive {
                 batches += 1;
-                view_alive = this.update(cx, |view, cx| on_batch(view, batch, cx)).is_ok();
+                view_alive = this
+                    .update(cx, |view, cx| on_batch(view, batch, cx))
+                    .is_ok();
             }
             // 视图已销毁：继续把通道读空直到关闭，只是不再交付
         }
@@ -112,6 +117,10 @@ pub fn start_chat<T: 'static>(
             Ok(result) => result,
             Err(error) => Err(format!("对话任务异常结束：{error}")),
         };
-        ChatFinished { result, events, batches }
+        ChatFinished {
+            result,
+            events,
+            batches,
+        }
     })
 }

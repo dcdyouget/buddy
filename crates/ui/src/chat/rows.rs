@@ -94,7 +94,11 @@ pub struct Row {
 
 fn msg_of(kind: &RowKind) -> usize {
     match kind {
-        RowKind::User { msg } | RowKind::Block { msg, .. } | RowKind::Tool { msg, .. } | RowKind::Pending { msg } | RowKind::Actions { msg } => *msg,
+        RowKind::User { msg }
+        | RowKind::Block { msg, .. }
+        | RowKind::Tool { msg, .. }
+        | RowKind::Pending { msg }
+        | RowKind::Actions { msg } => *msg,
     }
 }
 
@@ -113,14 +117,24 @@ fn block_fingerprint(block: &ContentBlock) -> u64 {
 
 fn tool_fingerprint(tool: Option<&ToolView>) -> u64 {
     match tool {
-        Some(t) => fingerprint((&t.name, t.arguments.len(), t.status as u8, &t.result, t.is_error, &t.images)),
+        Some(t) => fingerprint((
+            &t.name,
+            t.arguments.len(),
+            t.status as u8,
+            &t.result,
+            t.is_error,
+            &t.images,
+        )),
         None => 0,
     }
 }
 
 /// 某条 assistant 消息当前应显示的块：流式中的最后一条 assistant 取实时块
-fn blocks_of<'a>(state: &'a ChatState, msg: usize) -> (&'a [ContentBlock], bool) {
-    let live_ix = state.live.as_ref().and_then(|_| state.messages.iter().rposition(|m| m.role == MessageRole::Assistant));
+fn blocks_of<'a>(
+    state: &'a ChatState,
+    msg: usize,
+    live_ix: Option<usize>,
+) -> (&'a [ContentBlock], bool) {
     match (&state.live, live_ix) {
         (Some(live), Some(ix)) if ix == msg => (&live.blocks, true),
         _ => (state.messages[msg].blocks.as_deref().unwrap_or(&[]), false),
@@ -130,11 +144,20 @@ fn blocks_of<'a>(state: &'a ChatState, msg: usize) -> (&'a [ContentBlock], bool)
 /// 该消息应显示的工具调用 id（v1：实时优先、按 id 去重，其后接已持久化的）
 fn calls_of(state: &ChatState, msg: usize, live: bool) -> Vec<String> {
     let mut ids: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     if live {
-        ids.extend(state.live.as_ref().map(|l| l.active_ids()).unwrap_or_default());
+        for id in state
+            .live
+            .as_ref()
+            .map(|l| l.active_ids())
+            .unwrap_or_default()
+        {
+            seen.insert(id.clone());
+            ids.push(id);
+        }
     }
     for call in state.messages[msg].tool_calls.iter().flatten() {
-        if !ids.contains(&call.id) {
+        if seen.insert(call.id.clone()) {
             ids.push(call.id.clone());
         }
     }
@@ -143,7 +166,9 @@ fn calls_of(state: &ChatState, msg: usize, live: bool) -> Vec<String> {
 
 /// 分桶：-1..=n（v1 `toolCallsByIndex`）
 fn bucket(state: &ChatState, calls: &[String], block_count: usize) -> HashMap<i32, Vec<String>> {
-    let has_any = calls.iter().any(|c| state.tools.get(c).and_then(|t| t.insert_after).is_some());
+    let has_any = calls
+        .iter()
+        .any(|c| state.tools.get(c).and_then(|t| t.insert_after).is_some());
     let fallback = block_count as i32 - 1; // 无块时即 -1
     let mut out: HashMap<i32, Vec<String>> = HashMap::new();
     for c in calls {
@@ -152,7 +177,9 @@ fn bucket(state: &ChatState, calls: &[String], block_count: usize) -> HashMap<i3
             None if has_any => block_count as i32,
             None => fallback,
         };
-        out.entry(requested.clamp(-1, block_count as i32)).or_default().push(c.clone());
+        out.entry(requested.clamp(-1, block_count as i32))
+            .or_default()
+            .push(c.clone());
     }
     out
 }
@@ -160,9 +187,21 @@ fn bucket(state: &ChatState, calls: &[String], block_count: usize) -> HashMap<i3
 /// 由对话状态生成全部行（纯函数）
 pub fn build_rows(state: &ChatState) -> Vec<Row> {
     let mut rows = Vec::new();
+    // 这些值原来在每条 assistant 行中重复扫描全部消息；流式每个增量都会重建行模型，
+    // 因此把它们提升到本次构建之外，避免历史较长时出现平方级开销。
+    let live_ix = state.live.as_ref().and_then(|_| {
+        state
+            .messages
+            .iter()
+            .rposition(|m| m.role == MessageRole::Assistant)
+    });
+    let next_assistant = next_assistant_flags(state);
     // 开头没有用户消息的助手行（分页边界）锚在首条消息上：各页开头的 `head` 行 id 不能相同，
     // 否则并入更早一页时 diff 会把两页的开头行误认作同一行（T22 发现）
-    let mut anchor = format!("head-{}", state.messages.first().map_or("", |m| m.id.as_str()));
+    let mut anchor = format!(
+        "head-{}",
+        state.messages.first().map_or("", |m| m.id.as_str())
+    );
     let mut assistant_ordinal = 0usize;
     for (ix, message) in state.messages.iter().enumerate() {
         match message.role {
@@ -172,7 +211,10 @@ pub fn build_rows(state: &ChatState) -> Vec<Row> {
                 rows.push(Row {
                     id: message.id.clone(),
                     kind: RowKind::User { msg: ix },
-                    version: fingerprint((&message.content, message.images.iter().map(|i| &i.id).collect::<Vec<_>>())),
+                    version: fingerprint((
+                        &message.content,
+                        message.images.iter().map(|i| &i.id).collect::<Vec<_>>(),
+                    )),
                     pos: RowPos::default(),
                 });
             }
@@ -180,14 +222,17 @@ pub fn build_rows(state: &ChatState) -> Vec<Row> {
             MessageRole::Assistant => {
                 let m = assistant_ordinal;
                 assistant_ordinal += 1;
-                let (blocks, live) = blocks_of(state, ix);
+                let (blocks, live) = blocks_of(state, ix, live_ix);
                 let calls = calls_of(state, ix, live);
                 let buckets = bucket(state, &calls, blocks.len());
                 let push_tools = |rows: &mut Vec<Row>, at: i32| {
                     for call in buckets.get(&at).into_iter().flatten() {
                         rows.push(Row {
                             id: format!("{anchor}#{m}.t.{call}"),
-                            kind: RowKind::Tool { msg: ix, call: call.clone() },
+                            kind: RowKind::Tool {
+                                msg: ix,
+                                call: call.clone(),
+                            },
                             version: tool_fingerprint(state.tools.get(call)),
                             pos: RowPos::default(),
                         });
@@ -197,12 +242,20 @@ pub fn build_rows(state: &ChatState) -> Vec<Row> {
                 push_tools(&mut rows, -1);
                 for (i, block) in blocks.iter().enumerate() {
                     // 空正文块（流式轮次分隔）不成行：它会在收尾时被去掉，成行则结束时闪一下
-                    let empty_text = matches!(block, ContentBlock::Text { content } if content.is_empty());
+                    let empty_text =
+                        matches!(block, ContentBlock::Text { content } if content.is_empty());
                     if !empty_text {
                         rows.push(Row {
                             id: format!("{anchor}#{m}.{i}"),
-                            kind: RowKind::Block { msg: ix, block: i, live },
-                            version: block_fingerprint(block),
+                            kind: RowKind::Block {
+                                msg: ix,
+                                block: i,
+                                live,
+                            },
+                            // `live` is part of the rendering source: when Done moves the
+                            // content from LiveTurn into the persisted assistant message,
+                            // the row id stays stable but its backing slice changes.
+                            version: fingerprint((block_fingerprint(block), live)),
                             pos: RowPos::default(),
                         });
                     }
@@ -212,10 +265,20 @@ pub fn build_rows(state: &ChatState) -> Vec<Row> {
                     push_tools(&mut rows, blocks.len() as i32);
                 }
                 if live && rows.len() == rows_before {
-                    rows.push(Row { id: format!("{anchor}#{m}.pending"), kind: RowKind::Pending { msg: ix }, version: 0, pos: RowPos::default() });
+                    rows.push(Row {
+                        id: format!("{anchor}#{m}.pending"),
+                        kind: RowKind::Pending { msg: ix },
+                        version: 0,
+                        pos: RowPos::default(),
+                    });
                 }
-                if !live && !next_visible_is_assistant(state, ix) && has_answer_text(message) {
-                    rows.push(Row { id: format!("{anchor}#{m}.actions"), kind: RowKind::Actions { msg: ix }, version: 0, pos: RowPos::default() });
+                if !live && !next_assistant[ix] && has_answer_text(message) {
+                    rows.push(Row {
+                        id: format!("{anchor}#{m}.actions"),
+                        kind: RowKind::Actions { msg: ix },
+                        version: 0,
+                        pos: RowPos::default(),
+                    });
                 }
             }
         }
@@ -224,37 +287,56 @@ pub fn build_rows(state: &ChatState) -> Vec<Row> {
     rows
 }
 
-/// 下一条可见消息（跳过 tool）是否为助手（v1 `continuesToNext`）
-fn next_visible_is_assistant(state: &ChatState, ix: usize) -> bool {
-    state.messages[ix + 1..].iter().find(|m| m.role != MessageRole::Tool).is_some_and(|m| m.role == MessageRole::Assistant)
+/// 对每个消息预计算「后面最近的可见消息是否为 assistant」。
+fn next_assistant_flags(state: &ChatState) -> Vec<bool> {
+    let mut flags = vec![false; state.messages.len()];
+    let mut next_is_assistant = false;
+    for ix in (0..state.messages.len()).rev() {
+        flags[ix] = next_is_assistant;
+        if state.messages[ix].role != MessageRole::Tool {
+            next_is_assistant = state.messages[ix].role == MessageRole::Assistant;
+        }
+    }
+    flags
 }
 
 /// v1 `hasAnswerText`：正文或任一正文块非空白
 pub fn has_answer_text(message: &Message) -> bool {
     !message.content.trim().is_empty()
-        || message.blocks.iter().flatten().any(|b| matches!(b, ContentBlock::Text { content } if !content.trim().is_empty()))
+        || message
+            .blocks
+            .iter()
+            .flatten()
+            .any(|b| matches!(b, ContentBlock::Text { content } if !content.trim().is_empty()))
 }
 
 /// 第二遍：按消息分组标出首 / 末行与续段关系，并把位置并入版本
 fn assign_positions(state: &ChatState, rows: &mut [Row]) {
     // 可见消息序列（tool 消息不显示）中，每条消息前后是否为助手
-    let visible: Vec<usize> = (0..state.messages.len()).filter(|&i| state.messages[i].role != MessageRole::Tool).collect();
-    let neighbor = |msg: usize, delta: isize| -> bool {
-        visible
-            .iter()
-            .position(|&v| v == msg)
-            .and_then(|p| visible.get(p.checked_add_signed(delta)?))
-            .is_some_and(|&n| state.messages[n].role == MessageRole::Assistant)
-    };
+    let visible: Vec<usize> = (0..state.messages.len())
+        .filter(|&i| state.messages[i].role != MessageRole::Tool)
+        .collect();
+    let mut visible_pos = vec![None; state.messages.len()];
+    for (position, &msg) in visible.iter().enumerate() {
+        visible_pos[msg] = Some(position);
+    }
     let n = rows.len();
     for i in 0..n {
         let msg = msg_of(&rows[i].kind);
         let assistant = state.messages[msg].role == MessageRole::Assistant;
+        let position = visible_pos[msg];
+        let previous_is_assistant = position
+            .and_then(|p| p.checked_sub(1))
+            .and_then(|p| visible.get(p))
+            .is_some_and(|&neighbor| state.messages[neighbor].role == MessageRole::Assistant);
+        let next_is_assistant = position
+            .and_then(|p| visible.get(p + 1))
+            .is_some_and(|&neighbor| state.messages[neighbor].role == MessageRole::Assistant);
         let pos = RowPos {
             first: i == 0 || msg_of(&rows[i - 1].kind) != msg,
             last: i + 1 == n || msg_of(&rows[i + 1].kind) != msg,
-            continuation: assistant && neighbor(msg, -1),
-            continues: assistant && neighbor(msg, 1),
+            continuation: assistant && previous_is_assistant,
+            continues: assistant && next_is_assistant,
         };
         rows[i].version = fingerprint((rows[i].version, pos));
         rows[i].pos = pos;
@@ -281,10 +363,22 @@ impl Splice {
 
 /// 按 id 求公共前缀与后缀，中间整体替换（Comet 做法：一次最小 `splice`）
 pub fn diff(old: &[Row], new: &[Row]) -> Splice {
-    let prefix = old.iter().zip(new).take_while(|(a, b)| a.id == b.id).count();
+    let prefix = old
+        .iter()
+        .zip(new)
+        .take_while(|(a, b)| a.id == b.id)
+        .count();
     let max_suffix = old.len().min(new.len()) - prefix;
-    let suffix = old.iter().rev().zip(new.iter().rev()).take(max_suffix).take_while(|(a, b)| a.id == b.id).count();
-    let mut remeasure: Vec<usize> = (0..prefix).filter(|&i| old[i].version != new[i].version).collect();
+    let suffix = old
+        .iter()
+        .rev()
+        .zip(new.iter().rev())
+        .take(max_suffix)
+        .take_while(|(a, b)| a.id == b.id)
+        .count();
+    let mut remeasure: Vec<usize> = (0..prefix)
+        .filter(|&i| old[i].version != new[i].version)
+        .collect();
     for k in 0..suffix {
         let (o, n) = (old.len() - 1 - k, new.len() - 1 - k);
         if old[o].version != new[n].version {
@@ -292,7 +386,11 @@ pub fn diff(old: &[Row], new: &[Row]) -> Splice {
         }
     }
     remeasure.sort_unstable();
-    Splice { old_range: prefix..old.len() - suffix, new_count: new.len() - suffix - prefix, remeasure }
+    Splice {
+        old_range: prefix..old.len() - suffix,
+        new_count: new.len() - suffix - prefix,
+        remeasure,
+    }
 }
 
 /// 与轮次锚点无关的行键（消息 id + 行内位置）。行 id 以本轮用户消息为锚；分页边界处的
@@ -346,7 +444,16 @@ mod tests {
             blocks: Some(blocks),
             model_id: Some("m".into()),
             created_at: 0,
-            tool_calls: (!calls.is_empty()).then(|| calls.into_iter().map(|c| ToolCall { id: c.into(), name: "websearch".into(), arguments: "{}".into() }).collect()),
+            tool_calls: (!calls.is_empty()).then(|| {
+                calls
+                    .into_iter()
+                    .map(|c| ToolCall {
+                        id: c.into(),
+                        name: "websearch".into(),
+                        arguments: "{}".into(),
+                    })
+                    .collect()
+            }),
             tool_call_id: None,
             tool_name: None,
             is_error: None,
@@ -384,11 +491,31 @@ mod tests {
         // 用户 → 助手（思考 + 正文，调用在最后一块之后）→ tool（不显示）→ 助手续段
         let state = ChatState::from_history(vec![
             user("u1", "问"),
-            assistant("a1", vec![ContentBlock::Thinking { content: "想".into(), is_open: false }, text("先查")], vec!["c1"]),
+            assistant(
+                "a1",
+                vec![
+                    ContentBlock::Thinking {
+                        content: "想".into(),
+                        is_open: false,
+                    },
+                    text("先查"),
+                ],
+                vec!["c1"],
+            ),
             tool("t1", "c1"),
             assistant("a2", vec![text("答")], vec![]),
         ]);
-        assert_eq!(ids(&build_rows(&state)), vec!["u1", "u1#0.0", "u1#0.1", "u1#0.t.c1", "u1#1.0", "u1#1.actions"]);
+        assert_eq!(
+            ids(&build_rows(&state)),
+            vec![
+                "u1",
+                "u1#0.0",
+                "u1#0.1",
+                "u1#0.t.c1",
+                "u1#1.0",
+                "u1#1.actions"
+            ]
+        );
     }
 
     #[test]
@@ -400,7 +527,10 @@ mod tests {
             assistant("a2", vec![text("答")], vec![]),
         ]);
         let rows = build_rows(&state);
-        let pos: Vec<(bool, bool, bool, bool)> = rows.iter().map(|r| (r.pos.first, r.pos.last, r.pos.continuation, r.pos.continues)).collect();
+        let pos: Vec<(bool, bool, bool, bool)> = rows
+            .iter()
+            .map(|r| (r.pos.first, r.pos.last, r.pos.continuation, r.pos.continues))
+            .collect();
         assert_eq!(
             pos,
             vec![
@@ -418,18 +548,28 @@ mod tests {
     fn prepending_history_keeps_stable_keys() {
         let text = |s: &str| vec![ContentBlock::Text { content: s.into() }];
         // 最新一页以助手消息开头（它的提问在更早一页）
-        let mut s = ChatState::from_history(vec![assistant("a3", text("答二"), vec![]), user("u4", "问三"), assistant("a5", text("答三"), vec![])]);
+        let mut s = ChatState::from_history(vec![
+            assistant("a3", text("答二"), vec![]),
+            user("u4", "问三"),
+            assistant("a5", text("答三"), vec![]),
+        ]);
         let old = build_rows(&s);
         assert_eq!(old[0].id, "head-a3#0.0");
         let old_top_key = stable_key(&s, &old[0]);
         // 更早一页同样以助手消息开头：两页的开头行 id 不能相同
-        s.prepend_history(vec![assistant("a1", text("答一"), vec![]), user("u2", "问二")]);
+        s.prepend_history(vec![
+            assistant("a1", text("答一"), vec![]),
+            user("u2", "问二"),
+        ]);
         let new = build_rows(&s);
         assert_eq!(new[0].id, "head-a1#0.0");
         let change = diff(&old, &new);
         assert_eq!(change.old_range.start, 0, "边界行改锚 → 在替换区间内");
         // 改锚后的边界行可按行键找回
-        let found = new.iter().position(|r| stable_key(&s, r) == old_top_key).unwrap();
+        let found = new
+            .iter()
+            .position(|r| stable_key(&s, r) == old_top_key)
+            .unwrap();
         assert_eq!(new[found].id, "u2#0.0");
     }
 
@@ -442,30 +582,77 @@ mod tests {
             tool("t1", "c1"),
             assistant("a2", vec![text("答")], vec![]),
             user("u2", "再问"),
-            assistant("a3", vec![ContentBlock::Thinking { content: "想".into(), is_open: false }], vec![]),
+            assistant(
+                "a3",
+                vec![ContentBlock::Thinking {
+                    content: "想".into(),
+                    is_open: false,
+                }],
+                vec![],
+            ),
         ]);
         let ids: Vec<String> = build_rows(&state).into_iter().map(|r| r.id).collect();
-        assert!(ids.contains(&"u1#1.actions".to_string()) && !ids.contains(&"u1#0.actions".to_string()), "{ids:?}");
-        assert!(!ids.iter().any(|i| i.starts_with("u2#") && i.ends_with(".actions")), "{ids:?}");
+        assert!(
+            ids.contains(&"u1#1.actions".to_string()) && !ids.contains(&"u1#0.actions".to_string()),
+            "{ids:?}"
+        );
+        assert!(
+            !ids.iter()
+                .any(|i| i.starts_with("u2#") && i.ends_with(".actions")),
+            "{ids:?}"
+        );
         // 流式中不显示；结束后出现（只插入一行，其余行 id 不变）
         let mut live = ChatState::from_history(Vec::new());
         live.begin_send(user("u", "问"), "m");
-        live.push_event(StreamEvent::TextDelta { content_index: 0, delta: "答".into() }, 0.0);
+        live.push_event(
+            StreamEvent::TextDelta {
+                content_index: 0,
+                delta: "答".into(),
+            },
+            0.0,
+        );
         live.flush(0.0);
         let during: Vec<String> = build_rows(&live).into_iter().map(|r| r.id).collect();
         assert!(!during.iter().any(|i| i.ends_with(".actions")));
-        live.push_event(StreamEvent::Done { reason: StopReason::Stop, full_text: String::new() }, 0.0);
+        live.push_event(
+            StreamEvent::Done {
+                reason: StopReason::Stop,
+                full_text: String::new(),
+            },
+            0.0,
+        );
         let after: Vec<String> = build_rows(&live).into_iter().map(|r| r.id).collect();
-        assert_eq!(after, vec!["u".to_string(), "u#0.0".into(), "u#0.actions".into()]);
+        assert_eq!(
+            after,
+            vec!["u".to_string(), "u#0.0".into(), "u#0.actions".into()]
+        );
     }
 
     #[test]
     fn insert_after_buckets_match_v1() {
-        let mut state = ChatState::from_history(vec![user("u", "q"), assistant("a", vec![text("一"), text("二")], vec!["before", "mid", "unplaced"])]);
+        let mut state = ChatState::from_history(vec![
+            user("u", "q"),
+            assistant(
+                "a",
+                vec![text("一"), text("二")],
+                vec!["before", "mid", "unplaced"],
+            ),
+        ]);
         state.tools.get_mut("before").unwrap().insert_after = Some(-1);
         state.tools.get_mut("mid").unwrap().insert_after = Some(0);
         // 同一消息中有调用带位置 → 无位置者放到全部块之后
-        assert_eq!(ids(&build_rows(&state)), vec!["u", "u#0.t.before", "u#0.0", "u#0.t.mid", "u#0.1", "u#0.t.unplaced", "u#0.actions"]);
+        assert_eq!(
+            ids(&build_rows(&state)),
+            vec![
+                "u",
+                "u#0.t.before",
+                "u#0.0",
+                "u#0.t.mid",
+                "u#0.1",
+                "u#0.t.unplaced",
+                "u#0.actions"
+            ]
+        );
     }
 
     #[test]
@@ -475,19 +662,55 @@ mod tests {
         live.begin_send(user("u1", "问"), "m");
         let events = vec![
             StreamEvent::ThinkingStart { content_index: 0 },
-            StreamEvent::ThinkingDelta { content_index: 0, delta: "想".into() },
-            StreamEvent::ThinkingEnd { content_index: 0, content: "想".into() },
+            StreamEvent::ThinkingDelta {
+                content_index: 0,
+                delta: "想".into(),
+            },
+            StreamEvent::ThinkingEnd {
+                content_index: 0,
+                content: "想".into(),
+            },
             StreamEvent::TextStart { content_index: 0 },
-            StreamEvent::TextDelta { content_index: 0, delta: "先查".into() },
-            StreamEvent::TextEnd { content_index: 0, content: "先查".into() },
-            StreamEvent::ToolCallStart { id: "c1".into(), name: "websearch".into(), content_index: 0 },
-            StreamEvent::ToolCallEnd { id: "c1".into(), name: "websearch".into(), arguments: "{}".into() },
-            StreamEvent::TurnEnd { tool_calls_pending: 1 },
-            StreamEvent::ToolResult { id: "c1".into(), name: "websearch".into(), content: "结果".into(), images: Vec::new(), is_error: false },
+            StreamEvent::TextDelta {
+                content_index: 0,
+                delta: "先查".into(),
+            },
+            StreamEvent::TextEnd {
+                content_index: 0,
+                content: "先查".into(),
+            },
+            StreamEvent::ToolCallStart {
+                id: "c1".into(),
+                name: "websearch".into(),
+                content_index: 0,
+            },
+            StreamEvent::ToolCallEnd {
+                id: "c1".into(),
+                name: "websearch".into(),
+                arguments: "{}".into(),
+            },
+            StreamEvent::TurnEnd {
+                tool_calls_pending: 1,
+            },
+            StreamEvent::ToolResult {
+                id: "c1".into(),
+                name: "websearch".into(),
+                content: "结果".into(),
+                images: Vec::new(),
+                is_error: false,
+            },
             StreamEvent::TextStart { content_index: 0 },
-            StreamEvent::TextDelta { content_index: 0, delta: "答".into() },
-            StreamEvent::TextEnd { content_index: 0, content: "答".into() },
-            StreamEvent::TurnEnd { tool_calls_pending: 0 },
+            StreamEvent::TextDelta {
+                content_index: 0,
+                delta: "答".into(),
+            },
+            StreamEvent::TextEnd {
+                content_index: 0,
+                content: "答".into(),
+            },
+            StreamEvent::TurnEnd {
+                tool_calls_pending: 0,
+            },
         ];
         let mut seen: Vec<String> = build_rows(&live).into_iter().map(|r| r.id).collect();
         for e in events {
@@ -499,47 +722,135 @@ mod tests {
                 }
             }
         }
-        live.push_event(StreamEvent::Done { reason: StopReason::Stop, full_text: String::new() }, 0.0);
-        let finished = ids(&build_rows(&live)).into_iter().map(String::from).collect::<Vec<_>>();
+        let before_done = build_rows(&live);
+        live.push_event(
+            StreamEvent::Done {
+                reason: StopReason::Stop,
+                full_text: String::new(),
+            },
+            0.0,
+        );
+        let after_done = build_rows(&live);
+        for before in &before_done {
+            if let Some(after) = after_done.iter().find(|row| row.id == before.id)
+                && matches!(before.kind, RowKind::Block { live: true, .. })
+            {
+                assert_ne!(
+                    before.version, after.version,
+                    "live flag must invalidate {}",
+                    before.id
+                );
+            }
+        }
+        let finished = ids(&after_done)
+            .into_iter()
+            .map(String::from)
+            .collect::<Vec<_>>();
         // engine 持久化的形态（id 不同，结构相同）
         let reloaded = ChatState::from_history(vec![
             user("u1", "问"),
-            assistant("a-0-1", vec![ContentBlock::Thinking { content: "想".into(), is_open: false }, text("先查")], vec!["c1"]),
+            assistant(
+                "a-0-1",
+                vec![
+                    ContentBlock::Thinking {
+                        content: "想".into(),
+                        is_open: false,
+                    },
+                    text("先查"),
+                ],
+                vec!["c1"],
+            ),
             tool("t-0-2", "c1"),
             assistant("a-1-3", vec![text("答")], vec![]),
         ]);
-        assert_eq!(finished, vec!["u1", "u1#0.0", "u1#0.1", "u1#0.t.c1", "u1#1.0", "u1#1.actions"]);
-        assert_eq!(ids(&build_rows(&reloaded)), finished.iter().map(String::as_str).collect::<Vec<_>>());
+        assert_eq!(
+            finished,
+            vec![
+                "u1",
+                "u1#0.0",
+                "u1#0.1",
+                "u1#0.t.c1",
+                "u1#1.0",
+                "u1#1.actions"
+            ]
+        );
+        assert_eq!(
+            ids(&build_rows(&reloaded)),
+            finished.iter().map(String::as_str).collect::<Vec<_>>()
+        );
         // 流式过程中出现过的 id 都在最终集合里（没有只在流式中存在、结束时消失的行）；
         // 例外只有「尚无内容」占位行，它按设计只在流式中存在
-        assert!(seen.iter().filter(|id| !id.ends_with(".pending")).all(|id| finished.contains(id)), "{seen:?}");
-        assert!(seen.iter().any(|id| id == "u1#0.pending"), "发送后、首个内容前应有占位行：{seen:?}");
+        assert!(
+            seen.iter()
+                .filter(|id| !id.ends_with(".pending"))
+                .all(|id| finished.contains(id)),
+            "{seen:?}"
+        );
+        assert!(
+            seen.iter().any(|id| id == "u1#0.pending"),
+            "发送后、首个内容前应有占位行：{seen:?}"
+        );
         assert_eq!(live.tools["c1"].status, ToolStatus::Done);
     }
 
     #[test]
     fn streaming_changes_only_last_row() {
-        let mut s = ChatState::from_history(vec![user("u0", "旧问"), assistant("a0", vec![text("旧答")], vec![])]);
+        let mut s = ChatState::from_history(vec![
+            user("u0", "旧问"),
+            assistant("a0", vec![text("旧答")], vec![]),
+        ]);
         s.begin_send(user("u1", "问"), "m");
-        s.push_event(StreamEvent::TextDelta { content_index: 0, delta: "答".repeat(40) }, 0.0);
+        s.push_event(
+            StreamEvent::TextDelta {
+                content_index: 0,
+                delta: "答".repeat(40),
+            },
+            0.0,
+        );
         s.tick(0.0);
         let before = build_rows(&s);
         s.tick(40.0);
         let after = build_rows(&s);
         let d = diff(&before, &after);
-        assert!(d.old_range.is_empty() && d.new_count == 0, "行集合不变：{d:?}");
-        assert_eq!(d.remeasure, vec![after.len() - 1], "只有最后一行需要重新测量");
+        assert!(
+            d.old_range.is_empty() && d.new_count == 0,
+            "行集合不变：{d:?}"
+        );
+        assert_eq!(
+            d.remeasure,
+            vec![after.len() - 1],
+            "只有最后一行需要重新测量"
+        );
     }
 
     #[test]
     fn diff_is_minimal_splice() {
-        let r = |id: &str, v: u64| Row { id: id.into(), kind: RowKind::User { msg: 0 }, version: v, pos: RowPos::default() };
+        let r = |id: &str, v: u64| Row {
+            id: id.into(),
+            kind: RowKind::User { msg: 0 },
+            version: v,
+            pos: RowPos::default(),
+        };
         let old = vec![r("a", 1), r("b", 1), r("c", 1)];
         let new = vec![r("a", 1), r("b", 2), r("x", 1), r("c", 1)];
-        assert_eq!(diff(&old, &new), Splice { old_range: 2..2, new_count: 1, remeasure: vec![1] });
+        assert_eq!(
+            diff(&old, &new),
+            Splice {
+                old_range: 2..2,
+                new_count: 1,
+                remeasure: vec![1]
+            }
+        );
         // 顶部插入更早历史
         let new = vec![r("z", 1), r("a", 1), r("b", 1), r("c", 1)];
-        assert_eq!(diff(&old, &new), Splice { old_range: 0..0, new_count: 1, remeasure: vec![] });
+        assert_eq!(
+            diff(&old, &new),
+            Splice {
+                old_range: 0..0,
+                new_count: 1,
+                remeasure: vec![]
+            }
+        );
         assert!(diff(&old, &old).is_noop());
     }
 }

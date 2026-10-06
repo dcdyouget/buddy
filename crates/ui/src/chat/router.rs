@@ -5,7 +5,7 @@
 //! | 输入 | 处理 |
 //! |------|------|
 //! | 启动 | [`preload`] 读配置与最新一页历史（经 tokio），页面为 `empty`（不因已有历史自动进入对话） |
-//! | 输入区发送 | 空态页按 [`classify_empty_send`] 判定；其余页需有默认模型。`send_message(历史 + 用户消息)` 经 [`chat_bridge::start_chat`] |
+//! | 输入区发送 | 空态页按 [`classify_empty_send`] 判定；其余页需有默认模型。`send_message_from_history(用户消息)` 经 [`chat_bridge::start_chat`] |
 //! | engine 事件 | [`Conversation::apply_events`]；流式结束时按是否 401 落点（`noapikey` / `conversation`） |
 //! | 界面生成的提示消息（配额 / 服务器 / 网络） | 取走 `pending_saves` → `save_message`（v1 `saveMessage`） |
 //! | 历史分页 | [`Conversation::with_history_page`] + `load_messages`（读取前先把偏移换算为「最新一页」） |
@@ -456,7 +456,9 @@ impl PageRouter {
         let max_image_bytes = self
             .selected_model()
             .and_then(|m| self.config.providers.iter().find(|p| p.id == m.provider_id))
-            .map_or(buddy_engine::models::DEFAULT_IMAGE_BYTES, |p| p.max_image_bytes());
+            .map_or(buddy_engine::models::DEFAULT_IMAGE_BYTES, |p| {
+                p.max_image_bytes()
+            });
         self.composer.update(cx, |c, cx| {
             c.set_max_image_bytes(max_image_bytes);
             c.set_supports_vision(vision, cx);
@@ -519,7 +521,7 @@ impl PageRouter {
         }
     }
 
-    /// 发起对话（v1 `sendMessage`）：发给 engine 的是「已载入的历史 + 本条用户消息」
+    /// 发起对话：仅提交本条用户消息，engine 按预算加载持久化上下文。
     fn start(
         &mut self,
         text: String,
@@ -531,15 +533,15 @@ impl PageRouter {
             c.set_draft("", cx);
             let _ = c.take_images(cx);
         });
-        let messages = self.conversation.update(cx, |c, cx| {
+        let current = self.conversation.update(cx, |c, cx| {
             c.begin_send(user_message_with_images(&text, images), &model_id, cx);
             let all = &c.state.messages;
-            all[..all.len() - 1].to_vec()
+            all[all.len() - 2].clone()
         });
         let conversation = self.conversation.clone();
         let task = chat_bridge::start_chat(
             self.engine.clone(),
-            messages,
+            current,
             model_id,
             cx,
             move |_, events, cx| {

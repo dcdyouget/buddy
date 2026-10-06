@@ -40,12 +40,12 @@ use crate::theme_system::box_shadows;
 use crate::theme_system::{BuddyTheme, tokens::metrics as m};
 use buddy_engine::models::MessageRole;
 use buddy_engine::streaming::ContentBlock;
+use gpui::MouseButton;
 use gpui::ScrollHandle;
 use gpui::{
     AnyElement, App, Context, Entity, FollowMode, Hsla, ListAlignment, ListState, Pixels, Render,
     RetainAllImageCache, SharedString, Subscription, Task, Window, div, list, prelude::*, px,
 };
-use gpui::MouseButton;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -161,10 +161,11 @@ impl Transcript {
             });
         });
         let observe = cx.observe(&conversation, |this: &mut Self, _, cx| this.sync(cx));
-        let text_scale = cx.observe_global::<crate::theme_system::TextScale>(|this: &mut Self, cx| {
-            this.list.remeasure();
-            cx.notify();
-        });
+        let text_scale =
+            cx.observe_global::<crate::theme_system::TextScale>(|this: &mut Self, cx| {
+                this.list.remeasure();
+                cx.notify();
+            });
         let mut this = Self {
             conversation,
             list,
@@ -322,8 +323,9 @@ impl Transcript {
     fn update_markdown(&mut self, cx: &mut Context<Self>) {
         let state = &self.conversation.read(cx).state;
         let now = self.conversation.read(cx).now_ms();
-        // (行 id, 源文本, 版本, 是否纯文本)
-        let mut wanted: Vec<(String, String, u64, bool)> = Vec::new();
+        // (行 id, 可选的新源文本, 版本, 是否纯文本)。
+        // 流式增量只会改变最后一行；历史行保留相同版本时不再复制和规范化全文。
+        let mut wanted: Vec<(String, Option<String>, u64, bool)> = Vec::new();
         let mut reveal_ids = HashSet::new();
         for row in &self.rows {
             match &row.kind {
@@ -336,21 +338,31 @@ impl Transcript {
                     match blocks.and_then(|b| b.get(*block)) {
                         // 思考内容同样以 markdown 显示（v1 `ThinkSection` 展开后用 StreamingMarkdown）
                         Some(ContentBlock::Text { content }) => {
-                            let source = normalize_markdown(content);
-                            let live_reveal = *live && row.pos.last && state.live.is_some();
-                            self.reveal_timelines
-                                .entry(row.id.clone())
-                                .or_default()
-                                .observe(&source, now, live_reveal);
+                            let unchanged = self
+                                .markdown
+                                .get(&row.id)
+                                .is_some_and(|(_, version)| *version == row.version);
+                            if !unchanged {
+                                let source = normalize_markdown(content);
+                                let live_reveal = *live && row.pos.last && state.live.is_some();
+                                self.reveal_timelines
+                                    .entry(row.id.clone())
+                                    .or_default()
+                                    .observe(&source, now, live_reveal);
+                                wanted.push((row.id.clone(), Some(source), row.version, false));
+                            } else {
+                                wanted.push((row.id.clone(), None, row.version, false));
+                            }
                             reveal_ids.insert(row.id.clone());
+                        }
+                        Some(ContentBlock::Thinking { content, .. }) => {
+                            let source = (!self
+                                .markdown
+                                .get(&row.id)
+                                .is_some_and(|(_, version)| *version == row.version))
+                            .then(|| normalize_markdown(content));
                             wanted.push((row.id.clone(), source, row.version, false));
                         }
-                        Some(ContentBlock::Thinking { content, .. }) => wanted.push((
-                            row.id.clone(),
-                            normalize_markdown(content),
-                            row.version,
-                            false,
-                        )),
                         None => {}
                     }
                 }
@@ -358,19 +370,26 @@ impl Transcript {
                 RowKind::Tool { call, .. } => {
                     if let Some(tool) = state.tools.get(call) {
                         let (args, result) = tool_card::detail_sources(tool);
-                        wanted.push((format!("{}#args", row.id), args, row.version, false));
+                        wanted.push((format!("{}#args", row.id), Some(args), row.version, false));
                         if let Some((result, _)) = result {
-                            wanted.push((format!("{}#result", row.id), result, row.version, false));
+                            wanted.push((
+                                format!("{}#result", row.id),
+                                Some(result),
+                                row.version,
+                                false,
+                            ));
                         }
                     }
                 }
                 // 用户消息为纯文本（v1 `white-space: pre-wrap`，不解析 markdown），但要能选择复制 → 同样走 markdown 实体
-                RowKind::User { msg } => wanted.push((
-                    row.id.clone(),
-                    state.messages[*msg].content.clone(),
-                    row.version,
-                    true,
-                )),
+                RowKind::User { msg } => {
+                    let source = (!self
+                        .markdown
+                        .get(&row.id)
+                        .is_some_and(|(_, version)| *version == row.version))
+                    .then(|| state.messages[*msg].content.clone());
+                    wanted.push((row.id.clone(), source, row.version, true));
+                }
                 _ => {}
             }
         }
@@ -382,10 +401,13 @@ impl Transcript {
             let entry = match self.markdown.remove(&id) {
                 Some((md, v)) if v == version => (md, v),
                 Some((md, _)) => {
-                    md.update(cx, |m, cx| m.replace(source, cx));
+                    if let Some(source) = source {
+                        md.update(cx, |m, cx| m.replace(source, cx));
+                    }
                     (md, version)
                 }
                 None if plain => {
+                    let Some(source) = source else { continue };
                     let options = MarkdownOptions {
                         parse_links_only: true,
                         ..Default::default()
@@ -398,6 +420,7 @@ impl Transcript {
                     )
                 }
                 None => {
+                    let Some(source) = source else { continue };
                     let registry = registry.clone();
                     (
                         cx.new(|cx| Markdown::new(source.into(), Some(registry), None, cx)),
@@ -521,10 +544,7 @@ impl Transcript {
                             let mut style = markdown::message_style(window, cx);
                             let source = normalize_markdown(&content);
                             let live_reveal = *live && row.pos.last && state.live.is_some();
-                            let timeline = self
-                                .reveal_timelines
-                                .entry(row.id.clone())
-                                .or_default();
+                            let timeline = self.reveal_timelines.entry(row.id.clone()).or_default();
                             // Rendering can outlive the final state notification. Observe
                             // here as well so the last batch remains animated after Done.
                             timeline.observe(&source, now, live_reveal);
@@ -532,11 +552,7 @@ impl Transcript {
                             if let Some(live_turn) =
                                 state.live.as_ref().filter(|_| *live && row.pos.last)
                             {
-                                let tail = streaming::tail(
-                                    &source,
-                                    true,
-                                    live_turn.reveal_count,
-                                );
+                                let tail = streaming::tail(&source, true, live_turn.reveal_count);
                                 needs_frame = streaming::decorate(
                                     &mut style,
                                     &tail,
@@ -548,18 +564,17 @@ impl Transcript {
                             // The timeline veil is applied after the legacy stream
                             // decorations so it wins over their per-batch veil.
                             style.decorations.veil = None;
-                            needs_frame |= timeline.decorate(
-                                &mut style,
-                                now,
-                                &theme,
-                                reduce_motion,
-                            );
+                            needs_frame |=
+                                timeline.decorate(&mut style, now, &theme, reduce_motion);
                             if needs_frame {
                                 window.request_animation_frame();
                             }
                             message_row::with_blank_drag(
                                 MarkdownElement::new(md.clone(), style)
-                                    .code_block_renderer(code_block::renderer(md.downgrade(), *live))
+                                    .code_block_renderer(code_block::renderer(
+                                        md.downgrade(),
+                                        *live,
+                                    ))
                                     .on_url_click(|url, _, cx| markdown::gfm::open_link(&url, cx))
                                     .image_resolver(|url, _| markdown::gfm::image_source(url)),
                                 drag_source.clone(),
@@ -570,7 +585,8 @@ impl Transcript {
                     },
                     None => div().into_any_element(),
                 };
-                message_row::assistant_row_with_drag(row.pos, content, drag_source.clone()).into_any_element()
+                message_row::assistant_row_with_drag(row.pos, content, drag_source.clone())
+                    .into_any_element()
             }
             RowKind::Tool { call, msg } => {
                 let Some(tool) = state.tools.get(call).cloned() else {
@@ -605,7 +621,10 @@ impl Transcript {
                     let id = row.id.clone();
                     let weak = cx.entity().downgrade();
                     let now = self.conversation.read(cx).now_ms();
-                    let before_load: Vec<_> = attachments.iter().map(|image| self.image_load_state_for_test(&image.id)).collect();
+                    let before_load: Vec<_> = attachments
+                        .iter()
+                        .map(|image| self.image_load_state_for_test(&image.id))
+                        .collect();
                     let card = image_gen::block(
                         SharedString::from(format!("image-{}", row.id)),
                         &tool,
@@ -625,7 +644,10 @@ impl Transcript {
                         window,
                         cx,
                     );
-                    let after_load: Vec<_> = attachments.iter().map(|image| self.image_load_state_for_test(&image.id)).collect();
+                    let after_load: Vec<_> = attachments
+                        .iter()
+                        .map(|image| self.image_load_state_for_test(&image.id))
+                        .collect();
                     if before_load != after_load {
                         // Resource completion can change intrinsic height. ListState
                         // also caches overdraw rows, so invalidate after its layout lock is released.
@@ -644,7 +666,12 @@ impl Transcript {
                             });
                         });
                     }
-                    return message_row::assistant_row_with_drag(row.pos, card, drag_source.clone()).into_any_element();
+                    return message_row::assistant_row_with_drag(
+                        row.pos,
+                        card,
+                        drag_source.clone(),
+                    )
+                    .into_any_element();
                 }
                 if web_search::is_web_search(&tool.name) {
                     // v1 `ToolSection`：websearch 走专用卡片（外壳同思考块），默认折叠，可点开看来源
@@ -671,7 +698,12 @@ impl Transcript {
                         window,
                         cx,
                     );
-                    return message_row::assistant_row_with_drag(row.pos, card, drag_source.clone()).into_any_element();
+                    return message_row::assistant_row_with_drag(
+                        row.pos,
+                        card,
+                        drag_source.clone(),
+                    )
+                    .into_any_element();
                 }
                 let mut details = Vec::new();
                 if ask_card::shows_card(&tool.name, awaiting, expanded) {
@@ -701,8 +733,11 @@ impl Transcript {
                         let scroll = this.detail_scroll.entry(id.clone()).or_default().clone();
                         this.nested_scroll.borrow_mut().push(scroll.clone());
                         let content = message_row::with_blank_drag(
-                            MarkdownElement::new(md.clone(), markdown::tool_detail_style(window, cx))
-                                .code_block_renderer(code_block::compact_renderer(md.downgrade())),
+                            MarkdownElement::new(
+                                md.clone(),
+                                markdown::tool_detail_style(window, cx),
+                            )
+                            .code_block_renderer(code_block::compact_renderer(md.downgrade())),
                             drag_source.clone(),
                         )
                         .into_any_element();
@@ -757,7 +792,8 @@ impl Transcript {
                     window,
                     cx,
                 );
-                message_row::assistant_row_with_drag(row.pos, card, drag_source.clone()).into_any_element()
+                message_row::assistant_row_with_drag(row.pos, card, drag_source.clone())
+                    .into_any_element()
             }
             RowKind::Actions { msg } => {
                 let message = &state.messages[*msg];
@@ -791,7 +827,8 @@ impl Transcript {
                     },
                     cx,
                 );
-                message_row::assistant_row_with_drag(row.pos, bar, drag_source.clone()).into_any_element()
+                message_row::assistant_row_with_drag(row.pos, bar, drag_source.clone())
+                    .into_any_element()
             }
             // 回答尚无内容：只显示呼吸星标（v1 `StreamingNextStar`）
             RowKind::Pending { .. } => {

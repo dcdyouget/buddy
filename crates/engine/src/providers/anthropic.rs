@@ -19,12 +19,12 @@
 // ─── use 语句（= Java 的 import） ───
 // super::* 导入父模块（providers::mod）的所有 pub 项（ApiError, LlmProvider, extract_error_message）
 use super::{ApiError, LlmProvider};
-use crate::models::{get_context_window, CompatConfig, Message, MessageRole, ModelInfo, ToolCall};
+use crate::models::{CompatConfig, Message, MessageRole, ModelInfo, ToolCall, get_context_window};
 use crate::streaming::{StopReason, StreamEventEmitter, StreamOutcome};
 use crate::tools::ToolDefinition;
 use futures_util::StreamExt; // 为 Stream trait 提供 .next() 等适配器
 use log::{error, info, warn}; // 日志门面（log crate）
-use serde_json::{json, Value}; // 通用 JSON 值类型
+use serde_json::{Value, json}; // 通用 JSON 值类型
 use std::pin::Pin; // 用于 Pin<Box<...>>
 use std::time::{Duration, Instant}; // 时间段与耗时统计
 use tokio::sync::watch; // watch channel（取消信号）
@@ -139,8 +139,6 @@ impl AnthropicProvider {
                         }
                     }
                     MessageRole::Assistant => {
-                        let original_has_tool_calls =
-                            m.tool_calls.as_ref().is_some_and(|calls| !calls.is_empty());
                         // 只保留参数完整、且存在对应 tool_result 的调用；
                         // 主动停止/中断流时可能留下孤儿 tool_use 或半截 arguments。
                         let valid_calls: Vec<&ToolCall> = m
@@ -166,11 +164,9 @@ impl AnthropicProvider {
                             })
                             .collect();
 
-                        // 纯工具调用消息在中断后若没有任何可发送的调用，就不能留下空 assistant
-                        if original_has_tool_calls
-                            && valid_calls.is_empty()
-                            && m.content.trim().is_empty()
-                        {
+                        // API 不接受没有文本和 content block 的空 assistant；这类消息通常
+                        // 来自被中断的流式轮次，直接过滤掉。
+                        if m.content.trim().is_empty() && valid_calls.is_empty() {
                             return None;
                         }
 
@@ -236,7 +232,7 @@ impl AnthropicProvider {
             // 注意：字符串切片按字节边界；安全的前提是冒号是 ASCII
             let field = line[..colon_pos].trim(); // &str
             let value = line[colon_pos + 1..].trim(); // &str
-                                                      // Some((s1.to_string(), s2.to_string()))：把 &str 转为堆分配的 String
+            // Some((s1.to_string(), s2.to_string()))：把 &str 转为堆分配的 String
             Some((field.to_string(), value.to_string()))
         } else {
             None
@@ -415,7 +411,20 @@ impl LlmProvider for AnthropicProvider {
                 headers_ms
             );
             if !status.is_success() {
-                let body_text = response.text().await.unwrap_or_default();
+                let body_text = match super::response_text_cancellable(response, &mut cancel_rx)
+                    .await
+                    .map_err(|error| ApiError::NetworkError(error.to_string()))?
+                {
+                    Some(body) => body,
+                    None => {
+                        return Ok(StreamOutcome::failed(
+                            String::new(),
+                            String::new(),
+                            StopReason::Aborted,
+                            "用户取消",
+                        ));
+                    }
+                };
                 warn!(
                     "[anthropic::stream_chat] HTTP {} 完整错误响应: {}",
                     status.as_u16(),
@@ -436,7 +445,7 @@ impl LlmProvider for AnthropicProvider {
                             "HTTP {}: {}",
                             status.as_u16(),
                             api_msg
-                        )))
+                        )));
                     }
                 }
             }
@@ -798,7 +807,9 @@ impl LlmProvider for AnthropicProvider {
                                                                 output_tokens,
                                                                 total_tokens,
                                                                 cache_hit_tokens,
-                                                                input_tokens.saturating_sub(cache_hit_tokens),
+                                                                input_tokens.saturating_sub(
+                                                                    cache_hit_tokens
+                                                                ),
                                                                 cache_write_tokens,
                                                                 cache_rate,
                                                             )
@@ -812,7 +823,9 @@ impl LlmProvider for AnthropicProvider {
                                                             headers_ms,
                                                             first_output_ms
                                                                 .map(|value| value.to_string())
-                                                                .unwrap_or_else(|| "无输出".to_string()),
+                                                                .unwrap_or_else(
+                                                                    || "无输出".to_string()
+                                                                ),
                                                             response_bytes,
                                                             chunk_count,
                                                             token_count,
@@ -850,12 +863,19 @@ impl LlmProvider for AnthropicProvider {
                                                 }
                                             }
                                             Err(e) => {
-                                                // JSON 解析失败：日志告警，但继续（可能是 partial chunk）
+                                                // data 行按协议必须是 JSON；静默跳过会把截断响应
+                                                // 误报成成功，且可能丢失 error 事件。
                                                 warn!(
-                                                    "[anthropic] JSON 解析失败: {}, data={}",
+                                                    "[anthropic] SSE JSON 解析失败: {}, data={}",
                                                     e,
                                                     &value.chars().take(200).collect::<String>()
                                                 );
+                                                return Ok(StreamOutcome::failed(
+                                                    full_response,
+                                                    thinking_response,
+                                                    StopReason::Error,
+                                                    "流式响应 JSON 无效",
+                                                ));
                                             }
                                         }
                                     }
@@ -1068,6 +1088,89 @@ fn builtin_anthropic_models() -> Vec<ModelInfo> {
 mod tests {
     use super::*;
     use crate::models::{ImageAttachment, MessageRole};
+    use crate::streaming::StreamEventEmitter;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::sync::watch;
+
+    fn make_empty_assistant() -> Message {
+        Message {
+            id: "a-empty".to_string(),
+            role: MessageRole::Assistant,
+            content: String::new(),
+            images: Vec::new(),
+            blocks: None,
+            model_id: None,
+            created_at: 0,
+            tool_calls: None,
+            tool_call_id: None,
+            tool_name: None,
+            is_error: None,
+            parent_message_id: None,
+        }
+    }
+
+    async fn serve_anthropic_error() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let count = socket.read(&mut chunk).await.unwrap();
+                if count == 0 {
+                    return;
+                }
+                request.extend_from_slice(&chunk[..count]);
+            }
+            let body = "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"bad request\"}}\n\n";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+        format!("http://{address}")
+    }
+
+    #[tokio::test]
+    async fn test_error_event_stops_stream_and_preserves_message() {
+        let url = serve_anthropic_error().await;
+        let provider = AnthropicProvider;
+        let (emitter, _) = StreamEventEmitter::channel();
+        let (_, cancel_rx) = watch::channel(false);
+        let outcome = provider
+            .stream_chat(
+                &url,
+                "key",
+                "model",
+                "request",
+                &[make_user_message("u", "hi", 0)],
+                &emitter,
+                cancel_rx,
+                None,
+                &[],
+            )
+            .await
+            .unwrap();
+        assert!(outcome.had_stream_error);
+        assert_eq!(
+            outcome.terminal_error.as_ref().unwrap().message,
+            "bad request"
+        );
+        assert!(matches!(
+            outcome.terminal_error.as_ref().unwrap().reason,
+            StopReason::Error
+        ));
+    }
+
+    #[test]
+    fn test_convert_drops_empty_assistant() {
+        let out = AnthropicProvider::convert_messages(&[make_empty_assistant()]);
+        assert!(out.is_empty(), "空 assistant 不应发送给 Anthropic API");
+    }
 
     fn make_user_message(id: &str, content: &str, created_at: u64) -> Message {
         Message {
@@ -1146,10 +1249,12 @@ mod tests {
         assert_eq!(content[0]["source"]["data"], "aGVsbG8=");
         assert_eq!(content[1]["type"], "text");
         assert_eq!(content[2]["type"], "text");
-        assert!(content[2]["text"]
-            .as_str()
-            .unwrap()
-            .contains("<buddy_runtime_context>"));
+        assert!(
+            content[2]["text"]
+                .as_str()
+                .unwrap()
+                .contains("<buddy_runtime_context>")
+        );
     }
 
     #[test]
@@ -1240,9 +1345,11 @@ mod tests {
             output[2]["content"][0]["text"],
             "根据文件内容，结论是可继续。"
         );
-        assert!(output[3]["content"]
-            .as_str()
-            .unwrap()
-            .starts_with("请继续解释\n\n<buddy_runtime_context>"));
+        assert!(
+            output[3]["content"]
+                .as_str()
+                .unwrap()
+                .starts_with("请继续解释\n\n<buddy_runtime_context>")
+        );
     }
 }

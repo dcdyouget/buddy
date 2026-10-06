@@ -10,12 +10,13 @@ use crate::providers::{self, ProviderType};
 use crate::storage;
 use crate::streaming::{ContentBlock, QuestionOption, StopReason, StreamEventEmitter};
 use crate::tools::{AskUserAnswer, AskUserArgs, AskUserOption, ToolRegistry};
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use futures_util::StreamExt;
 use log::{info, warn};
 use parking_lot::Mutex;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 use tokio::sync::{oneshot, watch};
 
@@ -23,6 +24,7 @@ use tokio::sync::{oneshot, watch};
 /// 只靠毫秒时间戳会撞 ID，导致前端 React key 冲突。
 static MESSAGE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 const MAX_TOOL_LOG_ARGUMENT_CHARS: usize = 2_000;
+const MAX_VISION_IMAGES_PER_REQUEST: usize = 4;
 
 /// 将同步文件 I/O 与 JSON/Base64 处理移到 blocking 线程池，
 /// 避免占用 Tokio 工作线程而延迟流式事件和取消命令。
@@ -227,26 +229,39 @@ impl ChatEngine {
 
 // ── 滑动窗口辅助函数 ──
 
-/// 估算文本的 token 数量（字符级启发式算法）
-///
-/// 公式: `chars().count() / 3`，最少返回 1
-///
-/// 对于中英文混合文本，这是一个合理的保守估算：
-/// - 英文约 4 字符/token → 可能高估约 25%
-/// - 中文约 1-2 字符/token → 可能低估约 30%
-/// - 30% 的预算余量可以吸收估算误差
+/// 文本 token 启发式估算：ASCII 约 3 字符/token，非 ASCII 按 2 token/字符
+/// 保守预留。不同模型分词并不一致，窗口仍保留 30% 余量。
 fn estimate_tokens(text: &str) -> u32 {
-    let count = text.chars().count() as u32;
-    if count == 0 {
+    let (ascii, unicode) = text
+        .chars()
+        .fold((0u32, 0u32), |(ascii, unicode), character| {
+            if character.is_ascii() {
+                (ascii.saturating_add(1), unicode)
+            } else {
+                (ascii, unicode.saturating_add(1))
+            }
+        });
+    if ascii == 0 && unicode == 0 {
         return 0;
     }
-    (count / 3).max(1)
+    (ascii / 3).saturating_add(unicode.saturating_mul(2)).max(1)
 }
 
 fn estimate_message_tokens(message: &Message) -> u32 {
     // 图片实际 token 数取决于厂商、尺寸和 detail；这里使用保守固定值，
     // 仅用于本地滑动窗口，避免带图对话被当作零成本。
+    let calls = message
+        .tool_calls
+        .iter()
+        .flatten()
+        .fold(0u32, |total, call| {
+            total
+                .saturating_add(estimate_tokens(&call.arguments))
+                .saturating_add(estimate_tokens(&call.name))
+        });
     estimate_tokens(&message.content)
+        .saturating_add(6) // 角色、消息边界和调用元数据也占用上下文。
+        .saturating_add(calls)
         .saturating_add((message.images.len() as u32).saturating_mul(1_024))
 }
 
@@ -254,11 +269,12 @@ fn validate_image_attachments(
     images: &[crate::models::ImageAttachment],
     max_image_bytes: usize,
 ) -> Result<(), String> {
-    const MAX_IMAGES: usize = 4;
     const SUPPORTED_MEDIA_TYPES: [&str; 4] = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 
-    if images.len() > MAX_IMAGES {
-        return Err(format!("每条消息最多添加 {MAX_IMAGES} 张图片"));
+    if images.len() > MAX_VISION_IMAGES_PER_REQUEST {
+        return Err(format!(
+            "每条消息最多添加 {MAX_VISION_IMAGES_PER_REQUEST} 张图片"
+        ));
     }
     for image in images {
         if !SUPPORTED_MEDIA_TYPES.contains(&image.media_type.as_str()) {
@@ -354,14 +370,16 @@ async fn generated_image_bytes(data_url: &str, media_type: &str) -> Result<Vec<u
     {
         return Err("生成图片超过 25 MB，无法下载".to_string());
     }
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|error| format!("读取生成图片失败：{error}"))?;
-    if bytes.len() > MAX_GENERATED_IMAGE_BYTES {
-        return Err("生成图片超过 25 MB，无法下载".to_string());
+    let mut bytes = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| format!("读取生成图片失败：{error}"))?;
+        if bytes.len().saturating_add(chunk.len()) > MAX_GENERATED_IMAGE_BYTES {
+            return Err("生成图片超过 25 MB，无法下载".to_string());
+        }
+        bytes.extend_from_slice(&chunk);
     }
-    Ok(bytes.to_vec())
+    Ok(bytes)
 }
 
 fn stored_image_bytes(
@@ -398,7 +416,11 @@ fn hydrate_image_for_provider(
     }
     let bytes = stored_image_bytes(data_dir, image, max_image_bytes).map_err(|error| {
         if error.starts_with("图片文件过大") {
-            format!("{}：{}", crate::models::image_limit_message(max_image_bytes), image.name)
+            format!(
+                "{}：{}",
+                crate::models::image_limit_message(max_image_bytes),
+                image.name
+            )
         } else {
             error
         }
@@ -411,21 +433,74 @@ fn hydrate_image_for_provider(
     Ok(())
 }
 
-/// Provider API 是无状态的，但无需在每次新提问时重复上传所有历史图片。
-/// 当前消息的图片会临时读取为 Base64；历史图片只保留其之前产生的文本上下文。
+/// 附件引用留在模型上下文中，像素只在当前请求需要时临时注入。
+/// JSON 编码避免文件名、路径中的换行破坏引用格式。
+fn append_image_references(message: &mut Message) {
+    if message.images.is_empty() {
+        return;
+    }
+    let references: Vec<_> = message
+        .images
+        .iter()
+        .map(|image| {
+            let mut reference = serde_json::json!({
+                "id": image.id,
+                "name": image.name,
+                "path": image.path,
+                "media_type": image.media_type,
+            });
+            // 生图下载失败时仍可保留远程链接，但不能声称存在可回读的本地文件。
+            if image.path.is_empty() && image.data_url.starts_with("https://") {
+                reference["url"] = serde_json::json!(image.data_url);
+            }
+            reference
+        })
+        .collect();
+    message.content.push_str("\n\n<buddy_attachments>\n");
+    message
+        .content
+        .push_str(&serde_json::to_string(&references).expect("attachment references serialize"));
+    message.content.push_str("\nUse read_file(path) when you need to inspect an image that is not included in this request.\n</buddy_attachments>");
+}
+
 fn prepare_images_for_provider(
     data_dir: &Path,
     messages: &mut [Message],
     max_image_bytes: usize,
+    supports_vision: bool,
 ) -> Result<(), String> {
     let current_user_index = messages
         .iter()
         .rposition(|message| message.role == MessageRole::User);
     for (index, message) in messages.iter_mut().enumerate() {
-        if message.role != MessageRole::User || message.images.is_empty() {
+        if message.images.is_empty() {
             continue;
         }
-        if Some(index) == current_user_index {
+        // 兼容旧记录和直接 API 输入：只有 Base64 的附件先转成可回读的本地文件。
+        // 不因不相关的损坏历史附件阻断当前提问；当前输入的错误仍正常报告。
+        for image in &mut message.images {
+            if image.path.is_empty() && image.data_url.starts_with("data:") {
+                let limit = if Some(index) == current_user_index {
+                    max_image_bytes
+                } else {
+                    max_image_bytes.max(MAX_GENERATED_IMAGE_BYTES)
+                };
+                match storage::store_image_data_url(
+                    data_dir,
+                    &image.name,
+                    &image.media_type,
+                    &image.data_url,
+                    limit,
+                    "imported",
+                ) {
+                    Ok(stored) => image.path = stored.path,
+                    Err(error) if Some(index) == current_user_index => return Err(error),
+                    Err(error) => warn!("无法迁移历史图片 {}: {error}", image.id),
+                }
+            }
+        }
+        append_image_references(message);
+        if supports_vision && Some(index) == current_user_index {
             for image in &mut message.images {
                 hydrate_image_for_provider(data_dir, image, max_image_bytes)?;
             }
@@ -436,7 +511,7 @@ fn prepare_images_for_provider(
     Ok(())
 }
 
-/// 将生图工具产出的图片持久化为本地附件。
+/// 将工具读取或生成的图片持久化为本地附件，已有附件直接复用。
 ///
 /// 返回 (已存储的图片, 失败的张数)。失败的图片不再静默丢弃——
 /// 调用方据此把工具结果降级为错误，避免「UI 显示完成但图丢失」。
@@ -444,12 +519,26 @@ async fn persist_tool_images(
     data_dir: &Path,
     images: Vec<crate::models::ImageAttachment>,
 ) -> (Vec<crate::models::ImageAttachment>, usize) {
+    if images.is_empty() {
+        return (Vec::new(), 0);
+    }
     let mut stored = Vec::with_capacity(images.len());
     let mut failed = 0usize;
-    for image in images {
+    let attachment_root = tokio::fs::canonicalize(data_dir.join("attachments"))
+        .await
+        .ok();
+    for mut image in images {
         if !image.path.is_empty() {
-            stored.push(image);
-            continue;
+            let source = tokio::fs::canonicalize(&image.path).await;
+            if let (Some(root), Ok(source)) = (&attachment_root, source) {
+                if source.starts_with(root) {
+                    // read_file 回读已有附件时复用文件，不反复保存同一张图片。
+                    image.path = source.to_string_lossy().into_owned();
+                    image.data_url.clear();
+                    stored.push(image);
+                    continue;
+                }
+            }
         }
         match generated_image_bytes(&image.data_url, &image.media_type).await {
             Ok(bytes) if !bytes.is_empty() => {
@@ -561,7 +650,9 @@ impl ChatEngine {
 
 /// 估算消息列表的总 token 数
 fn estimate_total_tokens(messages: &[Message]) -> u32 {
-    messages.iter().map(estimate_message_tokens).sum()
+    messages.iter().fold(0u32, |total, message| {
+        total.saturating_add(estimate_message_tokens(message))
+    })
 }
 
 /// 计算滑动窗口的起始索引
@@ -575,26 +666,87 @@ fn compute_window_start(messages: &[Message], token_budget: u32) -> usize {
         return 0;
     }
 
-    let mut remaining = token_budget;
-    let mut start = messages.len();
-
-    // 从最新到最老遍历
-    for i in (0..messages.len()).rev() {
-        let cost = estimate_message_tokens(&messages[i]);
-        if remaining >= cost {
-            remaining -= cost;
-            start = i;
-        } else {
+    // 以用户提问为边界保留整轮，避免裁剪出孤立 tool result；read_file 的临时
+    // visual 消息属于原有工具轮次，不是新的用户提问。
+    let starts: Vec<usize> = std::iter::once(0)
+        .chain(messages.iter().enumerate().filter_map(|(index, message)| {
+            (index > 0 && message.role == MessageRole::User && !message.id.starts_with("visual-"))
+                .then_some(index)
+        }))
+        .collect();
+    let mut start = *starts.last().unwrap();
+    let mut cost = estimate_total_tokens(&messages[start..]);
+    for &earlier in starts.iter().rev().skip(1) {
+        let next_cost = cost.saturating_add(estimate_total_tokens(&messages[earlier..start]));
+        if next_cost > token_budget {
             break;
         }
+        start = earlier;
+        cost = next_cost;
     }
-
-    // 安全网：永远不丢弃最后一条消息
-    if start == messages.len() {
-        start = messages.len() - 1;
-    }
-
     start
+}
+
+/// 恢复中断的工具轮次：每个调用必须有对应结果，孤立结果不能发送给 API。
+/// 仅修复请求副本；不执行历史调用、不改写原始历史。
+fn repair_tool_history(messages: Vec<Message>) -> Vec<Message> {
+    let mut repaired = Vec::with_capacity(messages.len());
+    let mut iter = messages.into_iter().peekable();
+    while let Some(message) = iter.next() {
+        if message.role == MessageRole::Tool {
+            continue;
+        }
+        let calls = message.tool_calls.clone().unwrap_or_default();
+        repaired.push(message);
+        if calls.is_empty() {
+            continue;
+        }
+        let mut results = std::collections::HashMap::new();
+        while iter
+            .peek()
+            .is_some_and(|message| message.role == MessageRole::Tool)
+        {
+            let result = iter.next().unwrap();
+            if let Some(id) = &result.tool_call_id {
+                results.entry(id.clone()).or_insert(result);
+            }
+        }
+        for call in calls {
+            repaired.push(results.remove(&call.id).unwrap_or_else(|| {
+                build_tool_msg(
+                    0,
+                    &call,
+                    "工具调用已中断，未获得结果；如仍需要，请重新调用。".into(),
+                    Vec::new(),
+                    true,
+                )
+            }));
+        }
+    }
+    repaired
+}
+
+/// 按预算从磁盘尾部读取上下文，界面分页不参与模型上下文选择。
+fn load_context_history(
+    data_dir: &Path,
+    current: Message,
+    budget: u32,
+) -> Result<Vec<Message>, String> {
+    let mut offset = storage::message_count(data_dir)?;
+    let mut pages = Vec::new();
+    let mut cost = estimate_message_tokens(&current);
+    while offset > 0 && cost < budget {
+        let size = offset.min(256);
+        offset -= size;
+        let page = storage::load_messages(data_dir, offset, size)?;
+        cost = cost.saturating_add(estimate_total_tokens(&page));
+        pages.push(page);
+    }
+    let mut messages: Vec<_> = pages.into_iter().rev().flatten().collect();
+    messages.push(current);
+    let messages = repair_tool_history(messages);
+    let start = compute_window_start(&messages, budget);
+    Ok(messages.into_iter().skip(start).collect())
 }
 
 /// 构造 tool 结果消息
@@ -757,6 +909,34 @@ impl ChatEngine {
     /// `emitter` 被 drop，接收端据此得知本次对话的事件已全部送达。
     /// 返回 `Err` 仅发生在占用生成通道之前（模型/Provider 缺失、图片校验失败、已有任务在跑），
     /// 此时不发射任何事件；其余结局一律以唯一的 `Done` 或 `Error` 事件告知。
+    pub async fn send_message_from_history(
+        &self,
+        emitter: StreamEventEmitter,
+        current: Message,
+        model_id: String,
+    ) -> Result<(), String> {
+        if current.role != MessageRole::User {
+            return Err("当前输入必须是用户消息".into());
+        }
+        let directory = self.data_dir.clone();
+        let selected = model_id.clone();
+        let messages = run_blocking("读取模型上下文", move || {
+            let config = storage::get_config(&directory)?;
+            let model = config
+                .models
+                .iter()
+                .find(|model| model.id == selected)
+                .ok_or_else(|| "未找到指定的模型".to_string())?;
+            load_context_history(
+                &directory,
+                current,
+                (model.context_window as f64 * 0.7) as u32,
+            )
+        })
+        .await?;
+        self.send_message(emitter, messages, model_id).await
+    }
+
     pub async fn send_message(
         &self,
         emitter: StreamEventEmitter,
@@ -802,15 +982,15 @@ impl ChatEngine {
         let provider_type = ProviderType::from_str(&provider.provider_type);
 
         info!(
-        "[llm][{}] 问题开始: model={}, provider={}, type={:?}, history_len={}, estimated_input_tokens={}, context_window={}",
-        question_log_id,
-        model_id,
-        provider.id,
-        provider_type,
-        messages.len(),
-        estimate_total_tokens(&messages),
-        model.context_window,
-    );
+            "[llm][{}] 问题开始: model={}, provider={}, type={:?}, history_len={}, estimated_input_tokens={}, context_window={}",
+            question_log_id,
+            model_id,
+            provider.id,
+            provider_type,
+            messages.len(),
+            estimate_total_tokens(&messages),
+            model.context_window,
+        );
 
         // ── 滑动窗口：保留 70% context_window 以内的最近消息 ──
         let budget = ((model.context_window as f64) * 0.7_f64) as u32;
@@ -821,16 +1001,16 @@ impl ChatEngine {
 
         if start_idx > 0 {
             warn!(
-            "[send_message] 滑动窗口裁剪: 保留 {}/{} 条消息, est_tokens={}/{}, budget={}/{}, dropped={}条, oldest_kept_idx={}",
-            windowed_messages.len(),
-            messages.len(),
-            windowed_est,
-            full_est,
-            budget,
-            model.context_window,
-            start_idx,
-            start_idx,
-        );
+                "[send_message] 滑动窗口裁剪: 保留 {}/{} 条消息, est_tokens={}/{}, budget={}/{}, dropped={}条, oldest_kept_idx={}",
+                windowed_messages.len(),
+                messages.len(),
+                windowed_est,
+                full_est,
+                budget,
+                model.context_window,
+                start_idx,
+                start_idx,
+            );
         } else {
             info!(
                 "[send_message] 滑动窗口: 无需裁剪, est_tokens={}/{}, budget={}, messages={}",
@@ -841,7 +1021,7 @@ impl ChatEngine {
             );
         }
 
-        // 本轮产生的用户、assistant 与工具消息先放在内存，结束时统一批量写入。
+        // 按模型轮次批量保存；用户输入和待执行调用在耗时操作前先落盘。
         let mut pending_persistence: Vec<Message> = messages.last().cloned().into_iter().collect();
 
         // 防止并发 send_message：检查与占用在同一把锁下完成，不能让第二个请求覆盖
@@ -867,13 +1047,22 @@ impl ChatEngine {
             }
         }
         let registry = ToolRegistry::new(builtin_tools);
+        let tools = registry.all_definitions();
+        let fixed_request_cost = estimate_tokens(providers::BUDDY_SYSTEM_PROMPT).saturating_add(
+            tools.iter().fold(0u32, |total, tool| {
+                total
+                    .saturating_add(estimate_tokens(&tool.description))
+                    .saturating_add(estimate_tokens(&tool.parameters.to_string()))
+            }),
+        );
         // P7 会在此追加 mcp tool
 
         // 把 messages 拷成可变的 Vec,tool 循环会往里 push assistant(tool_calls) + tool(result)
-        let mut conv_messages: Vec<Message> = messages.clone();
+        let mut conv_messages = repair_tool_history(windowed_messages.to_vec());
         if !model.supports_vision {
             // 切换到纯文本模型后不再把历史图片发送给 Provider。
             for message in &mut conv_messages {
+                append_image_references(message);
                 message.images.clear();
             }
         } else {
@@ -881,7 +1070,12 @@ impl ChatEngine {
             // 丢失用户消息，且前端收不到任何流事件提示。
             let storage_dir = self.data_dir.clone();
             conv_messages = match run_blocking("读取聊天图片", move || {
-                prepare_images_for_provider(&storage_dir, &mut conv_messages, max_image_bytes)?;
+                prepare_images_for_provider(
+                    &storage_dir,
+                    &mut conv_messages,
+                    max_image_bytes,
+                    true,
+                )?;
                 Ok(conv_messages)
             })
             .await
@@ -912,6 +1106,19 @@ impl ChatEngine {
             };
         }
 
+        // 请求中的 Base64 是临时内容；落盘的本条输入使用已保存的附件路径。
+        if let Some(pending) = pending_persistence.last_mut() {
+            if let Some(prepared) = conv_messages
+                .iter()
+                .find(|message| message.id == pending.id)
+            {
+                pending.images = prepared.images.clone();
+                for image in &mut pending.images {
+                    image.data_url.clear();
+                }
+            }
+        }
+
         // 每次 send_message 开始时重置"本次都允许"标志，防止上次被中断时残留
         approval
             .approve_all_for_turn
@@ -936,6 +1143,14 @@ impl ChatEngine {
             if providers::cancellation_requested(&cancel_rx) {
                 break 'conversation Ok(cancelled_stream_outcome());
             }
+            if let Err(error) = flush_pending_messages(
+                self.data_dir.clone(),
+                std::mem::take(&mut pending_persistence),
+            )
+            .await
+            {
+                break Err(crate::providers::ApiError::NetworkError(error));
+            }
             turn += 1;
             if turn > MAX_TOOL_TURNS {
                 warn!("[send_message] 达到 tool 轮数硬上限 {}", MAX_TOOL_TURNS);
@@ -947,10 +1162,16 @@ impl ChatEngine {
 
             // 滑动窗口(每轮都算)
             let budget = ((model.context_window as f64) * 0.7_f64) as u32;
-            let start_idx = compute_window_start(&conv_messages, budget);
+            let start_idx =
+                compute_window_start(&conv_messages, budget.saturating_sub(fixed_request_cost));
             let windowed = &conv_messages[start_idx..];
-
-            let tools = registry.all_definitions();
+            // 整轮工具消息不可拆开；过大的当前轮次应明确报错，不能继续发出超限请求。
+            let request_cost = estimate_total_tokens(windowed).saturating_add(fixed_request_cost);
+            if request_cost > budget {
+                break Err(crate::providers::ApiError::NetworkError(
+                    "当前提问或工具结果超过模型上下文预算，请缩短输入、减少文件内容或切换更大上下文的模型。".into(),
+                ));
+            }
             let request_id = format!("{}#{}", question_log_id, turn);
             api_requests += 1;
             let api_started = Instant::now();
@@ -967,6 +1188,11 @@ impl ChatEngine {
                     &tools,
                 )
                 .await;
+            // 普通 Chat Completions/Anthropic 请求均无状态。下一请求仅保留附件引用，
+            // 需要再次看图时由 read_file 显式载入，避免工具循环自动重传所有像素。
+            for message in &mut conv_messages {
+                message.images.clear();
+            }
             total_api_ms += api_started.elapsed().as_millis();
 
             let out = match outcome {
@@ -1029,6 +1255,16 @@ impl ChatEngine {
                 break Ok(out);
             }
 
+            // 工具可能长时间等待审批或产生副作用，先保存调用记录，重启后可识别中断。
+            if let Err(error) = flush_pending_messages(
+                self.data_dir.clone(),
+                std::mem::take(&mut pending_persistence),
+            )
+            .await
+            {
+                break Err(crate::providers::ApiError::NetworkError(error));
+            }
+
             // 有 tool_calls → 顺序执行(并发=1;P4 决定),再调 stream_chat
             info!(
                 "[send_message] turn {} 收到 {} 个 tool_call,开始执行",
@@ -1037,6 +1273,7 @@ impl ChatEngine {
             );
             // 本轮追踪:是否有至少一个 tool 执行成功(非 is_error)?
             let mut turn_has_success = false;
+            let mut next_request_images = Vec::new();
             for call in &out.tool_calls {
                 info!(
                     "[tool] 请求: question_id={}, turn={}, id={}, name={}, arguments={}",
@@ -1254,22 +1491,35 @@ impl ChatEngine {
                 let ctx = crate::tools::ToolContext {
                     approve_all_for_turn: approval.approve_all_for_turn.load(Ordering::Relaxed),
                     cancel_rx: Some(cancel_rx.clone()),
+                    supports_vision: model.supports_vision,
+                    max_image_bytes,
                 };
                 let tool_started = Instant::now();
                 let result = tool.execute(args_value, ctx).await;
                 let elapsed_ms = tool_started.elapsed().as_millis();
-                let (mut content, raw_images, mut is_error) = match &result {
-                Ok(o) => (o.content.clone(), o.images.clone(), o.is_error),
-                Err(e) if call.name == "generate_image" => (
-                    format!(
-                        "执行失败: {}。生图工具已经完成内部重试，请不要在本轮再次调用 generate_image，直接向用户说明失败原因。",
-                        e
+                let (mut content, mut raw_images, mut is_error) = match &result {
+                    Ok(o) => (o.content.clone(), o.images.clone(), o.is_error),
+                    Err(e) if call.name == "generate_image" => (
+                        format!(
+                            "执行失败: {}。生图工具已经完成内部重试，请不要在本轮再次调用 generate_image，直接向用户说明失败原因。",
+                            e
+                        ),
+                        Vec::new(),
+                        true,
                     ),
-                    Vec::new(),
-                    true,
-                ),
-                Err(e) => (format!("执行失败: {}", e), Vec::new(), true),
-            };
+                    Err(e) => (format!("执行失败: {}", e), Vec::new(), true),
+                };
+                if let Ok(output) = &result {
+                    if next_request_images.len() + output.model_images.len()
+                        > MAX_VISION_IMAGES_PER_REQUEST
+                    {
+                        content = format!(
+                            "同一次请求最多读取 {MAX_VISION_IMAGES_PER_REQUEST} 张图片，请分批读取剩余图片。"
+                        );
+                        raw_images.clear();
+                        is_error = true;
+                    }
+                }
                 let (images, failed_image_count) =
                     persist_tool_images(&self.data_dir, raw_images).await;
                 if failed_image_count > 0 {
@@ -1285,18 +1535,31 @@ impl ChatEngine {
                 ));
                 }
                 info!(
-                "[tool] 完成: question_id={}, turn={}, id={}, name={}, is_error={}, output_chars={}, images={}, elapsed_ms={}",
-                question_log_id,
-                turn,
-                call.id,
-                call.name,
-                is_error,
-                content.chars().count(),
-                images.len(),
-                elapsed_ms
-            );
+                    "[tool] 完成: question_id={}, turn={}, id={}, name={}, is_error={}, output_chars={}, images={}, elapsed_ms={}",
+                    question_log_id,
+                    turn,
+                    call.id,
+                    call.name,
+                    is_error,
+                    content.chars().count(),
+                    images.len(),
+                    elapsed_ms
+                );
                 if !is_error {
                     turn_has_success = true;
+                    if model.supports_vision {
+                        if let Ok(output) = &result {
+                            for (index, visual) in output.model_images.iter().enumerate() {
+                                let mut visual = visual.clone();
+                                // read_file 的视觉副本绑定到已保存的附件，后续引用可再次读取。
+                                if let Some(stored) = images.get(index) {
+                                    visual.id = stored.id.clone();
+                                    visual.path = stored.path.clone();
+                                }
+                                next_request_images.push(visual);
+                            }
+                        }
+                    }
                 }
                 emitter.tool_result(&call.id, &call.name, &content, images.clone(), is_error);
                 info!(
@@ -1305,7 +1568,30 @@ impl ChatEngine {
                 );
                 let tool_msg = build_tool_msg(turn, call, content, images, is_error);
                 pending_persistence.push(tool_msg.clone());
-                conv_messages.push(tool_msg.clone());
+                let mut request_tool_msg = tool_msg;
+                append_image_references(&mut request_tool_msg);
+                request_tool_msg.images.clear();
+                conv_messages.push(request_tool_msg);
+            }
+            if !next_request_images.is_empty() {
+                // 必须在整组 tool result 后插入视觉输入，不能打断并列工具协议。
+                // 此消息仅供 Provider 请求使用，不进入 UI 或持久化历史。
+                let mut visual_input = Message {
+                    id: unique_message_id("visual", turn),
+                    role: MessageRole::User,
+                    content: "Images returned by read_file:".to_string(),
+                    images: next_request_images,
+                    blocks: None,
+                    model_id: None,
+                    created_at: chrono::Utc::now().timestamp() as u64,
+                    tool_calls: None,
+                    tool_call_id: None,
+                    tool_name: None,
+                    is_error: None,
+                    parent_message_id: None,
+                };
+                append_image_references(&mut visual_input);
+                conv_messages.push(visual_input);
             }
             // ── 本轮总结:如果所有 tool 都失败了,累计连续失败计数 ──
             if out.tool_calls.is_empty() {
@@ -1336,18 +1622,18 @@ impl ChatEngine {
             Err(_) => "error",
         };
         info!(
-        "[llm][{}] 问题总结: status={}, total_ms={}, api_ms={}, api_requests={}, answer_bytes={}, answer_chars={}, thinking_bytes={}, thinking_chars={}, tool_calls={}",
-        question_log_id,
-        final_status,
-        question_started.elapsed().as_millis(),
-        total_api_ms,
-        api_requests,
-        total_answer_bytes,
-        total_answer_chars,
-        total_thinking_bytes,
-        total_thinking_chars,
-        total_tool_calls,
-    );
+            "[llm][{}] 问题总结: status={}, total_ms={}, api_ms={}, api_requests={}, answer_bytes={}, answer_chars={}, thinking_bytes={}, thinking_chars={}, tool_calls={}",
+            question_log_id,
+            final_status,
+            question_started.elapsed().as_millis(),
+            total_api_ms,
+            api_requests,
+            total_answer_bytes,
+            total_answer_chars,
+            total_thinking_bytes,
+            total_thinking_chars,
+            total_tool_calls,
+        );
 
         // 终态事件必须晚于持久化和占用释放：前端收到 done/error 后可以立刻开始下一轮，
         // 此时后端不能仍持有上一轮的 CancelState。
@@ -1651,6 +1937,88 @@ mod tests {
     }
 
     #[test]
+    fn historical_image_references_do_not_read_or_include_pixels() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut old = make_msg("旧图");
+        let mut image = data_url_image(8);
+        image.name = "image\"\nname.png".into();
+        image.path = directory
+            .path()
+            .join("deleted.png")
+            .to_string_lossy()
+            .into_owned();
+        old.images.push(image);
+        let current = make_msg("继续分析旧图");
+        let mut messages = vec![old, current];
+        prepare_images_for_provider(directory.path(), &mut messages, 1, true).unwrap();
+        assert!(messages[0].images.is_empty());
+        assert!(messages[0].content.contains("<buddy_attachments>"));
+        assert!(messages[0].content.contains("deleted.png"));
+        assert!(messages[0].content.contains("image\\\"\\nname.png"));
+        assert!(!messages[0].content.contains("base64"));
+    }
+
+    #[test]
+    fn tool_images_remain_available_as_textual_references() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut tool = make_msg("图片已生成");
+        tool.role = MessageRole::Tool;
+        tool.images.push(data_url_image(8));
+        let mut messages = vec![tool, make_msg("请检查生成结果")];
+        prepare_images_for_provider(directory.path(), &mut messages, 1, false).unwrap();
+        assert!(messages[0].images.is_empty());
+        assert!(messages[0].content.contains("read_file(path)"));
+        assert!(!messages[0].content.contains("base64"));
+    }
+
+    #[test]
+    fn base64_only_input_gets_a_readable_attachment_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut user = make_msg("请查看图片");
+        user.images.push(data_url_image(8));
+        let mut messages = vec![user];
+        prepare_images_for_provider(directory.path(), &mut messages, 1024, true).unwrap();
+        let image = &messages[0].images[0];
+        assert!(Path::new(&image.path).is_file());
+        assert!(messages[0].content.contains(&image.path));
+        assert!(!image.data_url.is_empty());
+    }
+
+    #[tokio::test]
+    async fn reading_existing_attachment_reuses_file_and_drops_base64_from_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut image = storage::store_image_bytes(
+            directory.path(),
+            "existing.png",
+            "image/png",
+            b"existing image",
+            "test",
+        )
+        .unwrap();
+        let original_path = image.path.clone();
+        image.data_url = format!(
+            "data:image/png;base64,{}",
+            BASE64_STANDARD.encode(b"existing image")
+        );
+        let (stored, failed) = persist_tool_images(directory.path(), vec![image]).await;
+        assert_eq!(failed, 0);
+        assert_eq!(
+            stored[0].path,
+            Path::new(&original_path)
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+        );
+        assert!(stored[0].data_url.is_empty());
+        assert_eq!(
+            std::fs::read_dir(directory.path().join("attachments"))
+                .unwrap()
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn image_limit_follows_provider() {
         let mut provider = crate::models::ProviderConfig {
             id: "minimax".into(),
@@ -1661,9 +2029,15 @@ mod tests {
             provider_type: "openai_compatible".into(),
             compat: None,
         };
-        assert_eq!(provider.max_image_bytes(), crate::models::MINIMAX_IMAGE_BYTES);
+        assert_eq!(
+            provider.max_image_bytes(),
+            crate::models::MINIMAX_IMAGE_BYTES
+        );
         provider.base_url = "https://api.openai.com/v1".into();
-        assert_eq!(provider.max_image_bytes(), crate::models::DEFAULT_IMAGE_BYTES);
+        assert_eq!(
+            provider.max_image_bytes(),
+            crate::models::DEFAULT_IMAGE_BYTES
+        );
     }
 
     #[test]
@@ -1671,10 +2045,10 @@ mod tests {
         let eight_mb = 8 * 1024 * 1024;
         let image = [data_url_image(eight_mb)];
         assert!(validate_image_attachments(&image, crate::models::MINIMAX_IMAGE_BYTES).is_ok());
-        let error = validate_image_attachments(&image, crate::models::DEFAULT_IMAGE_BYTES).unwrap_err();
+        let error =
+            validate_image_attachments(&image, crate::models::DEFAULT_IMAGE_BYTES).unwrap_err();
         assert!(error.starts_with("单张图片不能超过 5 MB"), "{error}");
     }
-
 
     #[test]
     fn generation_reservation_is_atomic_and_reusable_after_release() {
@@ -1772,6 +2146,61 @@ mod tests {
         }
     }
 
+    #[test]
+    fn window_keeps_tool_round_and_visual_input_together() {
+        let old = make_msg("old".repeat(100).as_str());
+        let user = make_msg("current");
+        let call = ToolCall {
+            id: "call".into(),
+            name: "read_file".into(),
+            arguments: "{}".into(),
+        };
+        let mut assistant = make_msg("");
+        assistant.role = MessageRole::Assistant;
+        assistant.tool_calls = Some(vec![call.clone()]);
+        let result = build_tool_msg(0, &call, "result".repeat(50), Vec::new(), false);
+        let mut visual = make_msg("visual input");
+        visual.id = "visual-1".into();
+        let messages = vec![old, user, assistant, result, visual];
+        assert_eq!(compute_window_start(&messages, 1), 1);
+    }
+
+    #[test]
+    fn interrupted_history_completes_missing_calls_and_drops_orphans() {
+        let first = ToolCall {
+            id: "first".into(),
+            name: "read_file".into(),
+            arguments: "{}".into(),
+        };
+        let second = ToolCall {
+            id: "second".into(),
+            ..first.clone()
+        };
+        let mut assistant = make_msg("");
+        assistant.role = MessageRole::Assistant;
+        assistant.tool_calls = Some(vec![first.clone(), second.clone()]);
+        let orphan = build_tool_msg(0, &first, "orphan".into(), Vec::new(), false);
+        let completed = build_tool_msg(0, &first, "done".into(), Vec::new(), false);
+        let messages =
+            repair_tool_history(vec![orphan, assistant, completed, make_msg("continue")]);
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[1].tool_call_id.as_deref(), Some("first"));
+        assert_eq!(messages[1].content, "done");
+        assert_eq!(messages[2].tool_call_id.as_deref(), Some("second"));
+        assert_eq!(messages[2].is_error, Some(true));
+    }
+
+    #[test]
+    fn window_accounts_for_tool_arguments() {
+        let mut message = make_msg("");
+        message.tool_calls = Some(vec![ToolCall {
+            id: "call".into(),
+            name: "write_file".into(),
+            arguments: "x".repeat(3000),
+        }]);
+        assert!(estimate_message_tokens(&message) >= 1000);
+    }
+
     // ── estimate_tokens ──
 
     #[test]
@@ -1782,7 +2211,7 @@ mod tests {
     #[test]
     fn test_estimate_tokens_single_char() {
         assert_eq!(estimate_tokens("a"), 1); // 1/3=0, .max(1)=1
-        assert_eq!(estimate_tokens("中"), 1);
+        assert_eq!(estimate_tokens("中"), 2);
     }
 
     #[test]
@@ -1795,10 +2224,9 @@ mod tests {
 
     #[test]
     fn test_estimate_tokens_chinese() {
-        // "你好世界" = 4 chars → 4/3 = 1
-        assert_eq!(estimate_tokens("你好世界"), 1);
-        // 12 Chinese chars → 4 tokens
-        assert_eq!(estimate_tokens("这是一段比较长的中文文本内容"), 4);
+        // 中文不能套用英文的 chars/3，否则长中文上下文会被明显低估。
+        assert_eq!(estimate_tokens("你好世界"), 8);
+        assert_eq!(estimate_tokens("这是一段比较长的中文文本内容"), 28);
     }
 
     #[test]
@@ -1842,9 +2270,8 @@ mod tests {
     #[test]
     fn test_window_trims_from_front() {
         let msgs: Vec<Message> = (0..12).map(|i| make_msg(&format!("msg{}", i))).collect();
-        // Each msg: "msg0"=4 chars → 1 token. 12 msgs = ~12 tokens.
-        // Budget of 5 → should keep ~5 most recent messages.
-        let start = compute_window_start(&msgs, 5);
+        // 每条正文约 1 token，另有 6 token 消息开销；预算保留最近 5 条。
+        let start = compute_window_start(&msgs, 35);
         assert!(start > 0, "should have dropped some messages");
         assert!(start <= 7, "should keep at least 5 messages");
         // Verify last message is always included

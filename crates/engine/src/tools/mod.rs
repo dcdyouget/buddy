@@ -18,7 +18,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::models::ImageAttachment;
+use crate::models::{DEFAULT_IMAGE_BYTES, ImageAttachment};
 
 pub mod builtin;
 pub mod file_tools;
@@ -38,7 +38,7 @@ pub enum ToolSafety {
 ///
 /// 携带审批、取消信号等运行时信息,内置 tool 不需要全部用到,
 /// 但 MCP 包装的 tool 可能用到(目前 P6 暂不实现,留接口)。
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ToolContext {
     /// 当前 turn 是否处于"本次都允许"模式
     /// (由 `chat::ChatEngine::send_message` 注入)
@@ -48,6 +48,21 @@ pub struct ToolContext {
     /// 长耗时工具（如生图 HTTP 请求）应借此及时中止，
     /// 避免用户停止后仍消耗额度/继续等待。
     pub cancel_rx: Option<tokio::sync::watch::Receiver<bool>>,
+    /// 当前模型是否支持视觉输入。
+    pub supports_vision: bool,
+    /// 当前模型允许的单张图片文件大小（字节）。
+    pub max_image_bytes: usize,
+}
+
+impl Default for ToolContext {
+    fn default() -> Self {
+        Self {
+            approve_all_for_turn: false,
+            cancel_rx: None,
+            supports_vision: false,
+            max_image_bytes: DEFAULT_IMAGE_BYTES,
+        }
+    }
 }
 
 impl ToolContext {
@@ -65,6 +80,10 @@ pub struct ToolOutput {
     /// 仅用于界面展示和本地历史持久化，不会作为 tool result 文本回传给模型。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<ImageAttachment>,
+    /// 需要作为下一次模型请求的视觉输入注入的图片。
+    /// 与 `images` 分开，避免把仅用于 UI/历史展示的图片默认发送给模型。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_images: Vec<ImageAttachment>,
     /// true = 执行出错,model 会看到 is_error=true 并据此调整
     /// (Q6 决策:不中断整轮,让 model 自适应)
     pub is_error: bool,
@@ -75,6 +94,7 @@ impl ToolOutput {
         Self {
             content: content.into(),
             images: Vec::new(),
+            model_images: Vec::new(),
             is_error: false,
         }
     }
@@ -84,12 +104,18 @@ impl ToolOutput {
         Self {
             content: content.into(),
             images: Vec::new(),
+            model_images: Vec::new(),
             is_error: true,
         }
     }
 
     pub fn with_images(mut self, images: Vec<ImageAttachment>) -> Self {
         self.images = images;
+        self
+    }
+
+    pub fn with_model_images(mut self, images: Vec<ImageAttachment>) -> Self {
+        self.model_images = images;
         self
     }
 }

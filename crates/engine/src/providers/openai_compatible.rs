@@ -14,12 +14,12 @@
 // ============================================================================
 
 use super::{ApiError, LlmProvider};
-use crate::models::{get_context_window, CompatConfig, Message, MessageRole, ModelInfo, ToolCall};
+use crate::models::{CompatConfig, Message, MessageRole, ModelInfo, ToolCall, get_context_window};
 use crate::streaming::{StopReason, StreamEventEmitter, StreamOutcome};
 use crate::tools::ToolDefinition;
 use futures_util::StreamExt; // Stream trait 扩展（提供 .next() 等）
 use log::{error, info, warn}; // 日志门面
-use serde_json::{json, Value}; // 通用 JSON 值
+use serde_json::{Value, json}; // 通用 JSON 值
 use std::pin::Pin; // 自引用指针固定
 use std::time::{Duration, Instant}; // 时间段与耗时统计
 use tokio::sync::watch; // watch channel（取消信号）
@@ -172,8 +172,6 @@ impl OpenAICompatibleProvider {
                     }
                 }
 
-                let original_has_tool_calls = m.role == MessageRole::Assistant
-                    && m.tool_calls.as_ref().is_some_and(|calls| !calls.is_empty());
                 let valid_calls: Vec<&ToolCall> = if m.role == MessageRole::Assistant {
                     m.tool_calls
                         .iter()
@@ -200,10 +198,11 @@ impl OpenAICompatibleProvider {
                     Vec::new()
                 };
 
-                // 纯工具调用消息在中断后若没有任何可发送的调用，就不能留下空 assistant。
-                if original_has_tool_calls
-                    && valid_calls.is_empty()
+                // API 不接受没有文本和 tool_calls 的空 assistant；这类消息通常来自
+                // 被中断的流式轮次，直接过滤掉。
+                if m.role == MessageRole::Assistant
                     && m.content.trim().is_empty()
+                    && valid_calls.is_empty()
                 {
                     return None;
                 }
@@ -441,7 +440,20 @@ impl LlmProvider for OpenAICompatibleProvider {
                 headers_ms
             );
             if !status.is_success() {
-                let body_text = response.text().await.unwrap_or_default();
+                let body_text = match super::response_text_cancellable(response, &mut cancel_rx)
+                    .await
+                    .map_err(|error| ApiError::NetworkError(error.to_string()))?
+                {
+                    Some(body) => body,
+                    None => {
+                        return Ok(StreamOutcome::failed(
+                            String::new(),
+                            String::new(),
+                            StopReason::Aborted,
+                            "用户取消",
+                        ));
+                    }
+                };
                 warn!(
                     "[openai::stream_chat] HTTP {} 完整错误响应: {}",
                     status.as_u16(),
@@ -457,7 +469,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                             "HTTP {}: {}",
                             status.as_u16(),
                             api_msg
-                        )))
+                        )));
                     }
                 }
             }
@@ -632,6 +644,19 @@ impl LlmProvider for OpenAICompatibleProvider {
                                 // 解析 JSON
                                 match serde_json::from_str::<Value>(data) {
                                     Ok(json) => {
+                                        if let Some(error) = json.get("error") {
+                                            let message = error
+                                                .get("message")
+                                                .and_then(Value::as_str)
+                                                .unwrap_or("流式响应返回错误")
+                                                .to_string();
+                                            return Ok(StreamOutcome::failed(
+                                                full_response,
+                                                thinking_response,
+                                                StopReason::Error,
+                                                message,
+                                            ));
+                                        }
                                         if let Some(usage) = parse_prompt_cache_usage(&json) {
                                             final_usage = Some(usage);
                                         }
@@ -653,7 +678,6 @@ impl LlmProvider for OpenAICompatibleProvider {
                                             // reasoning_content 作为思考块发射
                                             emitter.thinking_delta(content_index, reasoning);
                                             thinking_response.push_str(reasoning);
-                                            continue; // 跳过本行的 content 处理
                                         }
 
                                         // 正常的文本增量
@@ -780,7 +804,19 @@ impl LlmProvider for OpenAICompatibleProvider {
                                             }
                                         }
                                     }
-                                    Err(_) => continue,
+                                    Err(error) => {
+                                        warn!(
+                                            "[openai] SSE JSON 解析失败: {}, data={}",
+                                            error,
+                                            data.chars().take(200).collect::<String>()
+                                        );
+                                        return Ok(StreamOutcome::failed(
+                                            full_response,
+                                            thinking_response,
+                                            StopReason::Error,
+                                            "流式响应 JSON 无效",
+                                        ));
+                                    }
                                 }
                             }
                         }
@@ -796,18 +832,13 @@ impl LlmProvider for OpenAICompatibleProvider {
                     }
                     None => {
                         // 走到这里说明从未收到 [DONE] 终止标记（[DONE] 分支会直接 return）。
-                        // 部分 OpenAI 兼容 provider 确实不发送该标记，因此不改变成功语义
-                        // （避免回归），但记录告警便于排查截断。
+                        // 不得把截断的文本或半截 tool arguments 当成成功结果。
                         warn!(
                             "[openai::stream_chat] 流结束但未收到 [DONE] 标记，已收到 {} chunks / {} tokens",
                             chunk_count, token_count
                         );
-                        if text_started {
-                            emitter.text_end(content_index, &full_response);
-                        }
-                        let calls = flush_tool_calls(&mut tool_calls, &tool_call_indexes, emitter);
                         info!(
-                            "[llm][{}] 响应摘要: status=eof_without_done, total_ms={}, headers_ms={}, first_output_ms={}, sse_bytes={}, chunks={}, text_delta_events={}, answer_bytes={}, answer_chars={}, thinking_bytes={}, thinking_chars={}, tool_calls={}, {}",
+                            "[llm][{}] 响应摘要: status=eof_without_done, total_ms={}, headers_ms={}, first_output_ms={}, sse_bytes={}, chunks={}, text_delta_events={}, answer_bytes={}, answer_chars={}, thinking_bytes={}, thinking_chars={}, {}",
                             request_id,
                             request_started.elapsed().as_millis(),
                             headers_ms,
@@ -821,14 +852,13 @@ impl LlmProvider for OpenAICompatibleProvider {
                             full_response.chars().count(),
                             thinking_response.len(),
                             thinking_response.chars().count(),
-                            calls.len(),
                             usage_log_summary(final_usage.as_ref()),
                         );
-                        // done 事件由编排层 chat.rs 在整轮 tool 循环结束时统一发射
-                        return Ok(StreamOutcome::completed(
+                        return Ok(StreamOutcome::failed(
                             full_response,
                             thinking_response,
-                            calls,
+                            StopReason::Error,
+                            "流提前结束(未收到 [DONE])",
                         ));
                     }
                 }
@@ -1137,7 +1167,12 @@ pub(crate) fn ensure_object_schema(schema: &Value) -> Value {
 mod tests {
     use super::*;
     use crate::models::{ImageAttachment, MessageRole};
+    use crate::streaming::StreamEventEmitter;
     use crate::tools::ToolSafety;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::sync::watch;
+    use tokio::time::{sleep, timeout};
 
     fn make_user_message(id: &str, content: &str, created_at: u64) -> Message {
         Message {
@@ -1275,10 +1310,12 @@ mod tests {
             "data:image/png;base64,aGVsbG8="
         );
         assert_eq!(content[2]["type"], "text");
-        assert!(content[2]["text"]
-            .as_str()
-            .unwrap()
-            .contains("<buddy_runtime_context>"));
+        assert!(
+            content[2]["text"]
+                .as_str()
+                .unwrap()
+                .contains("<buddy_runtime_context>")
+        );
     }
 
     #[test]
@@ -1327,6 +1364,188 @@ mod tests {
             is_error: None,
             parent_message_id: None,
         }
+    }
+
+    fn make_empty_assistant() -> Message {
+        Message {
+            id: "a-empty".to_string(),
+            role: MessageRole::Assistant,
+            content: String::new(),
+            images: Vec::new(),
+            blocks: None,
+            model_id: None,
+            created_at: 0,
+            tool_calls: None,
+            tool_call_id: None,
+            tool_name: None,
+            is_error: None,
+            parent_message_id: None,
+        }
+    }
+
+    #[test]
+    fn test_convert_drops_empty_assistant() {
+        let out = OpenAICompatibleProvider::convert_messages(&[make_empty_assistant()]);
+        assert_eq!(out.len(), 1, "空 assistant 不应发送给 OpenAI 兼容 API");
+        assert_eq!(out[0]["role"], "system");
+    }
+
+    async fn serve_openai_sse(body: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let count = socket.read(&mut chunk).await.unwrap();
+                if count == 0 {
+                    return;
+                }
+                request.extend_from_slice(&chunk[..count]);
+            }
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+        format!("http://{address}")
+    }
+
+    async fn serve_stalled_openai_error() -> (String, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let count = socket.read(&mut chunk).await.unwrap();
+                if count == 0 {
+                    return;
+                }
+                request.extend_from_slice(&chunk[..count]);
+            }
+            socket
+                .write_all(
+                    b"HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: 1000000\r\nConnection: keep-alive\r\n\r\n{\"error\":",
+                )
+                .await
+                .unwrap();
+            sleep(std::time::Duration::from_secs(30)).await;
+        });
+        (format!("http://{address}"), task)
+    }
+
+    #[tokio::test]
+    async fn test_stream_rejects_truncated_or_malformed_sse_and_keeps_mixed_delta() {
+        let truncated_url =
+            serve_openai_sse("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n")
+                .await;
+        let provider = OpenAICompatibleProvider;
+        let (emitter, _) = StreamEventEmitter::channel();
+        let (_, cancel_rx) = watch::channel(false);
+        let outcome = provider
+            .stream_chat(
+                &truncated_url,
+                "key",
+                "model",
+                "request",
+                &[make_user_message("u", "hi", 0)],
+                &emitter,
+                cancel_rx,
+                None,
+                &[],
+            )
+            .await
+            .unwrap();
+        assert!(outcome.had_stream_error);
+        assert_eq!(outcome.full_text, "partial");
+        assert_eq!(
+            outcome.terminal_error.as_ref().unwrap().message,
+            "流提前结束(未收到 [DONE])"
+        );
+
+        let malformed_url = serve_openai_sse("data: {not-json}\n\ndata: [DONE]\n\n").await;
+        let (emitter, _) = StreamEventEmitter::channel();
+        let (_, cancel_rx) = watch::channel(false);
+        let malformed = provider
+            .stream_chat(
+                &malformed_url,
+                "key",
+                "model",
+                "request",
+                &[make_user_message("u", "hi", 0)],
+                &emitter,
+                cancel_rx,
+                None,
+                &[],
+            )
+            .await
+            .unwrap();
+        assert!(malformed.had_stream_error);
+        assert_eq!(
+            malformed.terminal_error.as_ref().unwrap().message,
+            "流式响应 JSON 无效"
+        );
+
+        let mixed_url = serve_openai_sse(
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"think\",\"content\":\"answer\"}}]}\n\ndata: [DONE]\n\n",
+        )
+        .await;
+        let (emitter, _) = StreamEventEmitter::channel();
+        let (_, cancel_rx) = watch::channel(false);
+        let mixed = provider
+            .stream_chat(
+                &mixed_url,
+                "key",
+                "model",
+                "request",
+                &[make_user_message("u", "hi", 0)],
+                &emitter,
+                cancel_rx,
+                None,
+                &[],
+            )
+            .await
+            .unwrap();
+        assert!(!mixed.had_stream_error);
+        assert_eq!(mixed.thinking_text, "think");
+        assert_eq!(mixed.full_text, "answer");
+    }
+
+    #[tokio::test]
+    async fn test_cancel_interrupts_stalled_http_error_body() {
+        let (url, server) = serve_stalled_openai_error().await;
+        let provider = OpenAICompatibleProvider;
+        let (emitter, _) = StreamEventEmitter::channel();
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let messages = [make_user_message("u", "hi", 0)];
+        let mut call = provider.stream_chat(
+            &url,
+            "key",
+            "model",
+            "request",
+            &messages,
+            &emitter,
+            cancel_rx,
+            None,
+            &[],
+        );
+        sleep(std::time::Duration::from_millis(50)).await;
+        cancel_tx.send(true).unwrap();
+        let outcome = timeout(std::time::Duration::from_secs(1), &mut call)
+            .await
+            .expect("取消不应等待错误响应体 EOF")
+            .unwrap();
+        assert!(outcome.had_stream_error);
+        assert!(matches!(
+            outcome.terminal_error.as_ref().unwrap().reason,
+            crate::streaming::StopReason::Aborted
+        ));
+        server.abort();
     }
 
     #[test]
@@ -1424,10 +1643,12 @@ mod tests {
         assert_eq!(output[1]["tool_calls"][0]["function"]["name"], "read_file");
         assert_eq!(output[2]["tool_call_id"], "call-read");
         assert_eq!(output[3]["content"], "根据文件内容，结论是可继续。");
-        assert!(output[4]["content"]
-            .as_str()
-            .unwrap()
-            .starts_with("请继续解释\n\n<buddy_runtime_context>"));
+        assert!(
+            output[4]["content"]
+                .as_str()
+                .unwrap()
+                .starts_with("请继续解释\n\n<buddy_runtime_context>")
+        );
     }
 
     #[test]

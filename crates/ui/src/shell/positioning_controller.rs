@@ -1,10 +1,10 @@
 //! GPUI 事件与每屏位置记忆；原生变更一律在退出 App 借用后执行。
 
+#[cfg(any(target_os = "macos", test))]
+use super::positioning;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use super::visibility;
 use super::{AppShell, config::LogicalSize, positioning_native};
-#[cfg(any(target_os = "macos", test))]
-use super::positioning;
 #[cfg(target_os = "macos")]
 use crate::{accessibility, theme_system::easing};
 use gpui::{AsyncApp, Context, Subscription, Window, WindowHandle};
@@ -27,7 +27,7 @@ pub(super) fn observe(window: &mut Window, cx: &Context<AppShell>) -> [Subscript
             let _ = handle.update(cx, |shell, window, _| save_current(shell, window));
         }));
     });
-    let activation = cx.observe_window_activation(window, |shell, window, cx| {
+    let activation = cx.observe_window_activation(window, |shell, window, _cx| {
         if window.is_window_active() {
             #[cfg(target_os = "windows")]
             {
@@ -43,7 +43,7 @@ pub(super) fn observe(window: &mut Window, cx: &Context<AppShell>) -> [Subscript
                 let handle = window.window_handle().downcast::<AppShell>().unwrap();
                 let update_handle = handle;
                 let hide_handle = handle;
-                shell.pending_deactivation_hide = Some(cx.spawn(async move |_, cx| {
+                shell.pending_deactivation_hide = Some(_cx.spawn(async move |_, cx| {
                     cx.background_executor()
                         .timer(Duration::from_millis(30))
                         .await;

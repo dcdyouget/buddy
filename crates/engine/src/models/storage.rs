@@ -4,14 +4,14 @@ use super::message::Message;
 use serde::{Deserialize, Serialize};
 
 /// 存储清单
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
     pub chunks: Vec<ChunkMeta>,
     pub total_messages: u64,
 }
 
 /// 单个分块元信息
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChunkMeta {
     pub file: String,
     pub count: u32,
