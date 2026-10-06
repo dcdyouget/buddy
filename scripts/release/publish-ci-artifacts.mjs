@@ -14,7 +14,9 @@ const BUCKET = "buddy-release";
 const REGION_ENDPOINT = "https://buddy-release.oss-cn-beijing.aliyuncs.com";
 const PUBLIC_BASE = "https://buddy-release.oss-cn-beijing.aliyuncs.com";
 const REPOSITORY = "dcdyouget/buddy";
-const FETCH_TIMEOUT_MS = 120_000;
+// Hosted runners upload to an OSS region in China; allow complete installers
+// to cross that route without treating a slow transfer as a failed request.
+const FETCH_TIMEOUT_MS = 600_000;
 
 function sha256(data) {
   return createHash("sha256").update(data).digest("hex");
