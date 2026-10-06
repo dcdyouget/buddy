@@ -113,8 +113,8 @@ async function fetchWithTimeout(url, init, { attempts = 1 } = {}) {
 }
 
 function createOssClient() {
-  const accessKeyId = requiredEnv("OSS_ACCESS_KEY_ID");
-  const accessKeySecret = requiredEnv("OSS_ACCESS_KEY_SECRET");
+  const accessKeyId = requiredEnv("OSS_ACCESS_KEY_ID").trim();
+  const accessKeySecret = requiredEnv("OSS_ACCESS_KEY_SECRET").trim();
   async function request(method, key, body, contentType = "application/octet-stream", attempts = 1) {
     const date = new Date().toUTCString();
     const authorization = ossAuthorization({ accessKeyId, accessKeySecret, method, contentType, date, bucket: BUCKET, key });
@@ -128,7 +128,14 @@ function createOssClient() {
       },
       body,
     }, { attempts });
-    if (!response.ok) throw new Error(`OSS ${method} failed for ${key}: HTTP ${response.status}`);
+    if (!response.ok) {
+      // OSS error bodies may contain credential identifiers or signing data.
+      // Only expose the bounded error code and request ID for diagnosis.
+      const body = await response.text();
+      const code = /<Code>([A-Za-z0-9_-]{1,80})<\/Code>/.exec(body)?.[1] ?? "Unknown";
+      const requestId = /<RequestId>([A-Za-z0-9_-]{1,100})<\/RequestId>/.exec(body)?.[1] ?? "unknown";
+      throw new Error(`OSS ${method} failed for ${key}: HTTP ${response.status}, code ${code}, request ${requestId}`);
+    }
     return response;
   }
   return { request };
