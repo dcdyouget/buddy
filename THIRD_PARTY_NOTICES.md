@@ -28,7 +28,7 @@ Copyright (c) Lucide Icons and Contributors，许可证：https://lucide.dev/lic
 
 ## Microsoft Visual C++ Runtime（Microsoft 软件许可条款）
 
-Windows 便携 ZIP 包含未修改的 `VCRUNTIME140.dll`，由发布脚本从已安装的 Visual Studio
+Windows 安装包（`_setup.exe`）与便携 ZIP 包含未修改的 `VCRUNTIME140.dll`，由打包脚本从已安装的 Visual Studio
 `VC/Redist/MSVC/*/x64/Microsoft.VC143.CRT` 复制。该文件是 Microsoft Visual C++
 Redistributable 的可分发代码，不适用 Buddy 的 GPL/MIT 许可证；其使用与再分发受
 [Microsoft Visual Studio 许可条款](https://visualstudio.microsoft.com/license-terms/)及

@@ -14,7 +14,9 @@ macOS / Windows 上的 AI 对话小工具：全局快捷键（Mac 默认 ⌘J，
 | `crates/syntax` | 代码高亮：内置 Python / Shell / SQL 语法，其余语言走 `generic` 通用高亮 | MIT |
 | `crates/update` | 自更新：清单、下载、sha256 + minisign 校验、替换安装 | MIT |
 | `vendor/global-hotkey` | 经 `[patch.crates-io]` 使用的 global-hotkey 修改版 | MIT / Apache-2.0 |
+| `scripts` | `gate.sh` 提交前门禁；`windows-dev.ps1` / `windows-env.ps1` Windows 开发环境 | — |
 | `scripts/release` | 发版工作流调用的打包 / 签名 / 上传脚本，见 `docs/release-workflow.md` | — |
+| `.github/workflows` | `ci.yml` 日常 Windows 编译与测试；`release.yml` 发版 | — |
 
 ## 常用命令
 

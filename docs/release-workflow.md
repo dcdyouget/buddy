@@ -79,7 +79,7 @@ gh workflow run release.yml --ref main -f mode=release -f version=0.2.0 -f notes
 
 整次发布串行锁定；构建、签名或上传失败时不会切换稳定通道，用户不受影响。普通 push 不会发布。
 
-超过 8 MiB 的包通过 OSS 原生分片上传（4 MiB 分片、最多四路并发），避免海外 runner 单连接传输超时。失败的分片上传会尝试中止，不会发布不完整包。
+超过 8 MiB 的包通过 OSS 原生分片上传（4 MiB 分片、最多四路并发）；失败的分片上传会尝试中止，不会发布不完整包。上传后的公网 HEAD 检查以 `Accept-Encoding: identity` 请求——OSS 对声明支持 gzip 的请求会压缩 JSON / 文本并去掉 Content-Length。
 
 ### 失败后
 
