@@ -15,6 +15,7 @@ pub mod theme_control;
 pub mod update;
 mod update_view;
 pub mod view;
+pub mod web_search_control;
 
 pub use view::{PreferenceKind, SettingsEvent, SettingsView};
 

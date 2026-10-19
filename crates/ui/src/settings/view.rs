@@ -14,7 +14,7 @@ use crate::{
     theme_system::{BuddyTheme, tokens::metrics as m},
 };
 use buddy_engine::chat::ChatEngine;
-use buddy_engine::models::{AppConfig, Theme};
+use buddy_engine::models::{AppConfig, Theme, WebSearchBackend};
 use gpui::{
     App, Bounds, Context, EventEmitter, FocusHandle, Focusable, FontWeight, KeyDownEvent, Pixels,
     Render, ScrollHandle, Subscription, Window, canvas, div, prelude::*, px,
@@ -30,6 +30,8 @@ pub enum PreferenceKind {
     Theme,
     /// 对话正文字号。
     FontSize,
+    /// 网络搜索后端。
+    WebSearchBackend,
 }
 
 /// 设置页向路由器发出的事件。
@@ -47,6 +49,8 @@ pub enum SettingsEvent {
     ThemeChanged(Theme),
     /// 保存成功后发布对话正文字号（px）。
     FontSizeChanged(u32),
+    /// 保存成功后发布网络搜索后端。
+    WebSearchBackendChanged(WebSearchBackend),
     /// 新版本已安装到磁盘，由 Router 选择重启时机。
     UpdateReady(buddy_update::Installed),
 }
@@ -66,6 +70,7 @@ pub struct SettingsView {
     hotkey: gpui::Entity<super::hotkey::HotkeyRecorder>,
     theme: gpui::Entity<super::theme_control::ThemeControl>,
     font_size: gpui::Entity<super::font_size_control::FontSizeControl>,
+    web_search: gpui::Entity<super::web_search_control::WebSearchControl>,
     update: gpui::Entity<super::update::UpdateControl>,
     provider_motion: SlideMotion,
     drag_source: DragSource,
@@ -87,7 +92,11 @@ impl SettingsView {
         let model_list = cx.new(|cx| ModelListView::new(config.clone(), cx));
         let hotkey = cx.new(|cx| super::hotkey::HotkeyRecorder::new(config.hotkey.clone(), cx));
         let theme = cx.new(|cx| super::theme_control::ThemeControl::new(config.theme.clone(), cx));
-        let font_size = cx.new(|cx| super::font_size_control::FontSizeControl::new(config.font_size, cx));
+        let font_size =
+            cx.new(|cx| super::font_size_control::FontSizeControl::new(config.font_size, cx));
+        let web_search = cx.new(|cx| {
+            super::web_search_control::WebSearchControl::new(config.websearch_backend, cx)
+        });
         let update = cx.new(super::update::UpdateControl::new);
         let subscriptions = vec![
             cx.subscribe(
@@ -134,6 +143,14 @@ impl SettingsView {
                     }
                 },
             ),
+            cx.subscribe(
+                &web_search,
+                |this, _, event: &super::web_search_control::WebSearchBackendChanged, cx| {
+                    if this.active && !this.provider_motion.interactive() {
+                        cx.emit(SettingsEvent::WebSearchBackendChanged(event.0));
+                    }
+                },
+            ),
             // 安装由用户在本页发起，完成时设置页可能已关闭：重启事件无条件上交
             cx.subscribe(&update, |_, _, event: &super::update::UpdateReady, cx| {
                 cx.emit(SettingsEvent::UpdateReady(event.0.clone()));
@@ -153,6 +170,7 @@ impl SettingsView {
             hotkey,
             theme,
             font_size,
+            web_search,
             update,
             provider_motion: SlideMotion::default(),
             drag_source: drag::default_drag_source(),
@@ -258,6 +276,8 @@ impl SettingsView {
             self.theme.read(cx).control_bounds(id)
         } else if id.starts_with("update-") {
             self.update.read(cx).control_bounds(id)
+        } else if id == "web-search-backend" {
+            self.web_search.read(cx).control_bounds_for_test(cx)
         } else {
             self.model_list.read(cx).control_bounds(id)
         };

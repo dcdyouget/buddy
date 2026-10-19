@@ -44,6 +44,7 @@ fn config() -> AppConfig {
         ],
         selected_model_id: "openai::alpha".to_string(),
         auto_start: true,
+        websearch_backend: Default::default(),
         allowed_paths: vec!["/tmp".to_string()],
         mcp_servers: Vec::new(),
     }

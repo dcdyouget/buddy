@@ -63,6 +63,10 @@ mod tests {
         assert_eq!(migrated.providers[0].api_key, "test-only-key");
         assert!(migrated.models[0].supports_vision);
         assert!(migrated.mcp_servers.is_empty());
+        assert_eq!(
+            migrated.websearch_backend,
+            crate::models::WebSearchBackend::Native
+        );
         assert_eq!(fs::read_to_string(dir.join("config.json")).unwrap(), legacy);
 
         save_config(&dir, &migrated).unwrap();
@@ -70,6 +74,35 @@ mod tests {
             serde_json::to_value(read_config(&dir).unwrap()).unwrap(),
             serde_json::to_value(&migrated).unwrap()
         );
+    }
+
+    #[test]
+    fn websearch_backend_roundtrips_without_changing_provider_credentials() {
+        let directory = tempfile::tempdir().unwrap();
+        let dir = directory.path().to_path_buf();
+        let mut config: AppConfig = serde_json::from_value(serde_json::json!({
+            "websearch_backend": "deepseek",
+            "providers": [{
+                "id": "ds", "name": "DeepSeek", "base_url": "https://api.deepseek.com",
+                "api_key": "test-only-key", "enabled_model_ids": []
+            }]
+        }))
+        .unwrap();
+        save_config(&dir, &config).unwrap();
+        let restored = read_config(&dir).unwrap();
+        assert_eq!(
+            restored.websearch_backend,
+            crate::models::WebSearchBackend::DeepSeek
+        );
+        assert_eq!(restored.deepseek_api_key(), Some("test-only-key"));
+        config.websearch_backend = crate::models::WebSearchBackend::Native;
+        save_config(&dir, &config).unwrap();
+        let restored = read_config(&dir).unwrap();
+        assert_eq!(
+            restored.websearch_backend,
+            crate::models::WebSearchBackend::Native
+        );
+        assert_eq!(restored.deepseek_api_key(), Some("test-only-key"));
     }
 
     #[test]
@@ -91,7 +124,10 @@ mod tests {
         assert_eq!(config.hotkey, "CmdOrCtrl+J");
         assert!(config.providers.is_empty());
         assert!(config.mcp_servers.is_empty());
-        assert_eq!(fs::read_to_string(dir.join("config.json")).unwrap(), invalid);
+        assert_eq!(
+            fs::read_to_string(dir.join("config.json")).unwrap(),
+            invalid
+        );
     }
 
     #[test]

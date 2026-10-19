@@ -38,6 +38,9 @@ pub struct AppConfig {
     pub font_size: u32, // 对话正文字号（px），见 FONT_SIZE_RANGE
 
     // ── Tool / MCP 相关字段 ──
+    /// 网络搜索后端；旧配置继续使用原生实现。
+    #[serde(default)]
+    pub websearch_backend: WebSearchBackend,
     // 缺省时使用 vec![] —— 老 config.json 无这些字段也能正常加载
     /// write 类 tool 允许写入的路径前缀列表（白名单）
     /// 空数组 = 不限制（向后兼容）
@@ -77,9 +80,36 @@ impl Default for AppConfig {
             selected_model_id: String::new(),
             auto_start: false,
             font_size: DEFAULT_FONT_SIZE,
+            websearch_backend: WebSearchBackend::Native,
             allowed_paths: vec![],
             mcp_servers: vec![],
         }
+    }
+}
+
+/// 网络搜索独立于当前聊天模型选择。
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WebSearchBackend {
+    #[default]
+    #[serde(rename = "native")]
+    Native,
+    #[serde(rename = "deepseek")]
+    DeepSeek,
+}
+
+impl AppConfig {
+    /// 复用第一个配置了非空 Key 的 DeepSeek 官方服务商，不使用第三方代理的凭据。
+    pub fn deepseek_api_key(&self) -> Option<&str> {
+        self.providers.iter().find_map(|provider| {
+            let url = reqwest::Url::parse(provider.base_url.trim()).ok()?;
+            let is_official = url.scheme() == "https"
+                && url.host_str() == Some("api.deepseek.com")
+                && url.port_or_known_default() == Some(443)
+                && url.username().is_empty()
+                && url.password().is_none();
+            let key = provider.api_key.trim();
+            (is_official && !key.is_empty()).then_some(key)
+        })
     }
 }
 
@@ -237,5 +267,69 @@ impl Default for CompatConfig {
             supports_tools: None,
             supports_long_cache_retention: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn provider(base_url: &str, api_key: &str) -> ProviderConfig {
+        ProviderConfig {
+            id: "deepseek".into(),
+            name: "DeepSeek".into(),
+            base_url: base_url.into(),
+            api_key: api_key.into(),
+            enabled_model_ids: vec![],
+            provider_type: "openai_compatible".into(),
+            compat: None,
+        }
+    }
+
+    #[test]
+    fn search_uses_only_official_deepseek_credentials() {
+        for base_url in [
+            "https://api.deepseek.com",
+            "https://api.deepseek.com/v1/",
+            "https://api.deepseek.com/anthropic",
+            " https://API.DEEPSEEK.COM:443/v1 ",
+        ] {
+            let config = AppConfig {
+                providers: vec![provider(base_url, "  test-key  ")],
+                ..AppConfig::default()
+            };
+            assert_eq!(config.deepseek_api_key(), Some("test-key"), "{base_url}");
+        }
+        for base_url in [
+            "https://proxy.example.com/deepseek",
+            "https://api.deepseek.com.example.com",
+            "https://api.deepseek.com@evil.example",
+            "https://user:password@api.deepseek.com",
+            "http://api.deepseek.com",
+            "https://api.deepseek.com:8443",
+            "not a url",
+        ] {
+            let config = AppConfig {
+                providers: vec![provider(base_url, "must-not-be-sent")],
+                ..AppConfig::default()
+            };
+            assert_eq!(config.deepseek_api_key(), None, "{base_url}");
+        }
+    }
+
+    #[test]
+    fn search_finds_configured_key_independently_of_selected_model() {
+        let config = AppConfig {
+            selected_model_id: "other::model".into(),
+            providers: vec![
+                provider("https://api.deepseek.com", " \n "),
+                provider("https://other.example.com", "other-key"),
+                provider("https://api.deepseek.com/v1", "first-key"),
+                provider("https://api.deepseek.com", "second-key"),
+            ],
+            ..AppConfig::default()
+        };
+        assert_eq!(config.deepseek_api_key(), Some("first-key"));
+        assert_eq!(AppConfig::default().deepseek_api_key(), None);
     }
 }

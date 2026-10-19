@@ -3,7 +3,7 @@
 //! | v1 | 本模块 |
 //! |----|------|
 //! | 工具名 `websearch` 走专用卡片，不走通用工具卡 | 由消息列表分派（[`is_web_search`]） |
-//! | 标题栏：搜索图标 + 状态文案（正在搜索网络 / 网络搜索完成 / 网络搜索不可用，已继续回答 / 网络搜索已中断）+ 搜索中的三点加载与光泽 + 「· 关键词」 + 折叠箭头；默认折叠 | [`block`]、[`label`] |
+//! | 标题栏：搜索图标 + 状态文案（正在搜索网络 / 网络搜索完成 / 网络搜索不可用 / 网络搜索已中断）+ 搜索中的三点加载与光泽 + 「· 关键词」 + 折叠箭头；默认折叠 | [`block`]、[`label`] |
 //! | 展开：「搜索内容 / 搜索引擎」两行、可选说明、「搜索结果（N）」列表；搜索中「正在等待搜索结果…」；无结果「没有可展示的搜索结果 / 搜索未返回结果」 | 同，最高 336px 内部滚动 |
 //! | 结果项：序号圆标 + 来源胶囊 + 标题链接（点击用系统浏览器打开）+ 最多 3 行摘要 + 正文读取状态（已读取网页正文 / 网页正文读取失败，使用搜索摘要 / 使用搜索摘要） | 同 |
 //! | 引擎显示名：`so_360` → 360 搜索、`cn_bing` → Bing 中国、`duckduckgo` → DuckDuckGo | [`provider_name`] |
@@ -106,6 +106,7 @@ pub fn provider_name(provider: &str) -> String {
         "so_360" => "360 搜索".into(),
         "cn_bing" => "Bing 中国".into(),
         "duckduckgo" => "DuckDuckGo".into(),
+        "deepseek" => "DeepSeek".into(),
         _ => provider.to_string(),
     }
 }
@@ -133,7 +134,7 @@ pub fn label(status: ToolStatus, active: bool, unavailable: bool) -> &'static st
     if active {
         "正在搜索网络"
     } else if unavailable {
-        "网络搜索不可用，已继续回答"
+        "网络搜索不可用"
     } else if status == ToolStatus::Interrupted {
         "网络搜索已中断"
     } else {
@@ -276,6 +277,11 @@ pub fn block(
     }
     let query = display_query(&payload, &tool.arguments);
     let icon_color = if unavailable { c.text_muted } else { c.tool_ui_accent };
+    let collapsed_error_note = if unavailable && !expanded {
+        payload.note.as_deref().filter(|note| !note.is_empty())
+    } else {
+        None
+    };
 
     let header = div()
         .id(id.clone())
@@ -510,7 +516,11 @@ pub fn block(
                     .child(meta_row("搜索引擎", provider_label(&payload), None)),
             )
             .children(payload.note.as_deref().filter(|n| !n.is_empty()).map(|note| {
-                div().text_size(px(m::FONT_SIZE_XS)).line_height(px(m::FONT_SIZE_XS * m::LINE_HEIGHT_BASE)).text_color(c.text_tertiary).child(SharedString::from(note.to_string()))
+                div()
+                    .text_size(px(m::FONT_SIZE_XS))
+                    .line_height(px(m::FONT_SIZE_XS * m::LINE_HEIGHT_BASE))
+                    .text_color(if unavailable { c.state_error } else { c.text_tertiary })
+                    .child(SharedString::from(note.to_string()))
             }))
             .child(results)
     });
@@ -527,7 +537,21 @@ pub fn block(
         .bg(c.panel_surface)
         .children((active && !reduce).then(|| sheen_layer(c.tool_ui_flow_highlight, now_ms)))
         .child(div().absolute().left_0().top_0().bottom_0().w(px(2.0)).bg(c.tool_ui_accent))
-        .child(div().relative().child(header).children(body))
+        .child(
+            div()
+                .relative()
+                .child(header)
+                .children(body)
+                .children(collapsed_error_note.map(|note| {
+                    div()
+                        .px(px(m::SPACE_2))
+                        .pb(px(m::SPACE_2))
+                        .text_size(px(m::FONT_SIZE_XS))
+                        .line_height(px(m::FONT_SIZE_XS * m::LINE_HEIGHT_BASE))
+                        .text_color(c.state_error)
+                        .child(SharedString::from(note.to_string()))
+                })),
+        )
         .into_any_element()
 }
 
@@ -540,6 +564,7 @@ mod tests {
         assert_eq!(provider_name("SO_360"), "360 搜索");
         assert_eq!(provider_name("cn_bing"), "Bing 中国");
         assert_eq!(provider_name("duckduckgo"), "DuckDuckGo");
+        assert_eq!(provider_name("deepseek"), "DeepSeek");
         assert_eq!(provider_name("other"), "other");
     }
 
@@ -559,7 +584,7 @@ mod tests {
         assert_eq!(state_of(ToolStatus::Done, &unavailable), (false, true));
         assert_eq!(state_of(ToolStatus::Error, &Payload::default()), (false, true));
         assert_eq!(label(ToolStatus::Executing, true, false), "正在搜索网络");
-        assert_eq!(label(ToolStatus::Done, false, true), "网络搜索不可用，已继续回答");
+        assert_eq!(label(ToolStatus::Done, false, true), "网络搜索不可用");
         assert_eq!(label(ToolStatus::Interrupted, false, false), "网络搜索已中断");
         assert_eq!(label(ToolStatus::Done, false, false), "网络搜索完成");
     }
@@ -592,5 +617,19 @@ mod tests {
         assert_eq!(payload.results[0].rank, Some(1));
         assert_eq!(payload.results[1].rank, None, "缺序号时按位置补");
         assert_eq!(payload.note.as_deref(), Some("部分"));
+    }
+
+    #[test]
+    fn missing_deepseek_key_payload_keeps_its_recovery_note() {
+        let payload = parse_result(Some(
+            r#"{"status":"unavailable","provider":"deepseek","note":"未配置 DeepSeek API Key，请在设置中的服务商配置 DeepSeek API Key 后重试。","results":[]}"#,
+        ));
+        assert_eq!(payload.status.as_deref(), Some("unavailable"));
+        assert_eq!(provider_label(&payload), "DeepSeek");
+        assert_eq!(
+            payload.note.as_deref(),
+            Some("未配置 DeepSeek API Key，请在设置中的服务商配置 DeepSeek API Key 后重试。")
+        );
+        assert_eq!(state_of(ToolStatus::Error, &payload), (false, true));
     }
 }

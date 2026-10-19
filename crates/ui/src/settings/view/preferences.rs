@@ -1,7 +1,6 @@
 use super::*;
 
 impl SettingsView {
-
     /// 外观控件（真实点击与配置恢复核查）。
     pub fn theme_control(&self) -> &gpui::Entity<super::super::theme_control::ThemeControl> {
         &self.theme
@@ -22,6 +21,9 @@ impl SettingsView {
         self.font_size.update(cx, |control, cx| {
             control.set_size(self.config.font_size, cx)
         });
+        self.web_search.update(cx, |control, cx| {
+            control.set_backend(self.config.websearch_backend, cx)
+        });
     }
 
     pub(super) fn sync_preference_active(&self, cx: &mut Context<Self>) {
@@ -32,11 +34,18 @@ impl SettingsView {
             .update(cx, |control, cx| control.set_active(active, cx));
         self.font_size
             .update(cx, |control, cx| control.set_active(active, cx));
+        self.web_search
+            .update(cx, |control, cx| control.set_active(active, cx));
         self.update
             .update(cx, |control, cx| control.set_active(active, cx));
     }
 
-    pub(crate) fn set_preference_saving(&self, kind: PreferenceKind, saving: bool, cx: &mut Context<Self>) {
+    pub(crate) fn set_preference_saving(
+        &self,
+        kind: PreferenceKind,
+        saving: bool,
+        cx: &mut Context<Self>,
+    ) {
         match kind {
             PreferenceKind::Hotkey => self
                 .hotkey
@@ -47,10 +56,18 @@ impl SettingsView {
             PreferenceKind::FontSize => self
                 .font_size
                 .update(cx, |control, cx| control.set_saving(saving, cx)),
+            PreferenceKind::WebSearchBackend => self
+                .web_search
+                .update(cx, |control, cx| control.set_saving(saving, cx)),
         }
     }
 
-    pub(crate) fn preference_failed(&self, kind: PreferenceKind, error: String, cx: &mut Context<Self>) {
+    pub(crate) fn preference_failed(
+        &self,
+        kind: PreferenceKind,
+        error: String,
+        cx: &mut Context<Self>,
+    ) {
         match kind {
             PreferenceKind::Hotkey => self.hotkey.update(cx, |control, cx| {
                 control.save_failed(format!("保存快捷键失败：{error}"), cx)
@@ -61,6 +78,9 @@ impl SettingsView {
             PreferenceKind::FontSize => self
                 .font_size
                 .update(cx, |control, cx| control.save_failed(error, cx)),
+            PreferenceKind::WebSearchBackend => self.web_search.update(cx, |control, cx| {
+                control.save_failed(self.config.websearch_backend, error, cx)
+            }),
         }
     }
 }

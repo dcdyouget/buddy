@@ -88,6 +88,7 @@ mod tests {
             models: vec![model("old", "old-model", None)],
             selected_model_id: "old-model".to_string(),
             auto_start: true,
+            websearch_backend: Default::default(),
             allowed_paths: vec!["/tmp".to_string()],
             mcp_servers: Vec::new(),
         }

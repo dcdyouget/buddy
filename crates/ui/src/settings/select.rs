@@ -235,7 +235,8 @@ impl Render for SettingsSelect {
             .text_color(c.text_primary)
             .text_size(px(m::FONT_SIZE_SM))
             .when(self.active, |d| {
-                d.cursor_pointer()
+                d.track_focus(&self.focus)
+                    .focus(|style| style.border_color(c.buddy_primary))
                     .on_click(cx.listener(|this, _, window, cx| {
                         window.focus(&this.focus, cx);
                         this.toggle(cx);
@@ -316,8 +317,7 @@ impl Render for SettingsSelect {
             .relative()
             .when(self.full_width, |d| d.w_full())
             .when(self.active, |d| {
-                d.track_focus(&self.focus)
-                    .on_key_down(cx.listener(Self::key_down))
+                d.on_key_down(cx.listener(Self::key_down))
             })
             .when(open, |d| {
                 d.on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, _, cx| {

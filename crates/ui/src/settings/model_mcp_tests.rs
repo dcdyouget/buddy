@@ -83,6 +83,7 @@ fn config_with_mcp() -> AppConfig {
         models: vec![model("openai", "openai::alpha")],
         selected_model_id: "openai::alpha".to_string(),
         auto_start: true,
+        websearch_backend: Default::default(),
         allowed_paths: vec!["/tmp/workspace".to_string()],
         mcp_servers: mcp_fixture(),
     }

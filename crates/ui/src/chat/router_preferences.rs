@@ -1,13 +1,14 @@
 //! 外观、字号与热键按字段增量复用配置队列，保存成功后才发布（与当前 v1 一致）。
 use super::*;
 use crate::settings::PreferenceKind;
-use buddy_engine::models::Theme;
+use buddy_engine::models::{Theme, WebSearchBackend};
 
 #[derive(Clone)]
 pub(super) enum Preference {
     Hotkey(String),
     Theme(Theme),
     FontSize(u32),
+    WebSearchBackend(WebSearchBackend),
 }
 
 impl Preference {
@@ -20,6 +21,7 @@ impl Preference {
             Self::Hotkey(_) => PreferenceKind::Hotkey,
             Self::Theme(_) => PreferenceKind::Theme,
             Self::FontSize(_) => PreferenceKind::FontSize,
+            Self::WebSearchBackend(_) => PreferenceKind::WebSearchBackend,
         }
     }
 
@@ -29,6 +31,7 @@ impl Preference {
             Self::Hotkey(value) => next.hotkey = value.clone(),
             Self::Theme(value) => next.theme = value.clone(),
             Self::FontSize(value) => next.font_size = *value,
+            Self::WebSearchBackend(value) => next.websearch_backend = *value,
         }
         next
     }
@@ -63,7 +66,9 @@ impl PageRouter {
                 Ok(())
             };
             if let Err(error) = registration {
-                let _ = settings.update(cx, |view, cx| view.preference_failed(PreferenceKind::Hotkey, error, cx));
+                let _ = settings.update(cx, |view, cx| {
+                    view.preference_failed(PreferenceKind::Hotkey, error, cx)
+                });
                 let _ = completed.send(());
                 return;
             }
@@ -117,13 +122,15 @@ mod tests {
         config.auto_start = true;
         let dark = Preference::Theme(Theme::Dark).apply(&config);
         let hotkey = Preference::Hotkey("CmdOrCtrl+Shift+K".into()).apply(&dark);
-        let hotkey = Preference::FontSize(16).apply(&hotkey);
+        let font_size = Preference::FontSize(16).apply(&hotkey);
+        let deepseek = Preference::WebSearchBackend(WebSearchBackend::DeepSeek).apply(&font_size);
         let mut expected = config;
         expected.theme = Theme::Dark;
         expected.font_size = 16;
         expected.hotkey = "CmdOrCtrl+Shift+K".into();
+        expected.websearch_backend = WebSearchBackend::DeepSeek;
         assert_eq!(
-            serde_json::to_value(hotkey).unwrap(),
+            serde_json::to_value(deepseek).unwrap(),
             serde_json::to_value(expected).unwrap()
         );
     }

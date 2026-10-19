@@ -1034,7 +1034,7 @@ impl ChatEngine {
         let provider_model_id = raw_model_id(model);
 
         // ── P4: 构造 ToolRegistry(只包含内置 tool,MCP tool 由 P7 注入) ──
-        let mut builtin_tools = crate::tools::builtin::builtin_tools(config.allowed_paths.clone());
+        let mut builtin_tools = crate::tools::builtin::builtin_tools(&config);
         if provider_type == ProviderType::OpenAICompatible && model.supports_image_generation {
             if let Some(tool) = crate::tools::image_generation::GenerateImageTool::for_provider(
                 provider.base_url.clone(),

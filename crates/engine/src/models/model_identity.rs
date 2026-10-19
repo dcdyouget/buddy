@@ -134,6 +134,7 @@ mod tests {
             auto_start: false,
             allowed_paths: vec![],
             mcp_servers: vec![],
+            websearch_backend: Default::default(),
         };
 
         normalize_model_ids(&mut config);
@@ -159,6 +160,7 @@ mod tests {
             auto_start: false,
             allowed_paths: vec![],
             mcp_servers: vec![],
+            websearch_backend: Default::default(),
         };
 
         normalize_model_ids(&mut config);
@@ -181,6 +183,7 @@ mod tests {
             auto_start: false,
             allowed_paths: vec![],
             mcp_servers: vec![],
+            websearch_backend: Default::default(),
         };
 
         normalize_model_ids(&mut config);

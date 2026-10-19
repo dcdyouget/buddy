@@ -199,6 +199,9 @@ impl PageRouter {
                     crate::settings::SettingsEvent::FontSizeChanged(value) => {
                         this.save_preference(preferences::Preference::FontSize(*value), cx)
                     }
+                    crate::settings::SettingsEvent::WebSearchBackendChanged(value) => {
+                        this.save_preference(preferences::Preference::WebSearchBackend(*value), cx)
+                    }
                     crate::settings::SettingsEvent::UpdateReady(installed) => {
                         this.restart_for_update(installed.clone(), cx)
                     }

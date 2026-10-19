@@ -712,9 +712,13 @@ impl Tool for AskUserTool {
 // 工厂 + 单元测试
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// 用当前 AppConfig.allowed_paths 构造全部内置 tool
-pub fn builtin_tools(allowed_paths: Vec<String>) -> Vec<std::sync::Arc<dyn Tool>> {
+/// 用当前配置构造内置工具；搜索凭据不依赖本轮聊天模型。
+pub fn builtin_tools(config: &crate::models::AppConfig) -> Vec<std::sync::Arc<dyn Tool>> {
     use std::sync::Arc;
+    let allowed_paths = config.allowed_paths.clone();
+    let deepseek_api_key = (config.websearch_backend == crate::models::WebSearchBackend::DeepSeek)
+        .then(|| config.deepseek_api_key().map(str::to_owned))
+        .flatten();
     vec![
         Arc::new(ReadFileTool),
         Arc::new(super::file_tools::ListDirectoryTool),
@@ -730,7 +734,10 @@ pub fn builtin_tools(allowed_paths: Vec<String>) -> Vec<std::sync::Arc<dyn Tool>
         }),
         Arc::new(super::file_tools::EditFileTool { allowed_paths }),
         Arc::new(AskUserTool),
-        Arc::new(super::websearch::WebSearchTool),
+        Arc::new(super::websearch::WebSearchTool::new(
+            config.websearch_backend,
+            deepseek_api_key,
+        )),
     ]
 }
 
@@ -1162,9 +1169,38 @@ mod tests {
 
     // ── builtin_tools 工厂 + 重复名检查 ──
 
+    #[tokio::test]
+    async fn configured_deepseek_search_reports_missing_key_through_tool_result() {
+        let config = crate::models::AppConfig {
+            websearch_backend: crate::models::WebSearchBackend::DeepSeek,
+            ..crate::models::AppConfig::default()
+        };
+        let tools = builtin_tools(&config);
+        let search = tools
+            .iter()
+            .find(|tool| tool.name() == "websearch")
+            .unwrap();
+        let output = search
+            .execute(json!({"query": "测试"}), ToolContext::default())
+            .await
+            .unwrap();
+        assert!(output.is_error);
+        let payload: Value = serde_json::from_str(&output.content).unwrap();
+        assert_eq!(payload["provider"], "deepseek");
+        assert_eq!(payload["status"], "unavailable");
+        assert!(
+            payload["note"]
+                .as_str()
+                .unwrap()
+                .contains("DeepSeek API Key")
+        );
+        assert!(payload["note"].as_str().unwrap().contains("设置"));
+        assert!(payload["results"].as_array().unwrap().is_empty());
+    }
+
     #[test]
     fn test_builtin_tools_have_unique_names() {
-        let tools = builtin_tools(vec![]);
+        let tools = builtin_tools(&crate::models::AppConfig::default());
         let names: Vec<&str> = tools.iter().map(|t| t.name()).collect();
         let unique: HashSet<&str> = names.iter().copied().collect();
         assert_eq!(unique.len(), names.len(), "tool 名重复: {:?}", names);
@@ -1172,7 +1208,7 @@ mod tests {
 
     #[test]
     fn test_builtin_safety_classification() {
-        let tools = builtin_tools(vec![]);
+        let tools = builtin_tools(&crate::models::AppConfig::default());
         for t in &tools {
             match t.name() {
                 "read_file" | "list_directory" | "search_files" | "ask_user" | "websearch" => {

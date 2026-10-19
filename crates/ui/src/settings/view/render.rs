@@ -138,7 +138,19 @@ impl Render for SettingsView {
                             .w_full()
                             .h(px(m::SPACE_3)),
                     )
-                    // v1 顺序：外观 → 快捷键 → 软件更新 → 模型
+                    .child(crate::settings::controls::section(
+                        "网络搜索",
+                        "DeepSeek 复用已配置的 DeepSeek API Key，无需另行输入。",
+                        self.web_search.clone(),
+                        cx,
+                    ))
+                    .child(
+                        drag::region_if(&self.drag_source, interactive)
+                            .flex_none()
+                            .w_full()
+                            .h(px(m::SPACE_3)),
+                    )
+                    // 设置项顺序：外观 → 字号 → 快捷键 → 网络搜索 → 更新 → 模型
                     .child(self.update.clone())
                     .child(
                         drag::region_if(&self.drag_source, interactive)
@@ -196,6 +208,7 @@ impl Render for SettingsView {
                                 if let Some(focus) = this.hotkey.read(cx).focus_control(cx) {
                                     order.push(("hotkey".to_string(), focus));
                                 }
+                                order.extend(this.web_search.read(cx).focus_controls(cx));
                                 order.extend(this.update.read(cx).focus_controls());
                                 order.extend(this.model_list.read(cx).focus_order(cx).into_iter());
                                 order.push(("add".to_string(), this.add.clone()));
