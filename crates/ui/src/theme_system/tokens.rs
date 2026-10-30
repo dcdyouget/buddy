@@ -601,6 +601,34 @@ pub mod metrics {
 
 /// 动效：时长 / 延迟为毫秒（延迟可为负）；缓动为 cubic-bezier 四参数
 pub mod motion {
+    /// One shared send timeline. The short fold flows straight into arrival;
+    /// there is no held light-dot phase between the two text representations.
+    pub const SEND_CHARGE_MS: f32 = 40.0;
+    pub const SEND_LAUNCH_AT_MS: f32 = 160.0;
+    pub const SEND_UNFOLD_AT_MS: f32 = 180.0;
+    pub const SEND_HANDOFF_AT_MS: f32 = 320.0;
+    pub const SEND_HANDOFF_MS: f32 = 140.0;
+    pub const SEND_TOTAL_MS: u64 = 480;
+    pub const SEND_TEXT_FADE_AT_MS: f32 = 50.0;
+    pub const SEND_TEXT_FADE_MS: f32 = 140.0;
+    pub const SEND_STATUS_AT_MS: f32 = 100.0;
+    pub const SEND_STATUS_FADE_MS: f32 = 120.0;
+    pub const SEND_DOCK_SETTLE_MS: f32 = 180.0;
+    pub const SEND_DOCK_FADE_MS: f32 = 120.0;
+    pub const SEND_DOCK_DIM: f32 = 0.14;
+    pub const SEND_FOLD_WIDTH: f32 = 44.0;
+    pub const SEND_FOLD_HEIGHT: f32 = 18.0;
+    pub const SEND_LIFT_PX: f32 = 12.0;
+    /// Pixels per second at detachment; passed unchanged into the flight spring.
+    pub const SEND_LAUNCH_SPEED: f32 = 180.0;
+    /// Angular frequencies in radians/second; mass is normalized to one.
+    pub const SEND_FLIGHT_FREQUENCY: f32 = 34.0;
+    pub const SEND_UNFOLD_FREQUENCY: f32 = 42.0;
+    pub const SEND_UNFOLD_DAMPING: f32 = 0.9;
+    pub const SEND_GLOW_OPACITY: f32 = 0.12;
+    pub const SEND_GLOW_BLUR: f32 = 12.0;
+    pub const SEND_RIM_OPACITY: f32 = 0.28;
+    pub const SEND_ACCENT_MIX: f32 = 0.24;
     /// 呼入：窗口从该缩放比例弹簧放大到原尺寸（macOS 26 聚焦搜索式）。
     pub const SUMMON_START_SCALE: f32 = 0.94;
     /// 呼入弹簧刚度（质量 1）。

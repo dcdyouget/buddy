@@ -59,6 +59,8 @@ pub enum ComposerEvent {
 
 /// 输入区
 pub struct Composer {
+    pub(super) send_motion: Option<Rc<super::send_motion::SendMotion>>,
+    streaming_body_height: Rc<Cell<Pixels>>,
     text: Entity<TextArea>,
     /// 是否在流式中（由会话决定）
     streaming: bool,
@@ -132,7 +134,7 @@ impl Composer {
                 cx.notify();
             }),
         ];
-        Self { text, streaming: false, streaming_model: None, supports_vision: false, max_image_bytes: buddy_engine::models::DEFAULT_IMAGE_BYTES, images: Vec::new(), saving_images: false, attachment_error: None, engine, save_tasks: Vec::new(), focused: false, hovered: false, standalone: false, model_button: Rc::default(), bounds: Rc::default(), _subscriptions: subscriptions, drag_source: drag::default_drag_source() }
+        Self { send_motion: None, streaming_body_height: Rc::new(Cell::new(px(m::SPACE_8))), text, streaming: false, streaming_model: None, supports_vision: false, max_image_bytes: buddy_engine::models::DEFAULT_IMAGE_BYTES, images: Vec::new(), saving_images: false, attachment_error: None, engine, save_tasks: Vec::new(), focused: false, hovered: false, standalone: false, model_button: Rc::default(), bounds: Rc::default(), _subscriptions: subscriptions, drag_source: drag::default_drag_source() }
     }
 
     /// 模型按钮在窗口中的边界（上一帧；流式中为 `None`）
@@ -167,6 +169,11 @@ impl Composer {
         self.streaming_model = model;
         // v1：流式结束后自动聚焦输入框
         if ended {
+            // A fast answer or Stop must restore the real input immediately;
+            // the decoration must not keep a fresh draft hidden or oversized.
+            if let Some(motion) = &self.send_motion {
+                motion.cancel();
+            }
             window.focus(&self.text.focus_handle(cx), cx);
         }
         cx.notify();
@@ -210,6 +217,11 @@ impl Composer {
 
 impl Render for Composer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let motion = self.send_motion.as_ref().filter(|motion| motion.active());
+        if motion.is_some() { window.request_animation_frame(); }
+        let status_opacity = motion.map_or(1.0, |motion| motion.status_opacity());
+        let dock_opacity = motion.map_or(1.0, |motion| motion.dock_opacity());
+        let held_height = motion.map(|motion| motion.composer_height(self.streaming_body_height.get() + px(m::SPACE_1 * 2.0 + 2.0)));
         let theme = *cx.buddy_theme();
         let c = theme.colors;
         let standalone = self.standalone;
@@ -238,6 +250,8 @@ impl Render for Composer {
         }];
         shadows.extend(box_shadows(if standalone { theme.shadows.shadow_floating_md } else { theme.shadows.shadow_composer }));
 
+        for shadow in &mut shadows { shadow.color = shadow.color.opacity(dock_opacity); }
+
         if self.streaming {
             self.model_button.set(None);
         }
@@ -251,13 +265,14 @@ impl Render for Composer {
                 .items_center()
                 .gap(px(m::SPACE_1))
                 .w_full()
-                .child(div().flex_1().px(px(m::SPACE_3)).py(px(m::SPACE_2)).text_size(px(m::FONT_SIZE_BASE)).text_color(c.text_muted).child(label))
+                .child(div().flex_1().px(px(m::SPACE_3)).py(px(m::SPACE_2)).text_size(px(m::FONT_SIZE_BASE)).text_color(c.text_muted).opacity(status_opacity).child(label))
                 .child(
                     icon_button("composer-stop", IconName::Square, 28.0, 14.0, IconButtonVariant::Danger, false, cx)
                         .on_click(cx.listener(|_, _, _, cx| cx.emit(ComposerEvent::Stop))),
                 )
         } else {
             let text_box = div()
+                .opacity(status_opacity)
                 .relative()
                 .flex_1()
                 .min_w_0()
@@ -339,6 +354,11 @@ impl Render for Composer {
                 )
         };
 
+        let body = if self.streaming {
+            let measured = self.streaming_body_height.clone();
+            body.relative().child(gpui::canvas(|_, _, _| {}, move |bounds, _, _, _| measured.set(bounds.size.height)).absolute().top_0().left_0().size_full())
+        } else { body };
+
         let attachment_offset = if compact && !self.images.is_empty() { (self.images.len() as f32 * 52.0).min(220.0) } else { 0.0 };
         let image_strip = div()
             .w_full()
@@ -400,18 +420,24 @@ impl Render for Composer {
         } else {
             div().flex().flex_col().child(image_strip).child(body)
         };
+        // Keep status/stop on the same vertical center while a multiline draft
+        // releases its height. The measured body above stays at natural height.
+        let body = div().flex().flex_col().justify_center().w_full()
+            .when_some(held_height, |d, height| d.min_h((height - px(m::SPACE_1 * 2.0 + 2.0)).max(px(0.0))))
+            .child(body);
         let recorded_bounds = self.bounds.clone();
         div()
             .id("input-dock")
             .relative()
-            .when(!standalone, |d| d.mx(px(m::SPACE_2)).mb(px(m::SPACE_2)).rounded(px(m::RADIUS_LG)).border_color(c.border_default))
-            .when(standalone, |d| d.w_full().flex().flex_col().justify_center().rounded(px(m::RADIUS_XL)).border_color(c.window_outline))
+            .when(!standalone, |d| d.mx(px(m::SPACE_2)).mb(px(m::SPACE_2)).rounded(px(m::RADIUS_LG)).border_color(Hsla::from(c.border_default).opacity(dock_opacity)))
+            .when(standalone, |d| d.w_full().flex().flex_col().justify_center().rounded(px(m::RADIUS_XL)).border_color(Hsla::from(c.window_outline).opacity(dock_opacity)))
             .when(standalone && compact, |d| d.h_full())
+            .when_some(held_height, |d, height| d.min_h(height))
             .p(px(m::SPACE_1))
             // 内层渐变由外层圆角裁切（不另设 11px 圆角：圆角只用 4/8/12/16/9999 刻度）
             .overflow_hidden()
             .border_1()
-            .bg(c.composer_surface)
+            .bg(Hsla::from(c.composer_surface).opacity(dock_opacity))
             .shadow(shadows)
             .capture_action::<Paste>(cx.listener(|this, _, _, cx| {
                 if this.paste_from_clipboard(cx) {
@@ -458,7 +484,7 @@ impl Render for Composer {
             .child(
                 // v1 背景：`linear-gradient(180deg, --surface-highlight, transparent)` 叠在表面色上
                 div()
-                    .bg(linear_gradient(180., linear_color_stop(c.surface_highlight, 0.), linear_color_stop(Hsla::from(c.surface_highlight).opacity(0.), 1.)))
+                    .bg(linear_gradient(180., linear_color_stop(Hsla::from(c.surface_highlight).opacity(dock_opacity), 0.), linear_color_stop(Hsla::from(c.surface_highlight).opacity(0.), 1.)))
                     .child(body),
             )
             // 紧凑气泡高度固定，排在输入行下方的提示会被裁掉（选了超过 5 MB 的图片看起来「没反应」）；

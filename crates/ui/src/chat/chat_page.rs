@@ -15,7 +15,7 @@
 //! 不可见的拖动条：顶部 16px、左右与底部各 8px（正是输入区的外边距，即「玻璃边缘」），按下即 `start_window_move`。
 //! 消息正文空白由 Markdown 字形命中判定与行 padding 区域处理，文字与控件保留各自输入。
 //!
-//! 页面本身无状态：错误来自 [`Conversation`]，输入区与空态页共用（草稿两页共享）。
+//! 业务状态来自 [`Conversation`]；本页只持有发送过渡，输入区与空态页共享。
 
 use super::approval_panel::{DecideFn, Decision, approval_panel};
 use super::ask_card::AnswerFn;
@@ -47,6 +47,8 @@ const DRAG_EDGE: f32 = m::SPACE_2;
 
 /// 对话页
 pub struct ChatPage {
+    send_motion: Option<std::rc::Rc<super::send_motion::SendMotion>>,
+    send_cleanup: Option<gpui::Task<()>>,
     conversation: Entity<Conversation>,
     transcript: Entity<Transcript>,
     composer: Entity<Composer>,
@@ -75,9 +77,69 @@ impl ChatPage {
             t.set_download_handler(download);
         });
         // 错误条随会话状态出现 / 消失
-        cx.observe(&conversation, |_, _, cx| cx.notify()).detach();
+        cx.observe(&conversation, |this, conversation, cx| {
+            if this.send_motion.as_ref().is_some_and(|motion| {
+                !conversation.read(cx).state.messages.iter().any(|message| message.id == motion.message_id())
+            }) {
+                this.cancel_send(cx);
+            }
+            cx.notify();
+        }).detach();
         let drag = drag_source.borrow().clone();
-        Self { conversation, transcript, composer, actions, drag, drag_source, focus: cx.focus_handle() }
+        Self { send_motion: None, send_cleanup: None, conversation, transcript, composer, actions, drag, drag_source, focus: cx.focus_handle() }
+    }
+
+    /// Capture the accepted draft before clearing it, then animate into this message.
+    /// Call only for a new submission from the conversation page.
+    pub fn animate_send(&mut self, message_id: String, cx: &mut Context<Self>) {
+        self.cancel_send(cx);
+        if crate::accessibility::prefers_reduced_motion() {
+            return;
+        }
+        let composer = self.composer.read(cx);
+        // Attachments keep their own image rendering and loading state. A text
+        // snapshot cannot stand in for them, so preserve the real row instead.
+        if !composer.images().is_empty() {
+            return;
+        }
+        let Some(source) = composer.bounds() else { return; };
+        let snapshot = composer.text_area().read(cx).send_snapshot();
+        let motion = super::send_motion::SendMotion::new(message_id, source, snapshot);
+        self.composer.update(cx, |composer, cx| {
+            composer.send_motion = Some(motion.clone());
+            cx.notify();
+        });
+        self.transcript.update(cx, |t, cx| {
+            t.send_motion = Some(motion.clone());
+            cx.notify();
+        });
+        self.send_motion = Some(motion);
+        self.send_cleanup = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(std::time::Duration::from_millis(crate::theme_system::tokens::motion::SEND_TOTAL_MS)).await;
+            let _ = this.update(cx, |this, cx| {
+                this.send_motion = None;
+                this.composer.update(cx, |composer, cx| { composer.send_motion = None; cx.notify(); });
+                this.transcript.update(cx, |t, cx| { t.send_motion = None; cx.notify(); });
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    /// Release all participants together when the page or interaction changes.
+    pub(super) fn cancel_send(&mut self, cx: &mut Context<Self>) {
+        let Some(motion) = self.send_motion.take() else { return; };
+        motion.cancel();
+        self.send_cleanup = None;
+        self.composer.update(cx, |composer, cx| {
+            composer.send_motion = None;
+            cx.notify();
+        });
+        self.transcript.update(cx, |transcript, cx| {
+            transcript.send_motion = None;
+            cx.notify();
+        });
+        cx.notify();
     }
 
     /// 消息列表（自检用）
@@ -132,6 +194,7 @@ impl Render for ChatPage {
             .when_some(error, |d, error| d.child(error_banner(&error, move |_, cx| conversation.update(cx, |c, cx| c.dismiss_error(cx)), cx)))
             .child(self.composer.clone())
             .child(crate::motion_effects::surface_sheen(("conversation-sheen", streaming as usize), c.buddy_primary, streaming))
+            .children(self.send_motion.as_ref().map(|motion| motion.overlay()))
             .children(drag_strips(&self.drag))
             .children(approval.map(|a| approval_panel(&a, self.actions.decide.clone(), window, cx)))
     }

@@ -121,8 +121,13 @@ pub fn user_text_style(window: &gpui::Window, cx: &App) -> MarkdownStyle {
 /// User row variant used by the transcript so the bubble's surrounding blank
 /// area remains draggable while the bubble keeps text selection and controls.
 pub fn user_row_with_drag(text: impl IntoElement, cx: &App, source: DragSource) -> AnyElement {
+    user_row_with_motion(text, cx, source, None)
+}
+
+fn user_row_with_motion(text: impl IntoElement, cx: &App, source: DragSource, motion: Option<Rc<super::send_motion::SendMotion>>) -> AnyElement {
     let theme = cx.buddy_theme();
     let c = theme.colors;
+    let opacity = motion.as_ref().map_or(1.0, |motion| motion.bubble_opacity());
     let bubble_bounds = Rc::new(Cell::new(None::<gpui::Bounds<gpui::Pixels>>));
     let recorded_bounds = bubble_bounds.clone();
     let root_bounds = bubble_bounds.clone();
@@ -156,6 +161,7 @@ pub fn user_row_with_drag(text: impl IntoElement, cx: &App, source: DragSource) 
         })
         .child(
             div()
+                .relative()
                 .max_w(relative(USER_MAX_WIDTH))
                 .min_w_0()
                 .px(px(m::SPACE_3))
@@ -164,6 +170,7 @@ pub fn user_row_with_drag(text: impl IntoElement, cx: &App, source: DragSource) 
                 .rounded_tr(px(m::RADIUS_MD))
                 .rounded_br(px(m::RADIUS_MD))
                 .rounded_bl(px(m::RADIUS_SM))
+                .opacity(opacity)
                 .bg(c.user_bubble)
                 .border_1()
                 .border_color(c.user_bubble_border)
@@ -174,9 +181,15 @@ pub fn user_row_with_drag(text: impl IntoElement, cx: &App, source: DragSource) 
                 .child(text)
                 // Measurement only: no hitbox and no layout contribution.
                 .child(
-                    gpui::canvas(|_, _, _| {}, move |bounds, _, _, _| {
-                        recorded_bounds.set(Some(bounds));
-                    })
+                    gpui::canvas(
+                        move |bounds, window, _| {
+                            recorded_bounds.set(Some(bounds));
+                            if let Some(motion) = &motion {
+                                motion.record_target(bounds, window.content_mask().bounds);
+                            }
+                        },
+                        |_, _, _, _| {},
+                    )
                     .absolute()
                     .top_0()
                     .left_0()
@@ -195,8 +208,20 @@ pub fn user_row_with_images_drag(
     cx: &App,
     source: DragSource,
 ) -> AnyElement {
+    user_row_with_images_motion(text, images, has_text, window, cx, source, None)
+}
+
+pub(super) fn user_row_with_images_motion(
+    text: impl IntoElement,
+    images: &[ImageAttachment],
+    has_text: bool,
+    window: &gpui::Window,
+    cx: &App,
+    source: DragSource,
+    motion: Option<Rc<super::send_motion::SendMotion>>,
+) -> AnyElement {
     if images.is_empty() {
-        return user_row_with_drag(text, cx, source);
+        return user_row_with_motion(text, cx, source, motion);
     }
     let columns = if images.len() > 1 { 2 } else { 1 };
     let available = (f32::from(window.viewport_size().width) - m::SPACE_4 * 2.0) * USER_MAX_WIDTH
@@ -211,10 +236,11 @@ pub fn user_row_with_images_drag(
         .gap(px(m::SPACE_1))
         .when(has_text, |d| d.mb(px(m::SPACE_2)))
         .children(images.iter().map(|image| attachment_image_sized(image, cx, max_width)));
-    user_row_with_drag(
+    user_row_with_motion(
         div().flex().flex_col().items_end().child(image_strip).child(text),
         cx,
         source,
+        motion,
     )
 }
 

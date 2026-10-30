@@ -478,6 +478,9 @@ impl PageRouter {
             return;
         }
         let to = self.pages.current();
+        if !matches!(to, Page::Conversation | Page::Streaming) {
+            self.chat.update(cx, |chat, cx| chat.cancel_send(cx));
+        }
         if (from == Page::Settings) != (to == Page::Settings) {
             let shown = to == Page::Settings;
             self.settings_motion.set_shown(shown);
@@ -532,12 +535,16 @@ impl PageRouter {
         cx: &mut Context<Self>,
     ) {
         let model_id = self.config.selected_model_id.clone();
+        let user = user_message_with_images(&text, images);
+        if self.pages.base_page() == Page::Conversation {
+            self.chat.update(cx, |chat, cx| chat.animate_send(user.id.clone(), cx));
+        }
         self.composer.update(cx, |c, cx| {
             c.set_draft("", cx);
             let _ = c.take_images(cx);
         });
         let current = self.conversation.update(cx, |c, cx| {
-            c.begin_send(user_message_with_images(&text, images), &model_id, cx);
+            c.begin_send(user, &model_id, cx);
             let all = &c.state.messages;
             all[all.len() - 2].clone()
         });

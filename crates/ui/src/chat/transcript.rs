@@ -80,6 +80,7 @@ fn loading_older_banner(cx: &App) -> impl IntoElement {
 
 /// 消息列表视图
 pub struct Transcript {
+    pub(super) send_motion: Option<Rc<super::send_motion::SendMotion>>,
     conversation: Entity<Conversation>,
     list: ListState,
     rows: Vec<Row>,
@@ -167,6 +168,7 @@ impl Transcript {
                 cx.notify();
             });
         let mut this = Self {
+            send_motion: None,
             conversation,
             list,
             rows: Vec::new(),
@@ -482,7 +484,7 @@ impl Transcript {
         let drag_source = self.drag_source.clone();
         match &row.kind {
             RowKind::User { msg } => match self.markdown.get(&row.id) {
-                Some((md, _)) => message_row::user_row_with_images_drag(
+                Some((md, _)) => message_row::user_row_with_images_motion(
                     // 纯文本：网址不作链接（v1 不识别链接），点击无动作
                     message_row::with_blank_drag(
                         MarkdownElement::new(md.clone(), message_row::user_text_style(window, cx))
@@ -494,6 +496,7 @@ impl Transcript {
                     window,
                     cx,
                     drag_source.clone(),
+                    self.send_motion.clone().filter(|motion| motion.message_id() == row.id),
                 ),
                 None => div().into_any_element(),
             },
@@ -945,6 +948,10 @@ impl Transcript {
     /// `precise` = 触控板 / 妙控鼠标的像素增量：系统已逐帧给出带惯性的位移，原样跟手，
     /// 再叠一层缓动只会拖慢并与刷新错帧。
     fn on_wheel(&mut self, delta: Pixels, precise: bool, cx: &mut Context<Self>) {
+        if let Some(motion) = &self.send_motion {
+            motion.cancel();
+            cx.notify();
+        }
         // 用户滚轮优先：中止「回到问题 / 回到底部」的程序化滚动
         self.scroll_animation = None;
         let current = self.scroll_offset();
@@ -1282,6 +1289,10 @@ impl Transcript {
 
 impl Render for Transcript {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(motion) = self.send_motion.as_ref().filter(|motion| motion.active()) {
+            motion.begin_frame();
+            window.request_animation_frame();
+        }
         self.advance_scroll(window);
         // 到达底部即把现有消息标为已看（v1）；离开底部后新消息到达 → 外圈脉冲一次
         let visible = self.last_visible_message(cx);

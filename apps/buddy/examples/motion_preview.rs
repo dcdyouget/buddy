@@ -5,7 +5,7 @@
 //! ```
 //!
 //! 预览会自动播放：气泡入场 → 输入草稿 → 展开对话 → 模拟流式回答 → 流光收起 → 再次呼出。
-//! `--loop` 可在每次播放结束后重新开始整段流程。
+//! 可用 `--multiline`、`--fast`、`--dark` 调整草稿、回复节奏与外观；`--loop` 重播，`--once-exit` 播放后退出。
 
 use buddy_engine::chat::ChatEngine;
 use buddy_engine::streaming::{StopReason, StreamEvent};
@@ -14,16 +14,52 @@ use buddy_ui::gpui::{App, AsyncApp, WindowHandle};
 use buddy_ui::gpui_platform::application;
 use buddy_ui::icons::Assets;
 use buddy_ui::shell::{self, AppShell};
+use buddy_ui::theme_system::{self, Appearance};
 use std::path::PathBuf;
 use std::time::Duration;
 
 const MODEL_ID: &str = "motion-preview-model";
 const RESPONSE: &str =
     "这是一段离线模拟的流式回复。文字会以平稳的节奏出现，配合轻微流光，让界面保持有呼吸感。";
+const DRAFT: &str = "把这段界面动效做得更有呼吸感";
+const MULTILINE_DRAFT: &str = "把这段界面动效做得更有呼吸感，强调输入内容连续变形成光点，再落到对话气泡里。\n\n请保留自然的换行，并避免发光太强或节奏太急。\n如果需要，可以给出两种克制的方案并说明各自适合的场景。";
+
+#[derive(Clone, Copy, Default)]
+struct PreviewOptions {
+    loop_demo: bool,
+    once_exit: bool,
+    multiline: bool,
+    fast: bool,
+    dark: bool,
+}
+
+impl PreviewOptions {
+    fn from_args() -> Self {
+        let mut options = Self::default();
+        for argument in std::env::args().skip(1) {
+            match argument.as_str() {
+                "--loop" => options.loop_demo = true,
+                "--once-exit" => options.once_exit = true,
+                "--multiline" => options.multiline = true,
+                "--fast" => options.fast = true,
+                "--dark" => options.dark = true,
+                _ => {}
+            }
+        }
+        options
+    }
+
+    fn draft(self) -> &'static str {
+        if self.multiline {
+            MULTILINE_DRAFT
+        } else {
+            DRAFT
+        }
+    }
+}
 
 fn main() {
-    let loop_demo = std::env::args().any(|argument| argument == "--loop");
-    let once_exit = std::env::args().any(|argument| argument == "--once-exit");
+    let options = PreviewOptions::from_args();
     application().with_assets(Assets).run(move |cx: &mut App| {
         shell::init(cx);
         let mut sandbox = PreviewSandbox::new();
@@ -41,6 +77,12 @@ fn main() {
                     }
                 };
 
+            // The router installs the saved appearance while opening the window.
+            // Override it afterward so --dark affects only this preview process.
+            if options.dark {
+                cx.update(|cx| theme_system::set_appearance(Appearance::Dark, cx));
+            }
+
             // open_main_window creates and shows the native panel, while the
             // normal runtime path owns focus and the entrance sheen.
             #[cfg(target_os = "macos")]
@@ -51,17 +93,17 @@ fn main() {
             }
 
             loop {
-                if let Err(error) = play_once(handle, cx).await {
+                if let Err(error) = play_once(handle, options, cx).await {
                     eprintln!("motion preview failed: {error}");
                     quit_app(cx);
                     break;
                 }
-                if once_exit {
+                if options.once_exit {
                     sandbox.cleanup();
                     quit_app(cx);
                     break;
                 }
-                if !loop_demo {
+                if !options.loop_demo {
                     break;
                 }
                 sleep(cx, Duration::from_millis(1_200)).await;
@@ -106,7 +148,11 @@ impl Drop for PreviewSandbox {
     }
 }
 
-async fn play_once(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Result<(), String> {
+async fn play_once(
+    handle: WindowHandle<AppShell>,
+    options: PreviewOptions,
+    cx: &mut AsyncApp,
+) -> Result<(), String> {
     // Returning to Empty emits the normal compact resize target. It is a no-op
     // on the first pass and makes --loop replay the bubble choreography too.
     reset_compact(&handle, cx)?;
@@ -115,7 +161,7 @@ async fn play_once(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Result<
     // Let the compact shell settle before showing the typing and dialog changes.
     sleep(cx, Duration::from_millis(650)).await;
 
-    set_draft(&handle, "把这段界面动效做得更有呼吸感", cx)?;
+    set_draft(&handle, options.draft(), cx)?;
     sleep(cx, Duration::from_millis(900)).await;
 
     // This is the same transition used by EmptyPage. Keeping it on PageRouter
@@ -124,33 +170,74 @@ async fn play_once(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Result<
     sleep(cx, Duration::from_millis(750)).await;
 
     begin_preview_stream(&handle, cx)?;
+    play_response(&handle, options.fast, cx).await?;
+    sleep(cx, Duration::from_millis(2_200)).await;
+
+    // Exercise the actual close / reopen path so the short exit sheen is visible.
+    shell::runtime::hide(handle, cx).await?;
+    sleep(cx, Duration::from_millis(620)).await;
+    shell::runtime::show(handle, cx).await?;
+    sleep(cx, Duration::from_millis(1_100)).await;
+    Ok(())
+}
+
+async fn play_response(
+    handle: &WindowHandle<AppShell>,
+    fast: bool,
+    cx: &mut AsyncApp,
+) -> Result<(), String> {
+    if fast {
+        push_events(
+            handle,
+            vec![
+                StreamEvent::Start,
+                StreamEvent::TextStart { content_index: 0 },
+                StreamEvent::TextDelta {
+                    content_index: 0,
+                    delta: RESPONSE.to_string(),
+                },
+                StreamEvent::TextEnd {
+                    content_index: 0,
+                    content: RESPONSE.to_string(),
+                },
+                StreamEvent::Done {
+                    reason: StopReason::Stop,
+                    full_text: RESPONSE.to_string(),
+                },
+            ],
+            true,
+            cx,
+        )?;
+        return Ok(());
+    }
+
     sleep(cx, Duration::from_millis(130)).await;
     push_events(
-        &handle,
+        handle,
         vec![
             StreamEvent::Start,
             StreamEvent::TextStart { content_index: 0 },
         ],
+        false,
         cx,
     )?;
 
-    // Small chunks make the real Conversation pacer and assistant text sheen
-    // visible without involving a provider or the network.
+    // Small chunks expose the real Conversation pacer and assistant text sheen.
     let characters = RESPONSE.chars().collect::<Vec<_>>();
     for chunk in characters.chunks(2) {
-        let delta = chunk.iter().collect::<String>();
         push_events(
-            &handle,
+            handle,
             vec![StreamEvent::TextDelta {
                 content_index: 0,
-                delta,
+                delta: chunk.iter().collect(),
             }],
+            false,
             cx,
         )?;
         sleep(cx, Duration::from_millis(48)).await;
     }
     push_events(
-        &handle,
+        handle,
         vec![
             StreamEvent::TextEnd {
                 content_index: 0,
@@ -161,16 +248,9 @@ async fn play_once(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> Result<
                 full_text: RESPONSE.to_string(),
             },
         ],
+        false,
         cx,
-    )?;
-    sleep(cx, Duration::from_millis(2_200)).await;
-
-    // Exercise the actual close / reopen path so the short exit sheen is visible.
-    shell::runtime::hide(handle, cx).await?;
-    sleep(cx, Duration::from_millis(620)).await;
-    shell::runtime::show(handle, cx).await?;
-    sleep(cx, Duration::from_millis(1_100)).await;
-    Ok(())
+    )
 }
 
 fn set_draft(handle: &WindowHandle<AppShell>, text: &str, cx: &mut AsyncApp) -> Result<(), String> {
@@ -201,13 +281,18 @@ fn begin_preview_stream(handle: &WindowHandle<AppShell>, cx: &mut AsyncApp) -> R
     handle
         .update(cx, |shell, _, cx| {
             shell.router().update(cx, |router, cx| {
+                let draft = router.composer().read(cx).draft(cx);
+                let user = user_message(&draft);
+                router
+                    .chat_page()
+                    .update(cx, |chat, cx| chat.animate_send(user.id.clone(), cx));
                 // The preview has shown the draft as user input; a send clears
                 // it just like Composer::send does in the product path.
                 router
                     .composer()
                     .update(cx, |composer, cx| composer.set_draft("", cx));
                 router.conversation().update(cx, |conversation, cx| {
-                    conversation.begin_send(user_message("请展示一段安静的流光回复"), MODEL_ID, cx);
+                    conversation.begin_send(user, MODEL_ID, cx);
                 });
             })
         })
@@ -229,14 +314,20 @@ fn reset_compact(handle: &WindowHandle<AppShell>, cx: &mut AsyncApp) -> Result<(
 fn push_events(
     handle: &WindowHandle<AppShell>,
     events: Vec<StreamEvent>,
+    flush: bool,
     cx: &mut AsyncApp,
 ) -> Result<(), String> {
     handle
         .update(cx, |shell, _, cx| {
             shell.router().update(cx, |router, cx| {
-                router
-                    .conversation()
-                    .update(cx, |conversation, cx| conversation.apply_events(events, cx));
+                router.conversation().update(cx, |conversation, cx| {
+                    conversation.apply_events(events, cx);
+                    if flush {
+                        let now = conversation.now_ms();
+                        conversation.state.flush(now);
+                        cx.notify();
+                    }
+                });
             });
         })
         .map(|_| ())

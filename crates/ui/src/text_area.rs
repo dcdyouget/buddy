@@ -23,13 +23,15 @@
 
 use crate::chat::drag::{self, DragSource};
 use gpui::{
-    App, Bounds, ClipboardItem, Context, CursorStyle, Element, ElementId, ElementInputHandler,
+    App, Bounds, ClipboardItem, ContentMask, Context, CursorStyle, Element, ElementId,
+    ElementInputHandler,
     Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, Hsla,
     KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
     Pixels, Point, ScrollWheelEvent, SharedString, Style, TextAlign, TextRun, UTF16Selection,
     UnderlineStyle, Window, WrappedLine, actions, div, fill, point, prelude::*, px, relative, size,
 };
 use std::ops::Range;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -239,6 +241,7 @@ const UNDO_COALESCE: Duration = Duration::from_millis(800);
 /// 光标闪烁周期的一半
 const CARET_BLINK: Duration = Duration::from_millis(530);
 
+#[derive(Clone)]
 struct LaidLine {
     /// 逻辑行在内容中的起始字节
     start: usize,
@@ -247,7 +250,9 @@ struct LaidLine {
     /// 绘制文本中的起始偏移与长度；密码遮罩时与原文不同。
     display_start: usize,
     display_len: usize,
-    line: WrappedLine,
+    // `WrappedLine` itself is not Clone in the locked GPUI revision. Share its
+    // immutable shaped layout so a send snapshot can retain the frame's lines.
+    line: Rc<WrappedLine>,
     /// 相对内容顶部的 y
     top: Pixels,
     height: Pixels,
@@ -262,6 +267,39 @@ struct Layout {
     placeholder: bool,
     /// 密码绘制文本与原文的 UTF-8 偏移映射。
     mask_map: Option<MaskMap>,
+}
+
+/// Immutable, already-shaped view of the text visible in a TextArea frame.
+/// The shared wrapped lines keep their original shaping and wrapping without
+/// reshaping the submitted draft during its send animation.
+pub(crate) struct TextSnapshot {
+    bounds: Bounds<Pixels>,
+    scroll: Point<Pixels>,
+    line_height: Pixels,
+    lines: Vec<LaidLine>,
+}
+
+impl TextSnapshot {
+    /// Paint the captured visible lines translated by `offset`.
+    /// The caller owns opacity and any additional animation mask.
+    pub(crate) fn paint(&self, offset: Point<Pixels>, window: &mut Window, cx: &mut App) {
+        let bounds = Bounds::new(self.bounds.origin + offset, self.bounds.size);
+        window.with_content_mask(Some(ContentMask { bounds }), |window| {
+            for line in &self.lines {
+                let origin = self.bounds.origin
+                    + offset
+                    + point(-self.scroll.x, line.top - self.scroll.y);
+                let _ = line.line.paint(
+                    origin,
+                    self.line_height,
+                    TextAlign::Left,
+                    None,
+                    window,
+                    cx,
+                );
+            }
+        });
+    }
 }
 
 /// 密码绘制文本与原文的字节边界映射。
@@ -457,6 +495,26 @@ impl TextArea {
     /// 上一帧绘制的文字区域（自检用；尚未绘制时为 `None`）
     pub fn painted_bounds_for_test(&self) -> Option<Bounds<Pixels>> {
         self.layout.as_ref().map(|l| l.bounds)
+    }
+
+    /// Capture the current non-placeholder layout, retaining only shaped lines
+    /// that intersect the TextArea's visible viewport.
+    pub(crate) fn send_snapshot(&self) -> Option<TextSnapshot> {
+        let layout = self.layout.as_ref().filter(|layout| !layout.placeholder)?;
+        let scroll = point(self.scroll_x, self.scroll_y);
+        let visible_bottom = scroll.y + layout.bounds.size.height;
+        let lines: Vec<_> = layout
+            .lines
+            .iter()
+            .filter(|line| line.top + line.height > scroll.y && line.top < visible_bottom)
+            .cloned()
+            .collect();
+        (!lines.is_empty()).then_some(TextSnapshot {
+            bounds: layout.bounds,
+            scroll,
+            line_height: layout.line_height,
+            lines,
+        })
     }
 
     /// 是否正在组字
@@ -1220,7 +1278,7 @@ fn shape(
             len,
             display_start,
             display_len,
-            line,
+            line: Rc::new(line),
             top,
             height,
         });
