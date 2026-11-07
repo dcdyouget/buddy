@@ -6,17 +6,17 @@ use super::positioning;
 use super::visibility;
 use super::{AppShell, config::LogicalSize, positioning_native};
 #[cfg(target_os = "macos")]
-use crate::{accessibility, theme_system::easing};
+use crate::accessibility;
+#[cfg(any(target_os = "macos", test))]
+use crate::theme_system::{easing, tokens::motion};
 use gpui::{AsyncApp, Context, Subscription, Window, WindowHandle};
 use std::time::Duration;
+#[cfg(target_os = "macos")]
+use std::time::Instant;
 
 const SAVE_DELAY: Duration = Duration::from_millis(160);
-#[cfg(target_os = "macos")]
-const RESIZE_STEPS: u32 = 12;
-#[cfg(target_os = "macos")]
-const RESIZE_STEP: Duration = Duration::from_millis(
-    crate::theme_system::tokens::motion::DURATION_NORMAL as u64 / (RESIZE_STEPS - 1) as u64,
-);
+#[cfg(any(target_os = "macos", test))]
+const RESIZE_DURATION: Duration = Duration::from_millis(motion::DURATION_NORMAL as u64);
 
 pub(super) fn observe(window: &mut Window, cx: &Context<AppShell>) -> [Subscription; 2] {
     let bounds = cx.observe_window_bounds(window, |shell, window, cx| {
@@ -78,7 +78,7 @@ pub(super) fn save_before_hide(shell: &mut AppShell, window: &Window) {
     save_current(shell, window);
 }
 
-/// 页面尺寸来源仍为 sizing；原生按底边锚定的短步进提交矩形，避免异步 resize 与移动相互覆盖。
+/// 页面尺寸来源仍为 sizing；随窗口帧按实际时间提交底边锚定的矩形。
 pub(super) fn resize(
     shell: &mut AppShell,
     target: LogicalSize,
@@ -101,10 +101,13 @@ pub(super) fn resize(
                 height: target.height as f64,
             };
             let origin = positioning::bottom_anchored(snapshot.rect, size, &snapshot.screen);
-            Ok((native, positioning::Rect { origin, size }))
+            Ok((native, snapshot.rect, positioning::Rect { origin, size }))
         });
         match prepared {
-            Ok((native, rect)) => {
+            Ok((native, start, rect)) => {
+                let handle = window.window_handle().downcast::<AppShell>().unwrap();
+                // Include the first conversation layout in the animation's budget.
+                let started = Instant::now();
                 shell.pending_resize = Some(cx.spawn(async move |_, cx| {
                     if !animate_resize || accessibility::prefers_reduced_motion() {
                         if let Err(error) = native.set_rect(rect) {
@@ -112,26 +115,37 @@ pub(super) fn resize(
                         }
                         return;
                     }
-                    let start = match native.snapshot() {
-                        Ok(snapshot) => snapshot.rect,
-                        Err(error) => {
-                            log::error!("读取主窗口起始几何失败：{error}");
-                            return;
+                    loop {
+                        let remaining = RESIZE_DURATION.saturating_sub(started.elapsed());
+                        if !remaining.is_zero() {
+                            let (ready, next_frame) = tokio::sync::oneshot::channel();
+                            if handle
+                                .update(cx, |_, window, _| {
+                                    window.on_next_frame(move |_, _| {
+                                        let _ = ready.send(());
+                                    });
+                                })
+                                .is_err()
+                            {
+                                return;
+                            }
+                            // Hidden/occluded windows may stop producing frames. Still settle
+                            // at the deadline so restore() cannot wait on an invisible animation.
+                            tokio::select! {
+                                result = next_frame => if result.is_err() { return; },
+                                _ = cx.background_executor().timer(remaining) => {},
+                            }
                         }
-                    };
-                    for step in 1..=RESIZE_STEPS {
-                        if step > 1 {
-                            // The native frame is updated on the main executor; yielding here
-                            // keeps the animation responsive and lets a newer resize replace it.
-                            cx.background_executor().timer(RESIZE_STEP).await;
-                        }
-                        let t = step as f32 / RESIZE_STEPS as f32;
-                        let t = easing::cubic_bezier(
-                            crate::theme_system::tokens::motion::EASE_STANDARD,
-                        )(t);
-                        let current = interpolate_rect(start, rect, t);
+                        let elapsed = started.elapsed();
+                        let current = resize_frame(start, rect, elapsed);
+                        // AppKit synchronously calls back into GPUI on resize. Apply only after
+                        // leaving handle.update, and skip missed samples instead of adding
+                        // layout/render cost to a fixed delay after every step.
                         if let Err(error) = native.set_rect(current) {
                             log::error!("调整主窗口几何失败：{error}");
+                            return;
+                        }
+                        if elapsed >= RESIZE_DURATION {
                             return;
                         }
                     }
@@ -145,6 +159,23 @@ pub(super) fn resize(
         let _ = (shell, cx);
         window.resize(target.to_gpui());
     }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn resize_frame(
+    from: positioning::Rect,
+    to: positioning::Rect,
+    elapsed: Duration,
+) -> positioning::Rect {
+    if elapsed >= RESIZE_DURATION {
+        return to;
+    }
+    let progress = elapsed.as_secs_f32() / RESIZE_DURATION.as_secs_f32();
+    interpolate_rect(
+        from,
+        to,
+        easing::cubic_bezier(motion::EASE_STANDARD)(progress),
+    )
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -169,6 +200,29 @@ fn interpolate_rect(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resize_catches_up_after_a_slow_frame() {
+        let from = positioning::Rect::new(100.0, 500.0, 560.0, 60.0);
+        let to = positioning::Rect::new(100.0, 60.0, 750.0, 500.0);
+        assert_eq!(resize_frame(from, to, Duration::ZERO), from);
+        // A delayed second frame advances directly to the elapsed-time position, without
+        // replaying every missed step or extending the 200 ms animation.
+        let delayed = resize_frame(from, to, RESIZE_DURATION / 2);
+        assert!(delayed.size.height > 400.0);
+        assert!((delayed.origin.y + delayed.size.height - 560.0).abs() < 1e-9);
+        assert_eq!(resize_frame(from, to, RESIZE_DURATION), to);
+        assert_eq!(resize_frame(from, to, RESIZE_DURATION * 3), to);
+    }
+
+    #[test]
+    fn replacement_resize_starts_at_the_current_geometry() {
+        let compact = positioning::Rect::new(100.0, 500.0, 560.0, 60.0);
+        let expanded = positioning::Rect::new(100.0, 60.0, 750.0, 500.0);
+        let current = resize_frame(compact, expanded, RESIZE_DURATION / 4);
+        assert_eq!(resize_frame(current, compact, Duration::ZERO), current);
+        assert_eq!(resize_frame(current, compact, RESIZE_DURATION), compact);
+    }
 
     #[test]
     fn resize_interpolation_keeps_bottom_anchor() {

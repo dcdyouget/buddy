@@ -269,9 +269,91 @@ async fn run_native_checks(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) ->
         "T12-05 首帧门控 / 呼出落定 / 恢复焦点不重播：{}",
         if entrance { "PASS" } else { "FAIL" }
     );
-    let ok = native_ok && workspace_ok && moved && visibility.passed() && entrance;
+    let conversation_expand = check_conversation_expand(handle, cx).await;
+    let ok = native_ok
+        && workspace_ok
+        && moved
+        && visibility.passed()
+        && entrance
+        && conversation_expand;
     println!("{} 窗口行为自检", if ok { "PASS" } else { "FAIL" });
     ok
+}
+
+#[cfg(target_os = "macos")]
+async fn check_conversation_expand(handle: WindowHandle<AppShell>, cx: &mut AsyncApp) -> bool {
+    use super::{config::CONVERSATION_SIZE, positioning};
+
+    let Some(before) = probe_position(handle, cx) else {
+        println!("T12-06 气泡展开：无法读取展开前原生位置；FAIL");
+        return false;
+    };
+    let target_size = positioning::Size {
+        width: CONVERSATION_SIZE.width as f64,
+        height: CONVERSATION_SIZE.height as f64,
+    };
+    let expected_origin = positioning::bottom_anchored(before.rect, target_size, &before.screen);
+    let started = Instant::now();
+
+    let route_requested = handle
+        .update(cx, |shell, _, cx| {
+            shell
+                .router()
+                .update(cx, |router, cx| router.expand_conversation(cx));
+        })
+        .is_ok();
+    // The PageChanged subscription installs pending_resize while processing the router event.
+    let pending_resize = handle
+        .update(cx, |shell, _, _| shell.pending_resize.take())
+        .ok()
+        .flatten();
+    let resize_task_found = pending_resize.is_some();
+    if let Some(pending_resize) = pending_resize {
+        pending_resize.await;
+    }
+    let elapsed = started.elapsed();
+
+    let actual = probe_position(handle, cx);
+    let native_size_ok = actual.as_ref().is_some_and(|snapshot| {
+        close(snapshot.rect.size.width, target_size.width)
+            && close(snapshot.rect.size.height, target_size.height)
+    });
+    let native_position_ok = actual.as_ref().is_some_and(|snapshot| {
+        close(snapshot.rect.origin.x, expected_origin.x)
+            && close(snapshot.rect.origin.y, expected_origin.y)
+    });
+    let viewport = cx
+        .update_window(handle.into(), |_, window, _| window.viewport_size())
+        .ok();
+    let viewport_size_ok = viewport.is_some_and(|size| {
+        close(f32::from(size.width) as f64, target_size.width)
+            && close(f32::from(size.height) as f64, target_size.height)
+    });
+    let input_focused = probe_native(handle, cx)
+        .is_some_and(|snapshot| snapshot.is_visible && snapshot.view_is_first_responder);
+    let passed = route_requested
+        && resize_task_found
+        && native_size_ok
+        && native_position_ok
+        && viewport_size_ok
+        && input_focused;
+
+    println!(
+        "T12-06 气泡展开：路由={} resize_task={} 耗时={:.1}ms 原生尺寸={} 实际={:?} 目标={:?} 原生位置={} 实际={:?} 目标={:?} viewport={} 输入焦点={}；{}",
+        route_requested,
+        resize_task_found,
+        elapsed.as_secs_f64() * 1000.0,
+        native_size_ok,
+        actual.as_ref().map(|snapshot| snapshot.rect.size),
+        target_size,
+        native_position_ok,
+        actual.as_ref().map(|snapshot| snapshot.rect.origin),
+        expected_origin,
+        viewport_size_ok,
+        input_focused,
+        if passed { "PASS" } else { "FAIL" },
+    );
+    passed
 }
 
 #[cfg(target_os = "macos")]

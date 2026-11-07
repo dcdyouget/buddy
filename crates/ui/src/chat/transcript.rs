@@ -501,12 +501,16 @@ impl Transcript {
                 None => div().into_any_element(),
             },
             RowKind::Block { msg, block, live } => {
-                let blocks = if *live {
-                    state.live.as_ref().map(|l| l.blocks.clone())
+                let content_block = if *live {
+                    state.live.as_ref().and_then(|l| l.blocks.get(*block))
                 } else {
-                    state.messages[*msg].blocks.clone()
-                };
-                let content: AnyElement = match blocks.and_then(|b| b.get(*block).cloned()) {
+                    state.messages[*msg]
+                        .blocks
+                        .as_deref()
+                        .and_then(|blocks| blocks.get(*block))
+                }
+                .cloned();
+                let content: AnyElement = match content_block {
                     Some(ContentBlock::Thinking { content, is_open }) => {
                         // v1：流式思考 = 本消息最后一块、未闭合、且在流式中
                         let thinking_live =
