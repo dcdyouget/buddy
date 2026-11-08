@@ -174,8 +174,17 @@ pub struct MarkdownDecorations {
     pub copy_text: Option<CopyTextFn>,
     /// Per-character colour veil for non-code text (streaming reveal)
     pub veil: Option<MarkdownVeil>,
+    /// Live prose graphemes to paint at a fraction of their normal size, in source order.
+    pub glyph_scales: Vec<MarkdownGlyphScale>,
     /// Element drawn on top of the text at a source index (streaming caret)
     pub overlay: Option<MarkdownOverlay>,
+}
+
+/// Paint a complete source grapheme at `scale` while keeping its full-size advance.
+#[derive(Clone)]
+pub struct MarkdownGlyphScale {
+    pub source_range: Range<usize>,
+    pub scale: f32,
 }
 
 /// Buddy patch: per-character colour veil (see [`MarkdownDecorations::veil`])
@@ -3497,7 +3506,11 @@ impl Element for MarkdownElement {
                     _ => log::debug!("unsupported markdown tag end: {:?}", tag),
                 },
                 MarkdownEvent::Text => {
-                    builder.push_text(&parsed_markdown.source[range.clone()], range.clone());
+                    builder.push_text_with_scales(
+                        &parsed_markdown.source[range.clone()],
+                        range.clone(),
+                        &self.style.decorations.glyph_scales,
+                    );
                 }
                 MarkdownEvent::SubstitutedText(text) => {
                     builder.push_text(text, range.clone());
@@ -4089,6 +4102,13 @@ struct PendingLine {
     /// Rendered (not source) indices, so chips hug the glyphs and ignore
     /// unrendered characters like the surrounding backticks
     code_chips: Vec<(Range<usize>, Hsla)>,
+    scaled_graphemes: Vec<ScaledGrapheme>,
+}
+
+struct ScaledGrapheme {
+    rendered_range: Range<usize>,
+    scale: f32,
+    color: Hsla,
 }
 
 struct ListStackEntry {
@@ -4348,8 +4368,18 @@ impl MarkdownElementBuilder {
     }
 
     fn push_text(&mut self, text: &str, source_range: Range<usize>) {
+        self.push_text_with_scales(text, source_range, &[]);
+    }
+
+    fn push_text_with_scales(
+        &mut self,
+        text: &str,
+        source_range: Range<usize>,
+        scales: &[MarkdownGlyphScale],
+    ) {
+        let rendered_start = self.pending_line.text.len();
         self.pending_line.source_mappings.push(SourceMapping {
-            rendered_index: self.pending_line.text.len(),
+            rendered_index: rendered_start,
             source_index: source_range.start,
         });
         self.pending_line.text.push_str(text);
@@ -4392,6 +4422,37 @@ impl MarkdownElementBuilder {
                 self.pending_line
                     .runs
                     .push(text_style.to_run(text.len() - offset));
+            }
+        } else if !scales.is_empty() && self.code_block_stack.is_empty() {
+            let mut cursor = source_range.start;
+            for entry in scales {
+                let range = &entry.source_range;
+                if range.start < cursor || range.end > source_range.end || range.is_empty() {
+                    continue;
+                }
+                // Parsing can trail the live timeline by a frame after Markdown normalization.
+                let local = range.start - source_range.start..range.end - source_range.start;
+                if text.get(local.clone()).is_none() || !(0.0..1.0).contains(&entry.scale) {
+                    continue;
+                }
+                if cursor < range.start {
+                    self.pending_line
+                        .runs
+                        .push(text_style.to_run(range.start - cursor));
+                }
+                self.pending_line.scaled_graphemes.push(ScaledGrapheme {
+                    rendered_range: rendered_start + local.start..rendered_start + local.end,
+                    scale: entry.scale,
+                    color: text_style.color,
+                });
+                // Shape the original text in place. Its ink is painted after layout.
+                let mut run = text_style.to_run(range.len());
+                run.color = Hsla::transparent_black();
+                self.pending_line.runs.push(run);
+                cursor = range.end;
+            }
+            if cursor < source_range.end {
+                self.pending_line.runs.push(text_style.to_run(source_range.end - cursor));
             }
         } else if let Some(veil) = self.veil.clone()
             // Only verbatim source text maps byte-for-byte onto source indices
@@ -4565,7 +4626,10 @@ impl MarkdownElementBuilder {
             highlights,
             code_chips: line.code_chips.into_iter().collect(),
         });
-        if rendered_line.highlights.is_empty() && rendered_line.code_chips.is_empty() {
+        if rendered_line.highlights.is_empty()
+            && rendered_line.code_chips.is_empty()
+            && line.scaled_graphemes.is_empty()
+        {
             self.rendered_lines.push(rendered_line);
             self.append_child(text.into_any());
         } else {
@@ -4574,6 +4638,7 @@ impl MarkdownElementBuilder {
                 HighlightedLine {
                     text: text.into_any(),
                     line: rendered_line,
+                    scaled_graphemes: line.scaled_graphemes,
                 }
                 .into_any_element(),
             );
@@ -4602,6 +4667,7 @@ impl MarkdownElementBuilder {
 struct HighlightedLine {
     text: AnyElement,
     line: Rc<RenderedLine>,
+    scaled_graphemes: Vec<ScaledGrapheme>,
 }
 
 impl Element for HighlightedLine {
@@ -4650,6 +4716,7 @@ impl Element for HighlightedLine {
     ) {
         self.line.paint_code_chips(window);
         self.text.paint(window, cx);
+        self.line.paint_scaled_graphemes(&self.scaled_graphemes, window);
         self.line.paint_highlights(window);
     }
 }
@@ -4675,6 +4742,45 @@ struct RenderedLine {
 }
 
 impl RenderedLine {
+    fn paint_scaled_graphemes(&self, graphemes: &[ScaledGrapheme], window: &mut Window) {
+        if graphemes.is_empty() {
+            return;
+        }
+        let segments = self.wrapped_line_segments();
+        for entry in graphemes {
+            let range = &entry.rendered_range;
+            let Some(segment) = segments.iter().find(|s| s.start <= range.start && range.end <= s.end)
+            else {
+                continue;
+            };
+            let layout = &segment.layout.unwrapped_layout;
+            let local = range.start - segment.start..range.end - segment.start;
+            let pen_x = layout.x_for_index(local.start);
+            // Snap the raster size to a device pixel so successive frames can reuse glyphs.
+            let font_size = window.pixel_snap(layout.font_size * entry.scale).max(px(1.));
+            let scale = font_size / layout.font_size;
+            self.for_each_bounds_in_rendered_range(
+                std::slice::from_ref(segment),
+                range.clone(),
+                |cell| {
+                    let center = cell.center();
+                    for run in &layout.runs {
+                        for glyph in run.glyphs.iter().filter(|g| local.contains(&g.index)) {
+                            // GPUI paints colour emoji independently of the text run's alpha.
+                            if glyph.is_emoji {
+                                continue;
+                            }
+                            let dx = glyph.position.x - pen_x - cell.size.width / 2.;
+                            let dy = (layout.ascent - layout.descent) / 2. + glyph.position.y;
+                            let origin = center + point(dx * scale, dy * scale);
+                            window.paint_glyph(origin, run.font_id, glyph.id, font_size, entry.color).log_err();
+                        }
+                    }
+                },
+            );
+        }
+    }
+
     /// Painted before the glyphs so the text renders on top of the chips
     fn paint_code_chips(&self, window: &mut Window) {
         const CHIP_CORNER_RADIUS: Pixels = px(4.);

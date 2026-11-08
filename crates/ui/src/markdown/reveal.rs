@@ -5,12 +5,11 @@
 //! source character first appeared so a later batch cannot restart older
 //! characters' animations.
 
-use super::zed_markdown::{MarkdownStyle, MarkdownVeil};
+use super::zed_markdown::{MarkdownGlyphScale, MarkdownStyle};
 use crate::markdown::normalize::EMPHASIS_GUARD;
-use crate::theme_system::{Theme, easing::cubic_bezier, tokens::motion};
-use gpui::Hsla;
+use crate::theme_system::tokens::motion;
 use std::collections::HashMap;
-use std::sync::Arc;
+use unicode_segmentation::UnicodeSegmentation;
 
 /// A source-indexed reveal clock for one Markdown row.
 #[derive(Debug, Default)]
@@ -19,7 +18,7 @@ pub struct RevealTimeline {
     /// First-visible time by UTF-8 source byte index. Completed entries stay
     /// until the live row ends, so later batches never restart old characters.
     first_seen: HashMap<usize, f64>,
-    /// The small active subset copied into the Markdown veil each frame.
+    /// Characters whose entrance has not finished.
     active: HashMap<usize, f64>,
     /// Distinguishes a historical first observation from a brand-new live row.
     initialized: bool,
@@ -75,34 +74,39 @@ impl RevealTimeline {
         self.finish_state(was_live, live);
     }
 
-    /// Add the timeline veil to normal text. Returns whether another frame is
+    /// Scale the newest visible graphemes. Returns whether another frame is
     /// needed. Reduced motion leaves the style untouched and schedules none.
     pub fn decorate(
         &mut self,
         style: &mut MarkdownStyle,
         now_ms: f64,
-        theme: &Theme,
         reduce_motion: bool,
     ) -> bool {
         self.prune(now_ms);
+        let scales = &mut style.decorations.glyph_scales;
+        scales.clear();
         if reduce_motion || self.active.is_empty() {
             return false;
         }
 
-        let seen = self.active.clone();
         let duration = f64::from(motion::DURATION_STREAMING_REVEAL);
-        let ease = cubic_bezier(motion::EASE_STANDARD);
-        style.decorations.veil = Some(MarkdownVeil {
-            start_color: Hsla::from(theme.colors.buddy_primary),
-            start_opacity: motion::STREAMING_REVEAL_START_OPACITY,
-            progress: Arc::new(move |at| {
-                seen.get(&at).map(|first| {
-                    let t = ((now_ms - *first) / duration).clamp(0.0, 1.0) as f32;
-                    ease(t)
-                })
-            }),
-        });
-        true
+        // A stop or background flush can append a whole reply in one update.
+        // Limit the effect to the reading edge even on that frame.
+        for (at, grapheme) in self.source.grapheme_indices(true).rev().take(motion::STREAMING_REVEAL_TRAIL) {
+            let Some(&first) = self.active.get(&at) else { continue };
+            if grapheme.trim().is_empty() || grapheme.starts_with(EMPHASIS_GUARD) {
+                continue;
+            }
+            let t = ((now_ms - first) / duration).clamp(0.0, 1.0) as f32;
+            let eased = t * t * (3.0 - 2.0 * t);
+            let start = motion::STREAMING_REVEAL_START_SCALE;
+            scales.push(MarkdownGlyphScale {
+                source_range: at..at + grapheme.len(),
+                scale: start + (1.0 - start) * eased,
+            });
+        }
+        scales.reverse();
+        !scales.is_empty()
     }
 
     fn prune(&mut self, now_ms: f64) {
@@ -204,6 +208,42 @@ mod tests {
         let mut timeline = RevealTimeline::default();
         timeline.observe("历史内容", 100.0, false);
         assert_eq!(timeline.first_seen_at(0), None);
+    }
+
+    #[test]
+    fn scale_uses_the_first_appearance_of_the_whole_grapheme() {
+        let mut timeline = RevealTimeline::default();
+        let mut style = MarkdownStyle::default();
+        timeline.observe("e", 0.0, true);
+        let source = "e\u{301}好";
+        timeline.observe(source, 40.0, true);
+        assert!(timeline.decorate(&mut style, 40.0, false));
+        let scales = &style.decorations.glyph_scales;
+        assert_eq!(scales.len(), 2);
+        assert_eq!(&source[scales[0].source_range.clone()], "e\u{301}");
+        assert_eq!(&source[scales[1].source_range.clone()], "好");
+        assert!(scales[0].scale > scales[1].scale && scales[0].scale < 1.0);
+        assert_eq!(scales[1].scale, motion::STREAMING_REVEAL_START_SCALE);
+
+        timeline.observe(source, 41.0, false);
+        assert!(timeline.decorate(&mut style, 81.0, false));
+        assert_eq!(style.decorations.glyph_scales.len(), 1);
+        assert!(!timeline.decorate(&mut style, 121.0, false));
+        assert!(style.decorations.glyph_scales.is_empty());
+    }
+
+    #[test]
+    fn a_flush_only_animates_the_tail_and_reduced_motion_clears_it() {
+        let mut timeline = RevealTimeline::default();
+        let mut style = MarkdownStyle::default();
+        let source = "汉".repeat(1000);
+        timeline.observe(&source, 0.0, true);
+        assert!(timeline.decorate(&mut style, 0.0, false));
+        let scales = &style.decorations.glyph_scales;
+        assert_eq!(scales.len(), motion::STREAMING_REVEAL_TRAIL);
+        assert_eq!(scales.last().unwrap().source_range.end, source.len());
+        assert!(!timeline.decorate(&mut style, 1.0, true));
+        assert!(style.decorations.glyph_scales.is_empty());
     }
 
     #[test]

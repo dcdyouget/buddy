@@ -17,8 +17,19 @@ pub fn prefers_reduced_motion() -> bool {
     }
 }
 
-/// 系统是否要求减弱动态效果（Windows 对应项未实现）
-#[cfg(not(target_os = "macos"))]
+/// Windows「辅助功能 → 视觉效果 → 动画效果」关闭时使用静态呈现。
+#[cfg(target_os = "windows")]
+pub fn prefers_reduced_motion() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SPI_GETCLIENTAREAANIMATION, SystemParametersInfoW};
+    let mut enabled: windows_sys::core::BOOL = 1;
+    // SAFETY: SPI_GETCLIENTAREAANIMATION writes one BOOL to the supplied pointer.
+    let ok = unsafe {
+        SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, (&raw mut enabled).cast(), 0)
+    };
+    ok != 0 && enabled == 0
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub fn prefers_reduced_motion() -> bool {
     false
 }

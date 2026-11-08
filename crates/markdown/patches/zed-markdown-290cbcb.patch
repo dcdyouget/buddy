@@ -409,7 +409,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  use parser::CodeBlockMetadata;
  use parser::{
      MarkdownEvent, MarkdownTag, MarkdownTagEnd, ParsedMetadataBlock, parse_links_only,
-@@ -93,7 +128,82 @@
+@@ -93,7 +128,91 @@
      }
  }
  
@@ -459,8 +459,17 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
 +    pub copy_text: Option<CopyTextFn>,
 +    /// Per-character colour veil for non-code text (streaming reveal)
 +    pub veil: Option<MarkdownVeil>,
++    /// Live prose graphemes to paint at a fraction of their normal size, in source order.
++    pub glyph_scales: Vec<MarkdownGlyphScale>,
 +    /// Element drawn on top of the text at a source index (streaming caret)
 +    pub overlay: Option<MarkdownOverlay>,
++}
++
++/// Paint a complete source grapheme at `scale` while keeping its full-size advance.
++#[derive(Clone)]
++pub struct MarkdownGlyphScale {
++    pub source_range: Range<usize>,
++    pub scale: f32,
 +}
 +
 +/// Buddy patch: per-character colour veil (see [`MarkdownDecorations::veil`])
@@ -492,7 +501,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  pub struct HeadingLevelStyles {
      pub h1: Option<TextStyleRefinement>,
      pub h2: Option<TextStyleRefinement>,
-@@ -131,6 +241,8 @@
+@@ -131,6 +250,8 @@
      pub prevent_mouse_interaction: bool,
      pub table_columns_min_size: bool,
      pub soft_break_as_hard_break: bool,
@@ -501,7 +510,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  }
  
  impl Default for MarkdownStyle {
-@@ -160,6 +272,7 @@
+@@ -160,6 +281,7 @@
              prevent_mouse_interaction: false,
              table_columns_min_size: false,
              soft_break_as_hard_break: false,
@@ -509,7 +518,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
          }
      }
  }
-@@ -1128,11 +1241,21 @@
+@@ -1128,11 +1250,21 @@
          self.active_search_highlight
      }
  
@@ -533,7 +542,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
          cx.write_to_clipboard(ClipboardItem::new_string(text));
      }
  
-@@ -1718,8 +1841,10 @@
+@@ -1718,8 +1850,10 @@
      code_span_link: Option<CodeSpanLinkCallback>,
      on_source_click: Option<SourceClickCallback>,
      on_checkbox_toggle: Option<CheckboxToggleCallback>,
@@ -544,7 +553,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
      show_root_block_markers: bool,
      autoscroll: AutoscrollBehavior,
      /// Test-only hook to observe the laid-out text when this element is
-@@ -1744,8 +1869,10 @@
+@@ -1744,8 +1878,10 @@
              code_span_link: None,
              on_source_click: None,
              on_checkbox_toggle: None,
@@ -555,7 +564,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
              show_root_block_markers: false,
              autoscroll: AutoscrollBehavior::Propagate,
              #[cfg(test)]
-@@ -1827,6 +1954,19 @@
+@@ -1827,6 +1963,19 @@
          self
      }
  
@@ -575,7 +584,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
      /// Registers a callback invoked when a mermaid diagram's zoom level changes.
      /// Consumers that scroll the markdown can use this to keep the diagram's
      /// position anchored while it grows or shrinks.
-@@ -1843,6 +1983,19 @@
+@@ -1843,6 +1992,19 @@
          self
      }
  
@@ -595,7 +604,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
      pub fn show_root_block_markers(mut self) -> Self {
          self.show_root_block_markers = true;
          self
-@@ -1915,27 +2068,35 @@
+@@ -1915,27 +2077,35 @@
  
          let image_element = {
              let wrapper = div().id(("markdown-image-link", range.start)).min_w_0();
@@ -643,7 +652,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                      .on_click(move |_, window, cx| {
                          if let Some(ref on_url_click) = url_click {
                              on_url_click(click_url.clone(), window, cx);
-@@ -1951,9 +2112,11 @@
+@@ -1951,9 +2121,11 @@
                          }
                      })
              } else {
@@ -657,7 +666,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                  img(source)
                      .id(("markdown-image", range.start))
                      .min_w_0()
-@@ -2014,6 +2177,7 @@
+@@ -2014,6 +2186,7 @@
          range: &Range<usize>,
          markdown_end: usize,
          text_align_override: Option<TextAlign>,
@@ -665,7 +674,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
      ) {
          let align = text_align_override.unwrap_or(self.style.base_text_style.text_align);
          let mut heading = div().mt_4().mb_2();
-@@ -2033,6 +2197,9 @@
+@@ -2033,6 +2206,9 @@
          let mut heading_style = self.style.heading.clone();
          let mut heading_text_style = heading_style.text_style().clone();
          heading.style().refine(&heading_style);
@@ -675,7 +684,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  
          if let Some(level_style) =
              heading_level_style(level, self.style.heading_level_styles.as_ref())
-@@ -2058,6 +2225,7 @@
+@@ -2058,6 +2234,7 @@
          kind: Option<pulldown_cmark::BlockQuoteKind>,
          range: &Range<usize>,
          markdown_end: usize,
@@ -683,7 +692,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
      ) {
          let border_color = self
              .style
-@@ -2098,6 +2266,10 @@
+@@ -2098,6 +2275,10 @@
              Some(header) => block_div.child(header),
              None => block_div,
          };
@@ -694,7 +703,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  
          builder.push_text_style(self.style.block_quote.clone());
          builder.push_div(block_div, range, markdown_end);
-@@ -2280,6 +2452,7 @@
+@@ -2280,6 +2461,7 @@
          let on_open_url = self.on_url_click.take();
          let on_url_hover = self.on_url_hover.take();
          let on_source_click = self.on_source_click.take();
@@ -702,7 +711,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  
          self.on_mouse_event(window, cx, {
              let hitbox = hitbox.clone();
-@@ -2304,10 +2477,43 @@
+@@ -2304,10 +2486,43 @@
              let hitbox = hitbox.clone();
              move |markdown, event: &MouseDownEvent, phase, window, cx| {
                  if hitbox.is_hovered(window) {
@@ -746,7 +755,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                          if let Ok(source_index) = position_result {
                              if let Some(footnote_ref) =
                                  rendered_text.footnote_ref_for_source_index(source_index)
-@@ -2320,13 +2526,16 @@
+@@ -2320,13 +2535,16 @@
                              }
                          }
  
@@ -767,7 +776,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                                  let blocked = handler(source_index, event.click_count, window, cx);
                                  if blocked {
                                      markdown.selection = Selection::default();
-@@ -2454,6 +2663,7 @@
+@@ -2454,6 +2672,7 @@
                              cx.notify();
                          }
                      } else if let Some(pressed_link) = markdown.pressed_link.take()
@@ -775,7 +784,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                          && source_index.and_then(|ix| rendered_text.link_for_source_index(ix))
                              == Some(&pressed_link)
                      {
-@@ -2549,7 +2759,7 @@
+@@ -2549,7 +2768,7 @@
  
  impl Element for MarkdownElement {
      type RequestLayoutState = RenderedMarkdown;
@@ -784,7 +793,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  
      fn id(&self) -> Option<ElementId> {
          None
-@@ -2602,6 +2812,7 @@
+@@ -2602,6 +2821,7 @@
              highlights,
              parsed_markdown.code_block_highlights.clone(),
          );
@@ -792,7 +801,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
          let markdown_end = if let Some(last) = parsed_markdown.events.last() {
              last.0.end
          } else {
-@@ -2612,6 +2823,8 @@
+@@ -2612,6 +2832,8 @@
          let mut current_img_block_range: Option<Range<usize>> = None;
          let mut handled_html_block = false;
          let mut rendered_mermaid_block = false;
@@ -801,7 +810,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
          let mut rendered_metadata_block = false;
          for (index, (range, event)) in parsed_markdown.events.iter().enumerate() {
              // Skip alt text for images that rendered
-@@ -2716,6 +2929,7 @@
+@@ -2716,6 +2938,7 @@
                                  range,
                                  markdown_end,
                                  text_align_override,
@@ -809,7 +818,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                              );
                          }
                          MarkdownTag::BlockQuote(kind) => {
-@@ -2724,9 +2938,10 @@
+@@ -2724,9 +2947,10 @@
                                  *kind,
                                  range,
                                  markdown_end,
@@ -821,7 +830,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                              if render_mermaid_diagrams
                                  && let Some(mermaid_diagram) =
                                      parsed_markdown.mermaid_diagrams.get(&range.start)
-@@ -2780,7 +2995,7 @@
+@@ -2780,7 +3004,7 @@
                              }
  
                              match (&self.code_block_renderer, is_indented) {
@@ -830,7 +839,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                                      // This is a parent container that we can position the copy button inside.
                                      let parent_container =
                                          div().group("code_block").relative().w_full();
-@@ -2836,7 +3051,40 @@
+@@ -2836,7 +3060,40 @@
                                      builder.push_code_block(language);
                                      builder.push_div(code_block, range, markdown_end);
                                  }
@@ -872,7 +881,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                              }
                          }
                          MarkdownTag::HtmlBlock => {
-@@ -2849,16 +3097,29 @@
+@@ -2849,16 +3106,29 @@
                          MarkdownTag::List(bullet_index) => {
                              builder.push_list(*bullet_index);
                              let is_top_level = builder.list_stack.len() == 1;
@@ -910,7 +919,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                                  task_list_marker_for_item(&parsed_markdown.events, index)
                              {
                                  let source = &parsed_markdown.source()[range.clone()];
-@@ -2894,20 +3155,26 @@
+@@ -2894,20 +3164,26 @@
                              font_style: Some(FontStyle::Italic),
                              ..Default::default()
                          }),
@@ -951,7 +960,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                          MarkdownTag::Link { dest_url, .. } => {
                              if builder.code_block_stack.is_empty() {
                                  builder.link_depth += 1;
-@@ -2970,22 +3237,26 @@
+@@ -2970,22 +3246,26 @@
  
                              let column_count = alignments.len();
                              builder.push_div(div().flex(), range, markdown_end);
@@ -991,7 +1000,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                                      .restrict_scroll_to_axis()
                                      .custom_scrollbars(
                                          Scrollbars::new(ScrollAxes::Horizontal)
-@@ -3000,10 +3271,14 @@
+@@ -3000,10 +3280,14 @@
                          }
                          MarkdownTag::TableHead => {
                              builder.table.start_head();
@@ -1010,7 +1019,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                          }
                          MarkdownTag::TableRow => {
                              builder.table.start_row();
-@@ -3038,6 +3313,17 @@
+@@ -3038,6 +3322,17 @@
                                  Some(Alignment::Right) => cell_div.items_end(),
                                  _ => cell_div,
                              };
@@ -1028,7 +1037,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  
                              builder.push_text_style(TextStyleRefinement {
                                  text_align: Some(text_align),
-@@ -3110,6 +3396,9 @@
+@@ -3110,6 +3405,9 @@
  
                                  let button_row = h_flex()
                                      .gap_0p5()
@@ -1038,7 +1047,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                                      .absolute()
                                      .bg(cx.theme().colors().editor_background)
                                      .when_else(
-@@ -3149,6 +3438,18 @@
+@@ -3149,6 +3447,18 @@
                              });
                          }
  
@@ -1057,7 +1066,20 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                          // Pop the parent container.
                          builder.pop_div();
                      }
-@@ -3251,6 +3552,11 @@
+@@ -3196,7 +3506,11 @@
+                     _ => log::debug!("unsupported markdown tag end: {:?}", tag),
+                 },
+                 MarkdownEvent::Text => {
+-                    builder.push_text(&parsed_markdown.source[range.clone()], range.clone());
++                    builder.push_text_with_scales(
++                        &parsed_markdown.source[range.clone()],
++                        range.clone(),
++                        &self.style.decorations.glyph_scales,
++                    );
+                 }
+                 MarkdownEvent::SubstitutedText(text) => {
+                     builder.push_text(text, range.clone());
+@@ -3251,6 +3565,11 @@
                      }
                      builder.push_text(&parsed_markdown.source[range.clone()], range.clone());
                  }
@@ -1069,7 +1091,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                  MarkdownEvent::Rule => {
                      builder.push_div(
                          div()
-@@ -3314,7 +3620,21 @@
+@@ -3314,7 +3633,21 @@
          let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
          rendered_markdown.element.prepaint(window, cx);
          self.autoscroll(&rendered_markdown.text, window, cx);
@@ -1092,7 +1114,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
      }
  
      fn paint(
-@@ -3323,7 +3643,7 @@
+@@ -3323,7 +3656,7 @@
          _inspector_id: Option<&gpui::InspectorElementId>,
          _bounds: Bounds<Pixels>,
          rendered_markdown: &mut Self::RequestLayoutState,
@@ -1101,7 +1123,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
          window: &mut Window,
          cx: &mut App,
      ) {
-@@ -3333,10 +3653,13 @@
+@@ -3333,10 +3666,13 @@
          window.on_action(std::any::TypeId::of::<crate::Copy>(), {
              let entity = self.markdown.clone();
              let text = rendered_markdown.text.clone();
@@ -1116,7 +1138,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                  }
              }
          });
-@@ -3351,6 +3674,9 @@
+@@ -3351,6 +3687,9 @@
  
          self.paint_mouse_listeners(hitbox, &rendered_markdown.text, window, cx);
          rendered_markdown.element.paint(window, cx);
@@ -1126,7 +1148,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
      }
  }
  
-@@ -3663,6 +3989,7 @@
+@@ -3663,6 +4002,7 @@
      pending_line: PendingLine,
      rendered_links: Vec<RenderedLink>,
      rendered_image_links: Vec<RenderedImageLink>,
@@ -1134,7 +1156,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
      rendered_footnote_refs: Vec<RenderedFootnoteRef>,
      current_source_index: usize,
      html_comment: bool,
-@@ -3676,6 +4003,8 @@
+@@ -3676,6 +4016,8 @@
      table: TableState,
      syntax_theme: Arc<SyntaxTheme>,
      highlights: MarkdownHighlights,
@@ -1143,7 +1165,23 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  }
  
  struct MarkdownHighlights {
-@@ -3784,6 +4113,7 @@
+@@ -3760,8 +4102,15 @@
+     /// Rendered (not source) indices, so chips hug the glyphs and ignore
+     /// unrendered characters like the surrounding backticks
+     code_chips: Vec<(Range<usize>, Hsla)>,
++    scaled_graphemes: Vec<ScaledGrapheme>,
+ }
+ 
++struct ScaledGrapheme {
++    rendered_range: Range<usize>,
++    scale: f32,
++    color: Hsla,
++}
++
+ struct ListStackEntry {
+     bullet_index: Option<u64>,
+ }
+@@ -3784,6 +4133,7 @@
              pending_line: PendingLine::default(),
              rendered_links: Vec::new(),
              rendered_image_links: Vec::new(),
@@ -1151,7 +1189,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
              rendered_footnote_refs: Vec::new(),
              current_source_index: 0,
              html_comment: false,
-@@ -3797,6 +4127,7 @@
+@@ -3797,6 +4147,7 @@
              table: TableState::default(),
              syntax_theme,
              highlights,
@@ -1159,7 +1197,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
          }
      }
  
-@@ -4005,6 +4336,10 @@
+@@ -4005,6 +4356,10 @@
          });
      }
  
@@ -1170,10 +1208,61 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
      fn push_footnote_ref(&mut self, label: SharedString, source_range: Range<usize>) {
          self.rendered_footnote_refs.push(RenderedFootnoteRef {
              source_range,
-@@ -4058,11 +4393,54 @@
+@@ -4013,8 +4368,18 @@
+     }
+ 
+     fn push_text(&mut self, text: &str, source_range: Range<usize>) {
++        self.push_text_with_scales(text, source_range, &[]);
++    }
++
++    fn push_text_with_scales(
++        &mut self,
++        text: &str,
++        source_range: Range<usize>,
++        scales: &[MarkdownGlyphScale],
++    ) {
++        let rendered_start = self.pending_line.text.len();
+         self.pending_line.source_mappings.push(SourceMapping {
+-            rendered_index: self.pending_line.text.len(),
++            rendered_index: rendered_start,
+             source_index: source_range.start,
+         });
+         self.pending_line.text.push_str(text);
+@@ -4058,11 +4423,85 @@
                      .runs
                      .push(text_style.to_run(text.len() - offset));
              }
++        } else if !scales.is_empty() && self.code_block_stack.is_empty() {
++            let mut cursor = source_range.start;
++            for entry in scales {
++                let range = &entry.source_range;
++                if range.start < cursor || range.end > source_range.end || range.is_empty() {
++                    continue;
++                }
++                // Parsing can trail the live timeline by a frame after Markdown normalization.
++                let local = range.start - source_range.start..range.end - source_range.start;
++                if text.get(local.clone()).is_none() || !(0.0..1.0).contains(&entry.scale) {
++                    continue;
++                }
++                if cursor < range.start {
++                    self.pending_line
++                        .runs
++                        .push(text_style.to_run(range.start - cursor));
++                }
++                self.pending_line.scaled_graphemes.push(ScaledGrapheme {
++                    rendered_range: rendered_start + local.start..rendered_start + local.end,
++                    scale: entry.scale,
++                    color: text_style.color,
++                });
++                // Shape the original text in place. Its ink is painted after layout.
++                let mut run = text_style.to_run(range.len());
++                run.color = Hsla::transparent_black();
++                self.pending_line.runs.push(run);
++                cursor = range.end;
++            }
++            if cursor < source_range.end {
++                self.pending_line.runs.push(text_style.to_run(source_range.end - cursor));
++            }
 +        } else if let Some(veil) = self.veil.clone()
 +            // Only verbatim source text maps byte-for-byte onto source indices
 +            && text.len() == source_range.len()
@@ -1225,7 +1314,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
      fn trim_trailing_newline(&mut self) {
          if self.pending_line.text.ends_with('\n') {
              self.pending_line
-@@ -4116,7 +4494,9 @@
+@@ -4116,7 +4555,9 @@
              checkbox.visualization_only(true).into_any_element()
          };
  
@@ -1236,7 +1325,27 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
          checkbox_container = match self.text_style().text_align {
              TextAlign::Left => checkbox_container.justify_start(),
              TextAlign::Center => checkbox_container.justify_center(),
-@@ -4209,6 +4589,7 @@
+@@ -4185,7 +4626,10 @@
+             highlights,
+             code_chips: line.code_chips.into_iter().collect(),
+         });
+-        if rendered_line.highlights.is_empty() && rendered_line.code_chips.is_empty() {
++        if rendered_line.highlights.is_empty()
++            && rendered_line.code_chips.is_empty()
++            && line.scaled_graphemes.is_empty()
++        {
+             self.rendered_lines.push(rendered_line);
+             self.append_child(text.into_any());
+         } else {
+@@ -4194,6 +4638,7 @@
+                 HighlightedLine {
+                     text: text.into_any(),
+                     line: rendered_line,
++                    scaled_graphemes: line.scaled_graphemes,
+                 }
+                 .into_any_element(),
+             );
+@@ -4209,6 +4654,7 @@
                  lines: self.rendered_lines.into(),
                  links: self.rendered_links.into(),
                  image_links: self.rendered_image_links.into(),
@@ -1244,7 +1353,69 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                  footnote_refs: self.rendered_footnote_refs.into(),
              },
          }
-@@ -4664,6 +5045,7 @@
+@@ -4221,6 +4667,7 @@
+ struct HighlightedLine {
+     text: AnyElement,
+     line: Rc<RenderedLine>,
++    scaled_graphemes: Vec<ScaledGrapheme>,
+ }
+ 
+ impl Element for HighlightedLine {
+@@ -4269,6 +4716,7 @@
+     ) {
+         self.line.paint_code_chips(window);
+         self.text.paint(window, cx);
++        self.line.paint_scaled_graphemes(&self.scaled_graphemes, window);
+         self.line.paint_highlights(window);
+     }
+ }
+@@ -4294,6 +4742,45 @@
+ }
+ 
+ impl RenderedLine {
++    fn paint_scaled_graphemes(&self, graphemes: &[ScaledGrapheme], window: &mut Window) {
++        if graphemes.is_empty() {
++            return;
++        }
++        let segments = self.wrapped_line_segments();
++        for entry in graphemes {
++            let range = &entry.rendered_range;
++            let Some(segment) = segments.iter().find(|s| s.start <= range.start && range.end <= s.end)
++            else {
++                continue;
++            };
++            let layout = &segment.layout.unwrapped_layout;
++            let local = range.start - segment.start..range.end - segment.start;
++            let pen_x = layout.x_for_index(local.start);
++            // Snap the raster size to a device pixel so successive frames can reuse glyphs.
++            let font_size = window.pixel_snap(layout.font_size * entry.scale).max(px(1.));
++            let scale = font_size / layout.font_size;
++            self.for_each_bounds_in_rendered_range(
++                std::slice::from_ref(segment),
++                range.clone(),
++                |cell| {
++                    let center = cell.center();
++                    for run in &layout.runs {
++                        for glyph in run.glyphs.iter().filter(|g| local.contains(&g.index)) {
++                            // GPUI paints colour emoji independently of the text run's alpha.
++                            if glyph.is_emoji {
++                                continue;
++                            }
++                            let dx = glyph.position.x - pen_x - cell.size.width / 2.;
++                            let dy = (layout.ascent - layout.descent) / 2. + glyph.position.y;
++                            let origin = center + point(dx * scale, dy * scale);
++                            window.paint_glyph(origin, run.font_id, glyph.id, font_size, entry.color).log_err();
++                        }
++                    }
++                },
++            );
++        }
++    }
++
+     /// Painted before the glyphs so the text renders on top of the chips
+     fn paint_code_chips(&self, window: &mut Window) {
+         const CHIP_CORNER_RADIUS: Pixels = px(4.);
+@@ -4664,6 +5151,7 @@
      lines: Rc<[Rc<RenderedLine>]>,
      links: Rc<[RenderedLink]>,
      image_links: Rc<[RenderedImageLink]>,
@@ -1252,7 +1423,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
      footnote_refs: Rc<[RenderedFootnoteRef]>,
  }
  
-@@ -4688,6 +5070,11 @@
+@@ -4688,6 +5176,11 @@
      destination_url: SharedString,
  }
  
@@ -1264,7 +1435,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  #[derive(Debug, Clone, Eq, PartialEq)]
  struct RenderedFootnoteRef {
      source_range: Range<usize>,
-@@ -4828,6 +5215,37 @@
+@@ -4828,6 +5321,37 @@
          source_index..source_index
      }
  
@@ -1302,7 +1473,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
      fn text_for_range(&self, range: Range<usize>) -> String {
          let mut accumulator = String::new();
  
-@@ -4877,6 +5295,15 @@
+@@ -4877,6 +5401,15 @@
          })
      }
  
@@ -1318,7 +1489,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
      fn footnote_ref_for_source_index(&self, source_index: usize) -> Option<&RenderedFootnoteRef> {
          self.footnote_refs
              .iter()
-@@ -4949,7 +5376,7 @@
+@@ -4949,7 +5482,7 @@
  
      impl Element for CapturingMarkdownElement {
          type RequestLayoutState = RenderedMarkdown;
@@ -1327,7 +1498,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  
          fn id(&self) -> Option<ElementId> {
              self.markdown_element.id()
-@@ -7294,9 +7721,9 @@
+@@ -7294,9 +7827,9 @@
                          size(
                              px(bounds.size.width.as_f32() / scale_factor),
                              px(bounds.size.height.as_f32() / scale_factor),

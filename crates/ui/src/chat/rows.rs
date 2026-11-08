@@ -58,8 +58,7 @@ pub enum RowKind {
         /// 所属 assistant 消息下标
         msg: usize,
     },
-    /// 流式中的回答尚无任何可见内容：占位行（v1 此时只显示呼吸星标）。
-    /// 只在流式中存在，出现首个内容后即消失。
+    /// 发送后等待首个可展示的正文、思考块或工具调用。
     Pending {
         /// 所属 assistant 消息下标
         msg: usize,
@@ -241,9 +240,9 @@ pub fn build_rows(state: &ChatState) -> Vec<Row> {
                 let rows_before = rows.len();
                 push_tools(&mut rows, -1);
                 for (i, block) in blocks.iter().enumerate() {
-                    // 空正文块（流式轮次分隔）不成行：它会在收尾时被去掉，成行则结束时闪一下
+                    // TextStart 和开头的空白增量还没有可读内容，继续显示等待提示。
                     let empty_text =
-                        matches!(block, ContentBlock::Text { content } if content.is_empty());
+                        matches!(block, ContentBlock::Text { content } if content.trim_start().is_empty());
                     if !empty_text {
                         rows.push(Row {
                             id: format!("{anchor}#{m}.{i}"),
@@ -484,6 +483,31 @@ mod tests {
 
     fn ids(rows: &[Row]) -> Vec<&str> {
         rows.iter().map(|r| r.id.as_str()).collect()
+    }
+
+    #[test]
+    fn waiting_row_hands_off_to_the_first_visible_response() {
+        for (first, expected_id) in [
+            (StreamEvent::TextDelta { content_index: 0, delta: "答".into() }, "u#0.0"),
+            (StreamEvent::ThinkingStart { content_index: 1 }, "u#0.1"),
+            (StreamEvent::ToolCallStart { content_index: 1, id: "c".into(), name: "websearch".into() }, "u#0.t.c"),
+        ] {
+            let mut state = ChatState::default();
+            state.begin_send(user("u", "问"), "m");
+            assert_eq!(ids(&build_rows(&state)), ["u", "u#0.pending"]);
+            for event in [
+                StreamEvent::Start,
+                StreamEvent::TextStart { content_index: 0 },
+                StreamEvent::TextDelta { content_index: 0, delta: "\n ".into() },
+            ] {
+                state.push_event(event, 0.0);
+                state.flush(0.0);
+                assert_eq!(ids(&build_rows(&state)), ["u", "u#0.pending"]);
+            }
+            state.push_event(first, 100.0);
+            state.tick(100.0);
+            assert_eq!(ids(&build_rows(&state)), ["u", expected_id]);
+        }
     }
 
     #[test]

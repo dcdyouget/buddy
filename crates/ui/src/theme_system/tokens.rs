@@ -601,34 +601,21 @@ pub mod metrics {
 
 /// 动效：时长 / 延迟为毫秒（延迟可为负）；缓动为 cubic-bezier 四参数
 pub mod motion {
-    /// One shared send timeline. The short fold flows straight into arrival;
-    /// there is no held light-dot phase between the two text representations.
-    pub const SEND_CHARGE_MS: f32 = 40.0;
-    pub const SEND_LAUNCH_AT_MS: f32 = 160.0;
-    pub const SEND_UNFOLD_AT_MS: f32 = 180.0;
-    pub const SEND_HANDOFF_AT_MS: f32 = 320.0;
-    pub const SEND_HANDOFF_MS: f32 = 140.0;
-    pub const SEND_TOTAL_MS: u64 = 480;
-    pub const SEND_TEXT_FADE_AT_MS: f32 = 50.0;
-    pub const SEND_TEXT_FADE_MS: f32 = 140.0;
-    pub const SEND_STATUS_AT_MS: f32 = 100.0;
-    pub const SEND_STATUS_FADE_MS: f32 = 120.0;
-    pub const SEND_DOCK_SETTLE_MS: f32 = 180.0;
-    pub const SEND_DOCK_FADE_MS: f32 = 120.0;
-    pub const SEND_DOCK_DIM: f32 = 0.14;
-    pub const SEND_FOLD_WIDTH: f32 = 44.0;
-    pub const SEND_FOLD_HEIGHT: f32 = 18.0;
-    pub const SEND_LIFT_PX: f32 = 12.0;
-    /// Pixels per second at detachment; passed unchanged into the flight spring.
-    pub const SEND_LAUNCH_SPEED: f32 = 180.0;
-    /// Angular frequencies in radians/second; mass is normalized to one.
-    pub const SEND_FLIGHT_FREQUENCY: f32 = 34.0;
-    pub const SEND_UNFOLD_FREQUENCY: f32 = 42.0;
-    pub const SEND_UNFOLD_DAMPING: f32 = 0.9;
-    pub const SEND_GLOW_OPACITY: f32 = 0.12;
-    pub const SEND_GLOW_BLUR: f32 = 12.0;
-    pub const SEND_RIM_OPACITY: f32 = 0.28;
-    pub const SEND_ACCENT_MIX: f32 = 0.24;
+    /// The captured text travels with its surface. Hand off once both share the row's bounds.
+    pub const SEND_TRAVEL_MS: f32 = 300.0;
+    pub const SEND_FORM_MS: f32 = 85.0;
+    pub const SEND_HANDOFF_AT_MS: f32 = SEND_TRAVEL_MS;
+    pub const SEND_TOTAL_MS: u64 = 370;
+    pub const SEND_ARC_HEIGHT: f32 = 23.0;
+    pub const SEND_STRETCH: f32 = 14.0;
+    pub const SEND_SQUASH: f32 = 3.0;
+    /// Critically damped tracking of a row moving during flight, in radians/second.
+    pub const SEND_TARGET_FREQUENCY: f32 = 36.0;
+    pub const SEND_STATUS_AT_MS: f32 = 95.0;
+    pub const SEND_STATUS_FADE_MS: f32 = 100.0;
+    pub const SEND_DOCK_SETTLE_MS: f32 = 175.0;
+    pub const SEND_DOCK_FADE_MS: f32 = 100.0;
+    pub const SEND_DOCK_DIM: f32 = 0.10;
     /// 呼入：窗口从该缩放比例弹簧放大到原尺寸（macOS 26 聚焦搜索式）。
     pub const SUMMON_START_SCALE: f32 = 0.94;
     /// 呼入弹簧刚度（质量 1）。
@@ -649,10 +636,13 @@ pub mod motion {
     pub const BUTTON_PRESS_OPACITY: f32 = 0.88;
     /// Initial opacity for the first settled portion of streaming text.
     pub const STREAMING_SETTLE_START_OPACITY: f32 = 0.66;
-    /// Each newly revealed character keeps its own short fade clock.
-    pub const DURATION_STREAMING_REVEAL: i32 = 200;
-    /// Soft brand-tinted text settles into the normal foreground colour.
-    pub const STREAMING_REVEAL_START_OPACITY: f32 = 0.32;
+    /// New prose grows around the center of its final glyph cell (milliseconds).
+    pub const DURATION_STREAMING_REVEAL: i32 = 80;
+    pub const STREAMING_REVEAL_START_SCALE: f32 = 0.28;
+    /// Bound simultaneous entrances when a queued batch is flushed.
+    pub const STREAMING_REVEAL_TRAIL: usize = 6;
+    /// Show the inline waiting star after the text has paused (milliseconds).
+    pub const STREAMING_STAR_IDLE_MS: f64 = 300.0;
     /// Surface edge light: one quiet pass on interaction, slower while generating.
     pub const DURATION_SURFACE_SHEEN: u64 = 1400;
     /// Repeating surface light period in milliseconds.

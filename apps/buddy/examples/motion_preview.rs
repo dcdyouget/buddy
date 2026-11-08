@@ -19,10 +19,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 const MODEL_ID: &str = "motion-preview-model";
-const RESPONSE: &str =
-    "这是一段离线模拟的流式回复。文字会以平稳的节奏出现，配合轻微流光，让界面保持有呼吸感。";
+const RESPONSE: &str = "可以让每个新字在自己的位置上轻轻放大。读到后半句时，前面的文字已经落定，视线可以顺着这句话自然地移到下一行。\n\n**加粗文字**也可以这样出现，行内代码 `cargo test` 则直接显示。";
 const DRAFT: &str = "把这段界面动效做得更有呼吸感";
-const MULTILINE_DRAFT: &str = "把这段界面动效做得更有呼吸感，强调输入内容连续变形成光点，再落到对话气泡里。\n\n请保留自然的换行，并避免发光太强或节奏太急。\n如果需要，可以给出两种克制的方案并说明各自适合的场景。";
+const MULTILINE_DRAFT: &str = "把这段界面动效做得更有呼吸感，让气泡从文字周围成形，带着它移动到对话里。\n\n请保留自然的换行，并避免发光太强或节奏太急。\n如果需要，可以给出两种克制的方案并说明各自适合的场景。";
 
 #[derive(Clone, Copy, Default)]
 struct PreviewOptions {
@@ -211,7 +210,6 @@ async fn play_response(
         return Ok(());
     }
 
-    sleep(cx, Duration::from_millis(130)).await;
     push_events(
         handle,
         vec![
@@ -222,7 +220,9 @@ async fn play_response(
         cx,
     )?;
 
-    // Small chunks expose the real Conversation pacer and assistant text sheen.
+    // Simulate first-token latency so the waiting state is visible in the preview.
+    sleep(cx, Duration::from_millis(900)).await;
+    // Small chunks exercise the real Conversation pacer and glyph entrances.
     let characters = RESPONSE.chars().collect::<Vec<_>>();
     for chunk in characters.chunks(2) {
         push_events(

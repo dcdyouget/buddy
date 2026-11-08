@@ -37,7 +37,7 @@ use crate::markdown::{
     zed_markdown::{Markdown, MarkdownElement, MarkdownOptions, syntax::LanguageRegistry},
 };
 use crate::theme_system::box_shadows;
-use crate::theme_system::{BuddyTheme, tokens::metrics as m};
+use crate::theme_system::{BuddyTheme, TextScale, tokens::{metrics as m, motion}};
 use buddy_engine::models::MessageRole;
 use buddy_engine::streaming::ContentBlock;
 use gpui::MouseButton;
@@ -562,24 +562,20 @@ impl Transcript {
                             // Rendering can outlive the final state notification. Observe
                             // here as well so the last batch remains animated after Done.
                             timeline.observe(&source, now, live_reveal);
-                            let mut needs_frame = false;
+                            let mut needs_frame = timeline.decorate(&mut style, now, reduce_motion);
                             if let Some(live_turn) =
                                 state.live.as_ref().filter(|_| *live && row.pos.last)
                             {
-                                let tail = streaming::tail(&source, true, live_turn.reveal_count);
-                                needs_frame = streaming::decorate(
-                                    &mut style,
-                                    &tail,
-                                    now - live_turn.batch_at,
-                                    &theme,
-                                    reduce_motion,
-                                );
+                                let idle_ms = now - live_turn.batch_at;
+                                if !reduce_motion && idle_ms < motion::STREAMING_STAR_IDLE_MS {
+                                    needs_frame = true;
+                                } else {
+                                    let tail = streaming::tail(&source, true, 0);
+                                    needs_frame |= streaming::decorate(
+                                        &mut style, &tail, idle_ms, &theme, reduce_motion,
+                                    );
+                                }
                             }
-                            // The timeline veil is applied after the legacy stream
-                            // decorations so it wins over their per-batch veil.
-                            style.decorations.veil = None;
-                            needs_frame |=
-                                timeline.decorate(&mut style, now, &theme, reduce_motion);
                             if needs_frame {
                                 window.request_animation_frame();
                             }
@@ -851,18 +847,21 @@ impl Transcript {
                 message_row::assistant_row_with_drag(row.pos, bar, drag_source.clone())
                     .into_any_element()
             }
-            // 回答尚无内容：只显示呼吸星标（v1 `StreamingNextStar`）
             RowKind::Pending { .. } => {
                 let since = state.live.as_ref().map_or(0.0, |l| now - l.batch_at);
                 if !reduce_motion {
                     window.request_animation_frame();
                 }
-                message_row::assistant_row_with_drag(
-                    row.pos,
-                    streaming::star_element(&theme, since, reduce_motion),
-                    drag_source.clone(),
-                )
-                .into_any_element()
+                let status = div()
+                    .flex()
+                    .items_center()
+                    .gap(px(m::SPACE_2))
+                    .min_h(px(TextScale::body(cx) * markdown::ASSISTANT_LINE_HEIGHT))
+                    .text_size(px(TextScale::secondary(cx)))
+                    .text_color(theme.colors.text_muted)
+                    .child(streaming::star_element(&theme, since, reduce_motion))
+                    .child(gpui::text!("模型正在思考中"));
+                message_row::assistant_row_with_drag(row.pos, status, drag_source).into_any_element()
             }
         }
     }

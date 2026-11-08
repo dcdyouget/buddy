@@ -103,8 +103,8 @@ impl ChatPage {
             return;
         }
         let Some(source) = composer.bounds() else { return; };
-        let snapshot = composer.text_area().read(cx).send_snapshot();
-        let motion = super::send_motion::SendMotion::new(message_id, source, snapshot);
+        let Some(snapshot) = composer.text_area().read(cx).send_snapshot() else { return; };
+        let motion = super::send_motion::SendMotion::new(message_id, source.size.height, snapshot);
         self.composer.update(cx, |composer, cx| {
             composer.send_motion = Some(motion.clone());
             cx.notify();

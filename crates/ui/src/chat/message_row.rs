@@ -185,7 +185,8 @@ fn user_row_with_motion(text: impl IntoElement, cx: &App, source: DragSource, mo
                         move |bounds, window, _| {
                             recorded_bounds.set(Some(bounds));
                             if let Some(motion) = &motion {
-                                motion.record_target(bounds, window.content_mask().bounds);
+                                // The absolute child measures the inside of the 1px border.
+                                motion.record_target(bounds.dilate(px(1.)), window.content_mask().bounds);
                             }
                         },
                         |_, _, _, _| {},

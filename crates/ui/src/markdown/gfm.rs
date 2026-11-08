@@ -171,6 +171,7 @@ pub fn decorations(theme: &Theme, body: f32) -> MarkdownDecorations {
         copy_text: Some(Arc::new(super::copy::copy_text)),
         // 流式渐显与星标按帧设置（见 markdown::streaming）
         veil: None,
+        glyph_scales: Vec::new(),
         overlay: None,
     }
 }

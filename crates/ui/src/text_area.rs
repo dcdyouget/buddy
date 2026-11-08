@@ -272,7 +272,9 @@ struct Layout {
 /// Immutable, already-shaped view of the text visible in a TextArea frame.
 /// The shared wrapped lines keep their original shaping and wrapping without
 /// reshaping the submitted draft during its send animation.
+#[cfg_attr(test, derive(Default))]
 pub(crate) struct TextSnapshot {
+    pub(crate) visible_text: Bounds<Pixels>,
     bounds: Bounds<Pixels>,
     scroll: Point<Pixels>,
     line_height: Pixels,
@@ -509,7 +511,15 @@ impl TextArea {
             .filter(|line| line.top + line.height > scroll.y && line.top < visible_bottom)
             .cloned()
             .collect();
-        (!lines.is_empty()).then_some(TextSnapshot {
+        let origin = layout.bounds.origin - scroll;
+        let width = lines.iter().map(|line| line.line.width()).max()?;
+        let last = lines.last()?;
+        let visible_text = Bounds::from_corners(
+            origin + point(px(0.), lines.first()?.top),
+            origin + point(width, last.top + last.height),
+        ).intersect(&layout.bounds);
+        (visible_text.size.width > px(0.) && visible_text.size.height > px(0.)).then_some(TextSnapshot {
+            visible_text,
             bounds: layout.bounds,
             scroll,
             line_height: layout.line_height,
