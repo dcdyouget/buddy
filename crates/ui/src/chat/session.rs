@@ -53,6 +53,27 @@ impl Conversation {
         }));
     }
 
+    /// 一次读取到目标消息之前，保留现有尾部和正在生成的回合；不逐页触发滚动加载。
+    pub(super) fn load_through(&mut self, offset: u64, cx: &mut Context<Self>) -> Task<Result<(), String>> {
+        if offset >= self.state.history.offset { return Task::ready(Ok(())); }
+        let Some(loader) = self.loader.clone() else { return Task::ready(Err("无法读取历史消息".into())); };
+        self.loading = None;
+        let start = offset.saturating_sub(super::state::HISTORY_PAGE_SIZE);
+        let limit = self.state.history.offset - start;
+        self.state.history.loading = true;
+        let read = loader(start, limit, cx);
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = read.await;
+            this.update(cx, |this, cx| {
+                let status = result.as_ref().map(|_| ()).map_err(Clone::clone);
+                this.state.finish_load_older(start, result);
+                cx.notify();
+                status
+            }).map_err(|error| error.to_string())?
+        })
+    }
+
     /// 单调时钟（毫秒），节奏器与落定效果共用
     pub fn now_ms(&self) -> f64 {
         self.started.elapsed().as_secs_f64() * 1000.0

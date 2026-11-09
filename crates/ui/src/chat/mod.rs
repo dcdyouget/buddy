@@ -24,6 +24,7 @@ pub mod composer;
 pub mod composer_attachments;
 pub(crate) mod drag;
 pub mod empty_page;
+pub(crate) mod history_search;
 pub mod image_gen;
 pub mod image_gen_state;
 pub mod message_actions;

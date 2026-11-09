@@ -8,7 +8,7 @@ use super::config::{COMPACT_SIZE, CONVERSATION_SIZE, LogicalSize, SETTINGS_SIZE}
 pub fn page_size(page: Page) -> LogicalSize {
     match page {
         Page::Empty | Page::NoApiKey => COMPACT_SIZE,
-        Page::Conversation | Page::Streaming => CONVERSATION_SIZE,
+        Page::Conversation | Page::Streaming | Page::HistorySearch => CONVERSATION_SIZE,
         Page::Settings => SETTINGS_SIZE,
     }
 }
@@ -47,6 +47,7 @@ mod tests {
         assert_eq!(page_size(Page::Conversation), CONVERSATION_SIZE);
         assert_eq!(page_size(Page::Streaming), CONVERSATION_SIZE);
         assert_eq!(page_size(Page::Settings), SETTINGS_SIZE);
+        assert_eq!(page_size(Page::HistorySearch), CONVERSATION_SIZE);
     }
 
     #[test]
@@ -61,6 +62,8 @@ mod tests {
             (Page::NoApiKey, Page::Settings, None, Some(SETTINGS_SIZE)),
             (Page::Conversation, Page::Streaming, None, None),
             (Page::Conversation, Page::Settings, None, None),
+            (Page::Conversation, Page::HistorySearch, None, None),
+            (Page::HistorySearch, Page::Conversation, None, None),
             (
                 Page::Settings,
                 Page::Conversation,

@@ -101,6 +101,14 @@ fn msg_of(kind: &RowKind) -> usize {
     }
 }
 
+/// 从指定问题到下一个问题之前的整组可见行，包含工具轮和回答操作栏。
+pub(super) fn turn_range(rows: &[Row], question_id: &str) -> Option<Range<usize>> {
+    let start = rows.iter().position(|row| row.id == question_id && matches!(row.kind, RowKind::User { .. }))?;
+    let end = rows[start + 1..].iter().position(|row| matches!(row.kind, RowKind::User { .. }))
+        .map_or(rows.len(), |offset| start + 1 + offset);
+    Some(start..end)
+}
+
 fn fingerprint(parts: impl Hash) -> u64 {
     let mut h = DefaultHasher::new();
     parts.hash(&mut h);
@@ -483,6 +491,29 @@ mod tests {
 
     fn ids(rows: &[Row]) -> Vec<&str> {
         rows.iter().map(|r| r.id.as_str()).collect()
+    }
+
+    #[test]
+    fn search_highlight_covers_the_whole_turn_without_adjacent_questions() {
+        let state = ChatState::from_history(vec![
+            user("before", "前一个问题"),
+            assistant("a0", vec![text("前一个回答")], vec![]),
+            user("target", "搜索命中的问题"),
+            assistant("a1", vec![
+                ContentBlock::Thinking { content: "思考".into(), is_open: false },
+                text("回答第一段"),
+            ], vec!["lookup"]),
+            tool("t1", "lookup"),
+            assistant("a2", vec![text("工具调用后的回答")], vec![]),
+            user("after", "下一个问题"),
+            assistant("a3", vec![text("下一个回答")], vec![]),
+        ]);
+        let rows = build_rows(&state);
+        let range = turn_range(&rows, "target").unwrap();
+        assert_eq!(ids(&rows[range]), ["target", "target#0.0", "target#0.1", "target#0.t.lookup", "target#1.0", "target#1.actions"]);
+        assert_eq!(turn_range(&rows, "a1"), None);
+        assert_eq!(turn_range(&rows, "missing"), None);
+        assert_eq!(ids(&rows[turn_range(&rows, "after").unwrap()]), ["after", "after#0.0", "after#0.actions"]);
     }
 
     #[test]

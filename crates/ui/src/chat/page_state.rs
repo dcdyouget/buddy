@@ -36,6 +36,8 @@ pub enum Page {
     Conversation,
     /// 对话（流式中）；与 [`Page::Conversation`] 渲染同一页
     Streaming,
+    /// 历史搜索，覆盖在对话页上。
+    HistorySearch,
     /// 设置（叠加层）
     Settings,
 }
@@ -111,6 +113,7 @@ impl PageState {
     pub fn base_page(&self) -> Page {
         match self.current {
             Page::Settings => self.previous.unwrap_or(Page::Empty),
+            Page::HistorySearch => self.previous.unwrap_or(Page::Conversation),
             page => page,
         }
     }
@@ -142,11 +145,20 @@ impl PageState {
         self.set_page(if previous.is_compact() { Page::Conversation } else { previous })
     }
 
+    /// 仅对话页可进入搜索；再次触发恢复原对话。
+    pub fn toggle_history_search(&mut self) -> bool {
+        match self.current {
+            Page::Conversation | Page::Streaming => self.set_page(Page::HistorySearch),
+            Page::HistorySearch => self.set_page(self.previous.unwrap_or(Page::Conversation)),
+            _ => false,
+        }
+    }
+
     /// v1 `App.tsx` 的配置副作用（Provider 数量 / 默认模型变化时执行）
     pub fn config_changed(&mut self, has_valid_config: bool) -> bool {
         match (has_valid_config, self.current) {
             // 中间态：设置页内分步保存时不得打断
-            (false, Page::Settings | Page::Empty | Page::NoApiKey) => false,
+            (false, Page::Settings | Page::HistorySearch | Page::Empty | Page::NoApiKey) => false,
             (false, _) => self.set_page(Page::Empty),
             // 在「无 Key」页被外部补齐配置：直接进入展开的对话页
             (true, Page::NoApiKey) => self.set_page(Page::Conversation),
@@ -157,6 +169,11 @@ impl PageState {
     /// 流式结束后的落点（v1 `useStreaming.ts`：done / aborted / 出错后 `setPage`）：
     /// 401 / unauthorized 去 noapikey，其余去 conversation
     pub fn stream_finished(&mut self, needs_api_key: bool) -> bool {
+        if self.current == Page::HistorySearch {
+            // 搜索不因后台生成完成或鉴权失败而退出；错误仍保留在对话中。
+            self.previous = Some(Page::Conversation);
+            return false;
+        }
         self.set_page(if needs_api_key { Page::NoApiKey } else { Page::Conversation })
     }
 }
@@ -169,6 +186,23 @@ pub fn has_valid_config(provider_count: usize, selected_model_id: &str) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_only_opens_from_chat_and_survives_background_completion() {
+        for page in [Page::Empty, Page::NoApiKey, Page::Settings] {
+            let mut state = at(page);
+            assert!(!state.toggle_history_search());
+            assert_eq!(state.current(), page);
+        }
+        let mut state = at(Page::Streaming);
+        assert!(state.toggle_history_search());
+        assert_eq!(state.base_page(), Page::Streaming);
+        assert!(!state.stream_finished(true));
+        assert_eq!(state.current(), Page::HistorySearch);
+        assert!(state.toggle_history_search());
+        assert_eq!(state.current(), Page::Conversation);
+        assert!(!expands_window(Page::Conversation, Page::HistorySearch));
+    }
 
     fn at(page: Page) -> PageState {
         let mut s = PageState::new();

@@ -47,6 +47,7 @@ const DRAG_EDGE: f32 = m::SPACE_2;
 
 /// 对话页
 pub struct ChatPage {
+    active: bool,
     send_motion: Option<std::rc::Rc<super::send_motion::SendMotion>>,
     send_cleanup: Option<gpui::Task<()>>,
     conversation: Entity<Conversation>,
@@ -86,7 +87,12 @@ impl ChatPage {
             cx.notify();
         }).detach();
         let drag = drag_source.borrow().clone();
-        Self { send_motion: None, send_cleanup: None, conversation, transcript, composer, actions, drag, drag_source, focus: cx.focus_handle() }
+        Self { active: true, send_motion: None, send_cleanup: None, conversation, transcript, composer, actions, drag, drag_source, focus: cx.focus_handle() }
+    }
+
+    pub(super) fn set_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        self.active = active;
+        cx.notify();
     }
 
     /// Capture the accepted draft before clearing it, then animate into this message.
@@ -158,7 +164,7 @@ impl Render for ChatPage {
         let error = self.conversation.read(cx).state.error.clone();
         let streaming = self.conversation.read(cx).state.is_streaming();
         let approval = self.conversation.read(cx).state.approval.clone();
-        if approval.is_some() && !self.focus.is_focused(window) {
+        if self.active && approval.is_some() && !self.focus.is_focused(window) {
             window.focus(&self.focus, cx);
         }
         let conversation = self.conversation.clone();

@@ -16,6 +16,8 @@ use std::time::SystemTime;
 mod atomic_file;
 mod attachment_files;
 mod config_files;
+mod history_search;
+pub use history_search::{HistoryMatch, search_history};
 
 /// 每个分块文件的最大消息数量
 const CHUNK_SIZE: u32 = 100;

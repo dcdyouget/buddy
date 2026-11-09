@@ -1894,6 +1894,12 @@ impl ChatEngine {
         .await
     }
 
+    /// 在后台读取本机全部历史，按用户提问匹配关键词。
+    pub async fn search_history(&self, query: String) -> Result<Vec<storage::HistoryMatch>, String> {
+        let data_dir = self.data_dir.clone();
+        run_blocking("搜索历史", move || storage::search_history(&data_dir, &query)).await
+    }
+
     /// 返回本地历史消息总数，供前端计算分页起点。
     pub async fn get_message_count(&self) -> Result<u64, String> {
         let data_dir = self.data_dir.clone();

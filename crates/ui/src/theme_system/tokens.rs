@@ -675,6 +675,8 @@ pub mod motion {
     pub const DURATION_NORMAL: i32 = 200;
     /// `--duration-slow: 320ms`
     pub const DURATION_SLOW: i32 = 320;
+    /// 搜索定位后整组问答保持高亮，再按 DURATION_SLOW 淡出。
+    pub const HISTORY_HIGHLIGHT_HOLD_MS: u64 = 1600;
     /// `--duration-streaming-char-settle: 260ms`
     pub const DURATION_STREAMING_CHAR_SETTLE: i32 = 260;
     /// `--duration-streaming-star-breathe: 1.1s`

@@ -55,6 +55,8 @@ pub enum ComposerEvent {
     OpenSettings,
     /// 打开模型选择
     PickModel,
+    /// 打开历史搜索（仅对话页可用）。
+    SearchHistory,
 }
 
 /// 输入区
@@ -79,6 +81,11 @@ pub struct Composer {
     hovered: bool,
     /// 空态页的独立气泡
     standalone: bool,
+    history_search: bool,
+    enabled: bool,
+    more_open: bool,
+    more_focus: FocusHandle,
+    more_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// 上一帧绘制的模型按钮边界（窗口坐标；模型菜单据此定位，流式中按钮不存在时为 `None`）
     model_button: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// 上一帧绘制的 Composer 整体边界（窗口坐标；空态根拖动区据此排除输入控件）
@@ -118,8 +125,17 @@ impl Composer {
 
     /// 创建带 engine 的输入区；正式路由器使用此构造器以持久化草稿图片。
     pub fn new_with_engine(engine: Option<Arc<ChatEngine>>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::build(engine, false, window, cx)
+    }
+
+    pub(super) fn for_history_search(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::build(None, true, window, cx)
+    }
+
+    fn build(engine: Option<Arc<ChatEngine>>, history_search: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let theme = *cx.buddy_theme();
-        let text = cx.new(|cx| TextArea::new(PLACEHOLDER, text_style(&theme, false), cx));
+        let placeholder = if history_search { "搜索你问过的问题，按 Enter 查询…" } else { PLACEHOLDER };
+        let text = cx.new(|cx| TextArea::new(placeholder, text_style(&theme, false), cx));
         let subscriptions = vec![
             cx.subscribe(&text, |this: &mut Self, _, event: &TextAreaEvent, cx| match event {
                 TextAreaEvent::Submit => this.send(cx),
@@ -134,7 +150,7 @@ impl Composer {
                 cx.notify();
             }),
         ];
-        Self { send_motion: None, streaming_body_height: Rc::new(Cell::new(px(m::SPACE_8))), text, streaming: false, streaming_model: None, supports_vision: false, max_image_bytes: buddy_engine::models::DEFAULT_IMAGE_BYTES, images: Vec::new(), saving_images: false, attachment_error: None, engine, save_tasks: Vec::new(), focused: false, hovered: false, standalone: false, model_button: Rc::default(), bounds: Rc::default(), _subscriptions: subscriptions, drag_source: drag::default_drag_source() }
+        Self { send_motion: None, streaming_body_height: Rc::new(Cell::new(px(m::SPACE_8))), text, streaming: false, streaming_model: None, supports_vision: false, max_image_bytes: buddy_engine::models::DEFAULT_IMAGE_BYTES, images: Vec::new(), saving_images: false, attachment_error: None, engine, save_tasks: Vec::new(), focused: false, hovered: false, standalone: false, history_search, enabled: true, more_open: false, more_focus: cx.focus_handle().tab_stop(true), more_bounds: Rc::default(), model_button: Rc::default(), bounds: Rc::default(), _subscriptions: subscriptions, drag_source: drag::default_drag_source() }
     }
 
     /// 模型按钮在窗口中的边界（上一帧；流式中为 `None`）
@@ -174,7 +190,9 @@ impl Composer {
             if let Some(motion) = &self.send_motion {
                 motion.cancel();
             }
-            window.focus(&self.text.focus_handle(cx), cx);
+            if self.enabled {
+                window.focus(&self.text.focus_handle(cx), cx);
+            }
         }
         cx.notify();
     }
@@ -182,6 +200,14 @@ impl Composer {
     /// 切换为空态页的独立气泡（v1 `hideBorder`）
     pub fn set_standalone(&mut self, standalone: bool, cx: &mut Context<Self>) {
         self.standalone = standalone;
+        if standalone { self.more_open = false; }
+        cx.notify();
+    }
+
+    pub(super) fn set_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.enabled = enabled;
+        if !enabled { self.more_open = false; }
+        self.text.update(cx, |text, cx| text.set_enabled(enabled, cx));
         cx.notify();
     }
 
@@ -207,7 +233,7 @@ impl Composer {
 
     /// v1 `handleSend`：流式中或不可发送时忽略；发送后由上层清空草稿
     fn send(&mut self, cx: &mut Context<Self>) {
-        if self.streaming || !self.can_send(cx) {
+        if !self.enabled || self.streaming || !self.can_send(cx) {
             return;
         }
         let text = self.draft(cx);
@@ -305,6 +331,7 @@ impl Render for Composer {
                                 .active(|s| s.bg(c.bg_sunken).opacity(crate::theme_system::tokens::motion::BUTTON_PRESS_OPACITY))
                                 .child(icon(IconName::Close, px(12.0)))
                                 .on_click(cx.listener(|this, _, window, cx| {
+                                    if !this.enabled { return; }
                                     this.set_draft("", cx);
                                     window.focus(&this.text.focus_handle(cx), cx);
                                 })),
@@ -323,11 +350,11 @@ impl Render for Composer {
                             .on_click(cx.listener(|this, _, _, cx| this.pick_images(cx))),
                     )
                 })
-                .child(
+                .when(!self.history_search, |d| d.child(
                     icon_button("composer-settings", IconName::Settings, 24.0, 13.0, IconButtonVariant::Default, false, cx)
                         .on_click(cx.listener(|_, _, _, cx| cx.emit(ComposerEvent::OpenSettings))),
-                )
-                .child({
+                ))
+                .when(!self.history_search, |d| d.child({
                     // v1 `.model-picker-trigger`：24px 圆，Bot 14px；悬停凹陷底。
                     // 绝对定位的 canvas 记录按钮边界（须显式 top/left，见 Transcript::render_row）
                     let recorded = self.model_button.clone();
@@ -339,11 +366,11 @@ impl Render for Composer {
                                 .on_click(cx.listener(|_, _, _, cx| cx.emit(ComposerEvent::PickModel))),
                         )
                         .child(gpui::canvas(|_, _, _| {}, move |bounds, _, _, _| recorded.set(Some(bounds))).absolute().top_0().left_0().size_full())
-                })
+                }))
                 .child(
                     icon_button(
                         "composer-send",
-                        IconName::Send,
+                        if self.history_search { IconName::Search } else { IconName::Send },
                         28.0,
                         14.0,
                         if can_send { IconButtonVariant::Primary } else { IconButtonVariant::Default },
@@ -353,6 +380,8 @@ impl Render for Composer {
                     .on_click(cx.listener(|this, _, _, cx| this.send(cx))),
                 )
         };
+
+        let body = body.when(!standalone && !self.history_search, |body| body.child(self.more_button(cx)));
 
         let body = if self.streaming {
             let measured = self.streaming_body_height.clone();
@@ -426,7 +455,7 @@ impl Render for Composer {
             .when_some(held_height, |d, height| d.min_h((height - px(m::SPACE_1 * 2.0 + 2.0)).max(px(0.0))))
             .child(body);
         let recorded_bounds = self.bounds.clone();
-        div()
+        let dock = div()
             .id("input-dock")
             .relative()
             .when(!standalone, |d| d.mx(px(m::SPACE_2)).mb(px(m::SPACE_2)).rounded(px(m::RADIUS_LG)).border_color(Hsla::from(c.border_default).opacity(dock_opacity)))
@@ -440,16 +469,18 @@ impl Render for Composer {
             .bg(Hsla::from(c.composer_surface).opacity(dock_opacity))
             .shadow(shadows)
             .capture_action::<Paste>(cx.listener(|this, _, _, cx| {
-                if this.paste_from_clipboard(cx) {
+                if !this.history_search && this.enabled && this.paste_from_clipboard(cx) {
                     cx.stop_propagation();
                 }
             }))
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                if event.keystroke.key == "v" && (event.keystroke.modifiers.platform || event.keystroke.modifiers.control) && this.paste_from_clipboard(cx) {
+                if !this.history_search && this.enabled && event.keystroke.key == "v" && (event.keystroke.modifiers.platform || event.keystroke.modifiers.control) && this.paste_from_clipboard(cx) {
                     cx.stop_propagation();
                 }
             }))
-            .on_drop::<ExternalPaths>(cx.listener(|this, paths: &ExternalPaths, _, cx| this.add_paths(paths.paths(), cx)))
+            .on_drop::<ExternalPaths>(cx.listener(|this, paths: &ExternalPaths, _, cx| {
+                if !this.history_search && this.enabled { this.add_paths(paths.paths(), cx); }
+            }))
             .when(unsupported_images && compact, |d| d.tooltip(|_, cx| TextTooltip::view("当前模型不支持图片，请移除图片或切换模型", cx)))
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 this.hovered = *hovered;
@@ -492,9 +523,16 @@ impl Render for Composer {
             .when_some(self.attachment_error.clone().filter(|_| compact), |d, error| d.child(compact_notice_line(error, c)))
             .when(show_sheen, |d| d.child(crate::motion_effects::surface_sheen(("composer-sheen", self.streaming as usize), c.buddy_primary, self.streaming)))
             // 仅记录外层实际边界，不插入 hitbox 或参与布局。
-            .child(gpui::canvas(|_, _, _| {}, move |bounds, _, _, _| recorded_bounds.set(Some(bounds))).absolute().top_0().left_0().size_full())
+            .child(gpui::canvas(|_, _, _| {}, move |bounds, _, _, _| recorded_bounds.set(Some(bounds))).absolute().top_0().left_0().size_full());
+        // 菜单绘制在输入框裁切层之外，沿用选择器的浮层和焦点约定。
+        div().relative().flex_none().when(standalone && compact, |d| d.h_full())
+            .child(dock)
+            .when(self.more_open && self.enabled && !standalone, |d| d.child(gpui::deferred(self.more_menu(cx)).with_priority(2)))
     }
 }
+
+#[path = "composer_history.rs"]
+mod history_controls;
 
 /// 紧凑气泡底边的一行提示：超长省略、悬停看全文。
 fn compact_notice_line(text: SharedString, c: &'static crate::theme_system::tokens::Palette) -> gpui::Stateful<gpui::Div> {

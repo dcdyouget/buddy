@@ -110,6 +110,7 @@ pub struct Transcript {
     unseen_pulse: Option<Instant>,
     /// 点击「回到底部」后的平滑滚动
     scroll_animation: Option<ScrollAnimation>,
+    search_highlight: Option<(HashSet<String>, Instant)>,
     /// 滚轮平滑滚动（v1 `useSmoothWheelScroll`）
     wheel: WheelScroll,
     /// 用户点过的思考块展开状态（按行 id；未点过则默认折叠，v1 `userToggled`）
@@ -185,6 +186,7 @@ impl Transcript {
             last_seen: None,
             unseen_pulse: None,
             scroll_animation: None,
+            search_highlight: None,
             wheel: WheelScroll::default(),
             think_expanded: HashMap::new(),
             tool_expanded: HashMap::new(),
@@ -450,9 +452,18 @@ impl Transcript {
         let painted = self.painted_rows.clone();
         let id = row.id.clone();
         let content = self.render_row_content(row, window, cx);
+        let reduce_motion = crate::accessibility::prefers_reduced_motion();
+        let highlight = self.search_highlight.as_ref().filter(|(targets, _)| targets.contains(&id)).map(|(_, started)| {
+            let fade_elapsed = started.elapsed().saturating_sub(Duration::from_millis(motion::HISTORY_HIGHLIGHT_HOLD_MS));
+            let remaining = (1.0 - fade_elapsed.as_secs_f32() * 1000.0 / motion::DURATION_SLOW as f32).max(0.0);
+            if reduce_motion && remaining > 0.0 { 1.0 } else { remaining }
+        }).filter(|amount| *amount > 0.0);
+        if highlight.is_some() && !reduce_motion { window.request_animation_frame(); }
+        let highlight_color = cx.buddy_theme().colors.primary_tint_soft;
         div()
             .relative()
             .w_full()
+            .when_some(highlight, |d, amount| d.bg(Hsla::from(highlight_color).opacity(amount)))
             .child(content)
             .child(
                 gpui::canvas(
@@ -1151,6 +1162,30 @@ impl Transcript {
         });
         self.copied_actions = Some((row_id, task));
         cx.notify();
+    }
+
+    pub(super) fn pause_for_search(&mut self, cx: &mut Context<Self>) {
+        self.wheel.stop();
+        self.scroll_animation = None;
+        self.list.set_follow_mode(FollowMode::Normal);
+        cx.notify();
+    }
+
+    pub(super) fn reveal_search_result(&mut self, message_id: &str, cx: &mut Context<Self>) -> bool {
+        self.sync(cx);
+        let Some(range) = rows::turn_range(&self.rows, message_id) else { return false };
+        self.pause_for_search(cx);
+        self.list.scroll_to(gpui::ListOffset { item_ix: range.start, offset_in_item: px(0.) });
+        let targets = self.rows[range].iter().map(|row| row.id.clone()).collect();
+        self.search_highlight = Some((targets, Instant::now()));
+        if crate::accessibility::prefers_reduced_motion() {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(Duration::from_millis(motion::HISTORY_HIGHLIGHT_HOLD_MS + motion::DURATION_SLOW as u64)).await;
+                let _ = this.update(cx, |_, cx| cx.notify());
+            }).detach();
+        }
+        cx.notify();
+        true
     }
 
     /// 回到问题：把该行平滑滚到视口顶部，并脱离跟随（v1 `scrollIntoView({ block: 'start', behavior: 'smooth' })`）

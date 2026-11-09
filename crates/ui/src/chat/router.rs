@@ -19,6 +19,7 @@ use super::approval_panel::Decision;
 use super::chat_page::{ChatPage, ToolActions};
 use super::composer::{Composer, ComposerEvent};
 use super::empty_page::{EmptyPage, EmptyPageEvent};
+use super::history_search::{HistorySearch, SearchEvent};
 use super::model_menu::{ModelMenu, menu_rows, open_model_menu};
 use super::no_key_page::{NoKeyPage, NoKeyPageEvent};
 use super::page_state::{EmptySend, Page, PageState, classify_empty_send, has_valid_config};
@@ -129,6 +130,10 @@ pub struct PageRouter {
     config: AppConfig,
     settings: Entity<crate::settings::SettingsView>,
     settings_motion: crate::settings::panel::SlideMotion,
+    history_search: Entity<HistorySearch>,
+    search_motion: crate::settings::panel::SlideMotion,
+    location_task: Option<Task<()>>,
+    location_generation: u64,
     pages: PageState,
     conversation: Entity<Conversation>,
     composer: Entity<Composer>,
@@ -177,9 +182,15 @@ impl PageRouter {
         let no_key = cx.new(NoKeyPage::new);
         let actions = tool_actions(&engine, &conversation);
         let chat = cx.new(|cx| ChatPage::new(conversation.clone(), composer.clone(), actions, cx));
+        let drag_source = chat.read(cx).transcript().read(cx).drag_source();
+        let history_search = cx.new(|cx| HistorySearch::new(engine.clone(), drag_source, window, cx));
         let settings =
             cx.new(|cx| crate::settings::SettingsView::new(config.clone(), engine.clone(), cx));
         let subscriptions = vec![
+            cx.subscribe(&history_search, |this, _, event, cx| match event {
+                SearchEvent::Back => this.close_history_search(cx),
+                SearchEvent::Locate(result) => this.locate_history(result.clone(), cx),
+            }),
             cx.subscribe(
                 &settings,
                 |this, _, event: &crate::settings::SettingsEvent, cx| match event {
@@ -215,6 +226,7 @@ impl PageRouter {
                     ComposerEvent::Stop => this.engine.stop_generation(),
                     ComposerEvent::OpenSettings => this.open_settings(cx),
                     ComposerEvent::PickModel => this.toggle_model_menu(window, cx),
+                    ComposerEvent::SearchHistory => this.toggle_history_search(cx),
                 },
             ),
             cx.subscribe(&empty, |this, _, event: &EmptyPageEvent, cx| match event {
@@ -247,6 +259,10 @@ impl PageRouter {
             hotkey_updater: None,
             settings,
             settings_motion: crate::settings::panel::SlideMotion::default(),
+            history_search,
+            search_motion: crate::settings::panel::SlideMotion::default(),
+            location_task: None,
+            location_generation: 0,
             pages: PageState::new(),
             conversation,
             composer,
@@ -434,6 +450,7 @@ impl PageRouter {
 
     /// 打开设置（输入区按钮、无 Key 页、菜单栏「设置…」）
     pub fn open_settings(&mut self, cx: &mut Context<Self>) {
+        self.close_history_search(cx);
         self.transition(cx, |p| p.set_page(Page::Settings));
     }
 
@@ -478,6 +495,18 @@ impl PageRouter {
             return;
         }
         let to = self.pages.current();
+        if (from == Page::HistorySearch) != (to == Page::HistorySearch) {
+            let shown = to == Page::HistorySearch;
+            self.search_motion.set_shown(shown);
+            self.history_search.update(cx, |search, cx| search.set_active(shown, cx));
+            self.location_generation += 1;
+            if shown {
+                self.transcript(cx).update(cx, |transcript, cx| transcript.pause_for_search(cx));
+                if let Some(menu) = self.model_menu.take() {
+                    let _ = menu.update(cx, |menu, window, cx| menu.close(window, cx));
+                }
+            }
+        }
         if !matches!(to, Page::Conversation | Page::Streaming) {
             self.chat.update(cx, |chat, cx| chat.cancel_send(cx));
         }
@@ -489,7 +518,11 @@ impl PageRouter {
         }
         let base = self.pages.base_page();
         self.composer
-            .update(cx, |c, cx| c.set_standalone(base == Page::Empty, cx));
+            .update(cx, |c, cx| {
+                c.set_standalone(base == Page::Empty, cx);
+                c.set_enabled(!matches!(to, Page::Settings | Page::HistorySearch), cx);
+            });
+        self.chat.update(cx, |chat, cx| chat.set_active(matches!(to, Page::Conversation | Page::Streaming), cx));
         self.focus_composer = matches!(base, Page::Empty | Page::Conversation | Page::Streaming)
             && to != Page::Settings;
         cx.emit(RouterEvent::PageChanged { from, to });
@@ -617,15 +650,22 @@ mod preferences;
 #[path = "router_update.rs"]
 mod update_restart;
 
+#[path = "router_history.rs"]
+mod history;
+
 impl Render for PageRouter {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if std::mem::take(&mut self.focus_composer) {
-            window.focus(&self.composer.focus_handle(cx), cx);
+            if self.page() == Page::HistorySearch {
+                self.history_search.update(cx, |search, cx| search.focus_input(window, cx));
+            } else {
+                window.focus(&self.composer.focus_handle(cx), cx);
+            }
         }
         let base = match self.pages.base_page() {
             Page::Empty | Page::Settings => self.empty.clone().into_any_element(),
             Page::NoApiKey => self.no_key.clone().into_any_element(),
-            Page::Conversation | Page::Streaming => self.chat.clone().into_any_element(),
+            Page::Conversation | Page::Streaming | Page::HistorySearch => self.chat.clone().into_any_element(),
         };
         let settings = self.settings_motion.present().then(|| {
             let amount = self.settings_motion.amount();
@@ -641,6 +681,21 @@ impl Render for PageRouter {
                 .child(self.settings.clone())
                 .into_any_element()
         });
-        div().size_full().relative().child(base).children(settings)
+        let search = self.search_motion.present().then(|| {
+            let amount = self.search_motion.amount();
+            if self.search_motion.animating() { window.request_animation_frame(); }
+            div().absolute().top_0().left(gpui::relative(1.0 - amount)).size_full().opacity(amount)
+                .child(self.history_search.clone()).into_any_element()
+        });
+        div().size_full().relative().overflow_hidden()
+            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                if super::history_search::matches_keystroke(&event.keystroke)
+                    && matches!(this.page(), Page::Conversation | Page::Streaming | Page::HistorySearch)
+                {
+                    this.toggle_history_search(cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .child(base).children(search).children(settings)
     }
 }

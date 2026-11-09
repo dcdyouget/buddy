@@ -4,6 +4,7 @@ macOS / Windows 上的 AI 对话小工具：按全局快捷键（Mac 默认 ⌘J
 
 - 纯 Rust，界面基于 zed 的 [GPUI](https://github.com/zed-industries/zed)
 - 支持 Anthropic 与 OpenAI 兼容接口的多家模型服务商、图片输入与生成、联网搜索、本地文件工具
+- 在对话状态按 Mac `⌘F` / Windows `Ctrl+F`，或通过输入框右侧「⋯ → 搜索历史」按提问关键词查找本地历史；点击回答摘录可定位并高亮对应问答
 - 应用内自动更新
 
 ## 下载
