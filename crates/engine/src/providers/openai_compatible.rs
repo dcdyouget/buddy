@@ -141,22 +141,28 @@ fn can_complete_on_eof(
     let requires_tool_call = matches!(reason, "tool_calls" | "function_call");
     let has_tool_calls = !tool_calls.is_empty();
     let complete_tool_calls = tool_calls.values().all(has_valid_tool_arguments);
-    valid_reason
-        && complete_tool_calls
-        && (!requires_tool_call || has_tool_calls)
+    valid_reason && complete_tool_calls && (!requires_tool_call || has_tool_calls)
 }
 
 impl OpenAICompatibleProvider {
     /// 将内部消息格式转换为 OpenAI API 格式
     ///
     /// 与 Anthropic 转换器几乎一致（都是 role + content 数组）
+    #[cfg(test)]
     fn convert_messages(messages: &[Message]) -> Vec<Value> {
+        Self::convert_with_options(messages, super::ChatOptions::default())
+    }
+
+    fn convert_with_options(messages: &[Message], options: super::ChatOptions<'_>) -> Vec<Value> {
         // 系统提示保持静态；每条用户消息根据固定 created_at 重建相同的时间后缀，
         // 让对话增长时仍保持此前请求的精确前缀。
         let mut result: Vec<Value> = vec![json!({
             "role": "system",
-            "content": super::BUDDY_SYSTEM_PROMPT,
+            "content": options.system_prompt,
         })];
+        if let Some(context) = options.context {
+            result.push(json!({"role":"system", "content":context}));
+        }
         // 只有参数完整、且存在对应 tool_result 的调用才允许进入下一次请求。
         // 主动停止流式输出时，assistant 中可能留下半截 arguments；MiniMax 会直接以
         // invalid function arguments json string (2013) 拒绝整次请求。
@@ -247,13 +253,12 @@ impl OpenAICompatibleProvider {
                             },
                         })
                     }));
-                    let context = super::runtime_time_context_for_message(m.created_at);
-                    content.push(json!({
-                        "type": "text",
-                        "text": context,
-                    }));
+                    if options.runtime_context {
+                        let context = super::runtime_time_context_for_message(m.created_at);
+                        content.push(json!({"type":"text", "text":context}));
+                    }
                     json!(content)
-                } else if m.role == MessageRole::User {
+                } else if m.role == MessageRole::User && options.runtime_context {
                     let context = super::runtime_time_context_for_message(m.created_at);
                     json!(super::append_runtime_time_context(
                         &m.content,
@@ -361,7 +366,7 @@ impl OpenAICompatibleProvider {
 // impl LlmProvider for OpenAICompatibleProvider
 // ============================================================================
 impl LlmProvider for OpenAICompatibleProvider {
-    fn stream_chat<'a>(
+    fn stream_chat_with_options<'a>(
         &'a self,
         base_url: &'a str,
         api_key: &'a str,
@@ -372,23 +377,34 @@ impl LlmProvider for OpenAICompatibleProvider {
         mut cancel_rx: watch::Receiver<bool>,
         compat: Option<&'a CompatConfig>,
         tools: &'a [ToolDefinition],
+        options: super::ChatOptions<'a>,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<StreamOutcome, ApiError>> + Send + 'a>>
     {
         Box::pin(async move {
+            let mut usage_log = super::usage::UsageLog::new(request_id, model, options);
             // ── 1. 创建 HTTP 客户端 ──
             let client = super::shared_http_client().map_err(ApiError::NetworkError)?;
 
             // ── 2. 转换消息 ──
-            let chat_messages = Self::convert_messages(messages);
+            let chat_messages = Self::convert_with_options(messages, options);
 
             // ── 3. 应用 compat 配置构造请求体 ──
             // 这个函数在文件末尾定义，处理不同厂商的差异（max_tokens 字段名、thinking 参数等）
-            let body = build_openai_request_body(
+            let mut body = build_openai_request_body(
                 model,
                 &chat_messages,
                 compat,
                 if tools.is_empty() { None } else { Some(tools) },
             );
+
+            if let Some(limit) = options.max_output_tokens {
+                let field = compat.map(|c| c.max_tokens_field()).unwrap_or("max_tokens");
+                body[if field == "max_completion_tokens" {
+                    field
+                } else {
+                    "max_tokens"
+                }] = json!(limit);
+            }
 
             // ── 4. 拼接 URL（OpenAI 兼容都是 /chat/completions） ──
             let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
@@ -402,7 +418,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                 model,
                 url,
                 request_bytes,
-                super::BUDDY_SYSTEM_PROMPT.len(),
+                options.system_prompt.len() + options.context.map_or(0, str::len),
                 messages
                     .iter()
                     .filter(|message| message.role == MessageRole::User)
@@ -647,6 +663,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                                                 message,
                                             ));
                                         }
+                                        usage_log.openai(&json["usage"]);
                                         if let Some(usage) = parse_prompt_cache_usage(&json) {
                                             final_usage = Some(usage);
                                         }
@@ -804,9 +821,10 @@ impl LlmProvider for OpenAICompatibleProvider {
                                         // 旧版 OpenAI-compatible API 使用单个 function_call
                                         // 字段，并以 finish_reason=function_call 结束；统一收敛
                                         // 到同一 ToolCall，避免该协议分支在 EOF 时被误判截断。
-                                        if let Some(function_call) = json["choices"]
-                                            .get(0)
-                                            .and_then(|choice| choice["delta"]["function_call"].as_object())
+                                        if let Some(function_call) =
+                                            json["choices"].get(0).and_then(|choice| {
+                                                choice["delta"]["function_call"].as_object()
+                                            })
                                         {
                                             let key = "function_call".to_string();
                                             let name = function_call
@@ -936,6 +954,7 @@ impl LlmProvider for OpenAICompatibleProvider {
                 usage_log_summary(final_usage.as_ref()),
             );
             // done 事件由编排层 chat.rs 在整轮 tool 循环结束时统一发射
+            usage_log.complete();
             return Ok(StreamOutcome::completed(
                 full_response,
                 thinking_response,
@@ -1663,10 +1682,7 @@ data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}
         assert_eq!(eof_tool.tool_calls.len(), 1);
         assert_eq!(eof_tool.tool_calls[0].id, "call-1");
         assert_eq!(eof_tool.tool_calls[0].name, "read_file");
-        assert_eq!(
-            eof_tool.tool_calls[0].arguments,
-            r#"{"path":"/tmp/a"}"#
-        );
+        assert_eq!(eof_tool.tool_calls[0].arguments, r#"{"path":"/tmp/a"}"#);
 
         let incomplete_tool_url = serve_openai_sse(
             r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-bad","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"/tmp/a\""}}]}}]}

@@ -21,6 +21,7 @@
 
 pub mod anthropic; // 声明并公开 anthropic 子模块（位于 ./anthropic.rs）
 pub mod openai_compatible; // 声明并公开 openai_compatible 子模块（位于 ./openai_compatible.rs）
+mod usage;
 
 // ============================================================================
 // use 语句 —— 导入外部项
@@ -245,6 +246,30 @@ impl ProviderType {
 // `: Send + Sync` 是 trait bound，要求实现者必须同时实现 Send 和 Sync（线程安全标记）
 //   - Send：可以跨线程移动所有权
 //   - Sync：可以跨线程共享引用 &T
+/// Request-scoped instructions. Background jobs reuse transport, never the chat transcript.
+#[derive(Clone, Copy)]
+pub struct ChatOptions<'a> {
+    pub system_prompt: &'a str,
+    pub context: Option<&'a str>,
+    pub runtime_context: bool,
+    pub max_output_tokens: Option<u32>,
+    pub stage: &'static str,
+    pub question_id: &'a str,
+}
+
+impl Default for ChatOptions<'_> {
+    fn default() -> Self {
+        Self {
+            system_prompt: BUDDY_SYSTEM_PROMPT,
+            context: None,
+            runtime_context: true,
+            max_output_tokens: None,
+            stage: "main",
+            question_id: "",
+        }
+    }
+}
+
 pub trait LlmProvider: Send + Sync {
     /// 发起流式对话
     ///
@@ -270,6 +295,33 @@ pub trait LlmProvider: Send + Sync {
         cancel_rx: watch::Receiver<bool>,
         compat: Option<&'a CompatConfig>,
         tools: &'a [ToolDefinition],
+    ) -> std::pin::Pin<Box<dyn Future<Output = Result<StreamOutcome, ApiError>> + Send + 'a>> {
+        self.stream_chat_with_options(
+            base_url,
+            api_key,
+            model,
+            request_id,
+            messages,
+            emitter,
+            cancel_rx,
+            compat,
+            tools,
+            ChatOptions::default(),
+        )
+    }
+
+    fn stream_chat_with_options<'a>(
+        &'a self,
+        base_url: &'a str,
+        api_key: &'a str,
+        model: &'a str,
+        request_id: &'a str,
+        messages: &'a [Message],
+        emitter: &'a StreamEventEmitter,
+        cancel_rx: watch::Receiver<bool>,
+        compat: Option<&'a CompatConfig>,
+        tools: &'a [ToolDefinition],
+        options: ChatOptions<'a>,
     ) -> std::pin::Pin<Box<dyn Future<Output = Result<StreamOutcome, ApiError>> + Send + 'a>>;
 
     /// 获取可用模型列表

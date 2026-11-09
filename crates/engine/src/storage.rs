@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::SystemTime;
 
-mod atomic_file;
+pub(crate) mod atomic_file;
 mod attachment_files;
 mod config_files;
 mod history_search;

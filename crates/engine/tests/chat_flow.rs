@@ -430,8 +430,25 @@ async fn unknown_model_returns_err_before_any_event() {
 #[tokio::test]
 async fn engine_context_uses_disk_history_instead_of_ui_page() {
     let tmp = TempDir::new().unwrap();
-    let (url, server) =
-        serve_sse_sequence(vec![openai_script(&["ok"], Duration::ZERO)], IDLE).await;
+    let (url, server) = serve_sse_sequence(
+        vec![
+            openai_script(
+                &[r#"{"related":true,"context_id":"legacy-30","need_more":false}"#],
+                Duration::ZERO,
+            ),
+            openai_script(
+                &[r#"{"summary":"先前讨论了 history-30 至 history-51。"}"#],
+                Duration::ZERO,
+            ),
+            openai_script(&["ok"], Duration::ZERO),
+            openai_script(
+                &[r#"{"summary":"用户提出 current，得到 ok 回复。"}"#],
+                Duration::ZERO,
+            ),
+        ],
+        IDLE,
+    )
+    .await;
     write_config(tmp.path(), &url, vec![]);
     let history: Vec<_> = (0..60)
         .map(|index| {
@@ -448,11 +465,14 @@ async fn engine_context_uses_disk_history_instead_of_ui_page() {
         .await
         .unwrap();
     while rx.recv().await.is_some() {}
+    engine.wait_for_context_tasks().await;
     let requests = server.await.unwrap();
-    assert_eq!(requests.len(), 1);
-    assert!(requests[0].body.contains("history-0"));
-    assert!(requests[0].body.contains("history-59"));
-    assert!(requests[0].body.contains("current"));
+    assert_eq!(requests.len(), 4);
+    assert!(!requests[2].body.contains("history-0"));
+    assert!(requests[2].body.contains("history-59"));
+    assert!(requests[2].body.contains("current"));
+    let request: serde_json::Value = serde_json::from_str(&requests[2].body).unwrap();
+    assert!(request["messages"].as_array().unwrap().len() <= 32); // up to 30 + system + checkpoint
     assert_eq!(engine.get_message_count().await.unwrap(), 62);
 }
 

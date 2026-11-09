@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Each writer owns its temporary file, including across app processes.
-pub(super) fn write_file_atomic(
+pub(crate) fn write_file_atomic(
     dir: &Path,
     file_name: &str,
     content: &str,

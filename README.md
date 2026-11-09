@@ -25,6 +25,7 @@ cargo test --workspace --exclude buddy-markdown
 Windows 构建需要 Rust MSVC 工具链、Visual Studio 2022 的「使用 C++ 的桌面开发」组件、Windows SDK、CMake 和 Ninja。可用 `powershell -ExecutionPolicy Bypass -File scripts/windows-dev.ps1` 自动加载 VS 开发环境并运行，`-Action build` 构建正式版，`-Action check` / `-Action test` 验证。原生界面不需要 Node 或 WebView2。发版在 GitHub Actions 的 Release 工作流中完成，本机不需要交叉编译或签名。
 
 目录结构与注意事项见 [`AGENTS.md`](./AGENTS.md)，发版见 [`docs/release-workflow.md`](./docs/release-workflow.md)。
+自动话题判断、摘要压缩与 API 用量日志见 [`docs/context-management.md`](./docs/context-management.md)。
 
 ## 许可
 

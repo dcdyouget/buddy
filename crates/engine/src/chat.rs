@@ -129,6 +129,38 @@ fn release_generation(state: &CancelState) {
     state.sender.lock().take();
 }
 
+// Also release on task abort/panic. A previous request must never release a newer one.
+struct GenerationGuard<'a> {
+    state: &'a CancelState,
+    sender: watch::Sender<bool>,
+}
+
+impl<'a> GenerationGuard<'a> {
+    fn new(state: &'a CancelState) -> Self {
+        Self {
+            state,
+            sender: state
+                .sender
+                .lock()
+                .as_ref()
+                .expect("reserved generation")
+                .clone(),
+        }
+    }
+}
+
+impl Drop for GenerationGuard<'_> {
+    fn drop(&mut self) {
+        let mut current = self.state.sender.lock();
+        if current
+            .as_ref()
+            .is_some_and(|sender| sender.same_channel(&self.sender))
+        {
+            current.take();
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tool 审批状态(共享)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -206,6 +238,7 @@ pub struct QuestionState {
 /// spawn 到 tokio（future 为 `Send + 'static` 需先 clone `Arc` §3.3/§3.4）。
 pub struct ChatEngine {
     data_dir: PathBuf,
+    context: Arc<crate::context::Manager>,
     cancel: CancelState,
     approval: ApprovalState,
     question: QuestionState,
@@ -215,6 +248,7 @@ impl ChatEngine {
     /// `data_dir` 通常为 `storage::default_data_dir()`（与 v1 同目录）；测试传临时目录。
     pub fn new(data_dir: PathBuf) -> Arc<Self> {
         Arc::new(Self {
+            context: crate::context::Manager::new(data_dir.clone()),
             data_dir,
             cancel: CancelState::default(),
             approval: ApprovalState::default(),
@@ -230,8 +264,8 @@ impl ChatEngine {
 // ── 滑动窗口辅助函数 ──
 
 /// 文本 token 启发式估算：ASCII 约 3 字符/token，非 ASCII 按 2 token/字符
-/// 保守预留。不同模型分词并不一致，窗口仍保留 30% 余量。
-fn estimate_tokens(text: &str) -> u32 {
+/// 保守预留。不同模型分词并不一致，请求输入限制在配置上下文的 50%。
+pub(crate) fn estimate_tokens(text: &str) -> u32 {
     let (ascii, unicode) = text
         .chars()
         .fold((0u32, 0u32), |(ascii, unicode), character| {
@@ -247,7 +281,7 @@ fn estimate_tokens(text: &str) -> u32 {
     (ascii / 3).saturating_add(unicode.saturating_mul(2)).max(1)
 }
 
-fn estimate_message_tokens(message: &Message) -> u32 {
+pub(crate) fn estimate_message_tokens(message: &Message) -> u32 {
     // 图片实际 token 数取决于厂商、尺寸和 detail；这里使用保守固定值，
     // 仅用于本地滑动窗口，避免带图对话被当作零成本。
     let calls = message
@@ -261,6 +295,13 @@ fn estimate_message_tokens(message: &Message) -> u32 {
         });
     estimate_tokens(&message.content)
         .saturating_add(6) // 角色、消息边界和调用元数据也占用上下文。
+        .saturating_add(if message.role == MessageRole::User {
+            estimate_tokens(&providers::runtime_time_context_for_message(
+                message.created_at,
+            ))
+        } else {
+            0
+        })
         .saturating_add(calls)
         .saturating_add((message.images.len() as u32).saturating_mul(1_024))
 }
@@ -649,7 +690,7 @@ impl ChatEngine {
 }
 
 /// 估算消息列表的总 token 数
-fn estimate_total_tokens(messages: &[Message]) -> u32 {
+pub(crate) fn estimate_total_tokens(messages: &[Message]) -> u32 {
     messages.iter().fold(0u32, |total, message| {
         total.saturating_add(estimate_message_tokens(message))
     })
@@ -683,6 +724,23 @@ fn compute_window_start(messages: &[Message], token_budget: u32) -> usize {
         }
         start = earlier;
         cost = next_cost;
+    }
+    start
+}
+
+fn bounded_window_start(messages: &[Message], budget: u32) -> usize {
+    let mut start = compute_window_start(messages, budget);
+    while messages.len() - start > crate::context::MAX_MESSAGES {
+        let Some(next) = messages
+            .iter()
+            .enumerate()
+            .skip(start + 1)
+            .find(|(_, m)| m.role == MessageRole::User && !m.id.starts_with("visual-"))
+            .map(|(i, _)| i)
+        else {
+            break;
+        };
+        start = next;
     }
     start
 }
@@ -724,29 +782,6 @@ fn repair_tool_history(messages: Vec<Message>) -> Vec<Message> {
         }
     }
     repaired
-}
-
-/// 按预算从磁盘尾部读取上下文，界面分页不参与模型上下文选择。
-fn load_context_history(
-    data_dir: &Path,
-    current: Message,
-    budget: u32,
-) -> Result<Vec<Message>, String> {
-    let mut offset = storage::message_count(data_dir)?;
-    let mut pages = Vec::new();
-    let mut cost = estimate_message_tokens(&current);
-    while offset > 0 && cost < budget {
-        let size = offset.min(256);
-        offset -= size;
-        let page = storage::load_messages(data_dir, offset, size)?;
-        cost = cost.saturating_add(estimate_total_tokens(&page));
-        pages.push(page);
-    }
-    let mut messages: Vec<_> = pages.into_iter().rev().flatten().collect();
-    messages.push(current);
-    let messages = repair_tool_history(messages);
-    let start = compute_window_start(&messages, budget);
-    Ok(messages.into_iter().skip(start).collect())
 }
 
 /// 构造 tool 结果消息
@@ -907,8 +942,8 @@ impl ChatEngine {
     ///
     /// 事件经调用方传入的 `emitter` 发出（`StreamEventEmitter::channel()`）；本方法返回时
     /// `emitter` 被 drop，接收端据此得知本次对话的事件已全部送达。
-    /// 返回 `Err` 仅发生在占用生成通道之前（模型/Provider 缺失、图片校验失败、已有任务在跑），
-    /// 此时不发射任何事件；其余结局一律以唯一的 `Done` 或 `Error` 事件告知。
+    /// 前置检查、索引读取或路由取消失败返回 `Err`，不发射终态事件；
+    /// 进入主回答后以唯一的 `Done` 或 `Error` 事件告知结果。
     pub async fn send_message_from_history(
         &self,
         emitter: StreamEventEmitter,
@@ -918,23 +953,34 @@ impl ChatEngine {
         if current.role != MessageRole::User {
             return Err("当前输入必须是用户消息".into());
         }
-        let directory = self.data_dir.clone();
-        let selected = model_id.clone();
-        let messages = run_blocking("读取模型上下文", move || {
-            let config = storage::get_config(&directory)?;
-            let model = config
-                .models
-                .iter()
-                .find(|model| model.id == selected)
-                .ok_or_else(|| "未找到指定的模型".to_string())?;
-            load_context_history(
-                &directory,
-                current,
-                (model.context_window as f64 * 0.7) as u32,
-            )
-        })
-        .await?;
-        self.send_message(emitter, messages, model_id).await
+        // Reserve before routing: Stop works during the judge request, and two sends
+        // cannot both select a context against the same persistence boundary.
+        let cancel_rx = reserve_generation(&self.cancel)?;
+        let _generation = GenerationGuard::new(&self.cancel);
+        let result = async {
+            let directory = self.data_dir.clone();
+            let config = run_blocking("读取模型上下文配置", move || {
+                storage::get_config(&directory)
+            })
+            .await?;
+            let (plan, messages) = self
+                .context
+                .prepare(&config, &model_id, current, cancel_rx.clone())
+                .await?;
+            self.send_message_inner(emitter, messages, model_id, Some(plan), cancel_rx)
+                .await
+        }
+        .await;
+        if result.is_err() {
+            release_generation(&self.cancel);
+        }
+        result
+    }
+
+    /// Wait for already scheduled context summaries (diagnostics and graceful shutdown).
+    /// Interactive chat never waits for these jobs before displaying its answer.
+    pub async fn wait_for_context_tasks(&self) {
+        self.context.wait().await;
     }
 
     pub async fn send_message(
@@ -942,6 +988,25 @@ impl ChatEngine {
         emitter: StreamEventEmitter,
         messages: Vec<Message>,
         model_id: String,
+    ) -> Result<(), String> {
+        let cancel_rx = reserve_generation(&self.cancel)?;
+        let _generation = GenerationGuard::new(&self.cancel);
+        let result = self
+            .send_message_inner(emitter, messages, model_id, None, cancel_rx)
+            .await;
+        if result.is_err() {
+            release_generation(&self.cancel);
+        }
+        result
+    }
+
+    async fn send_message_inner(
+        &self,
+        emitter: StreamEventEmitter,
+        messages: Vec<Message>,
+        model_id: String,
+        mut context_plan: Option<crate::context::Plan>,
+        mut cancel_rx: watch::Receiver<bool>,
     ) -> Result<(), String> {
         let state = &self.cancel;
         let approval = &self.approval;
@@ -992,10 +1057,14 @@ impl ChatEngine {
             model.context_window,
         );
 
-        // ── 滑动窗口：保留 70% context_window 以内的最近消息 ──
-        let budget = ((model.context_window as f64) * 0.7_f64) as u32;
+        // ── 滑动窗口：保留 50% context_window 以内的最近消息 ──
+        let budget = ((model.context_window as f64) * 0.5_f64) as u32;
         let full_est = estimate_total_tokens(&messages);
-        let start_idx = compute_window_start(&messages, budget);
+        let start_idx = if context_plan.is_some() {
+            0
+        } else {
+            bounded_window_start(&messages, budget)
+        };
         let windowed_messages = &messages[start_idx..];
         let windowed_est = estimate_total_tokens(windowed_messages);
 
@@ -1024,10 +1093,6 @@ impl ChatEngine {
         // 按模型轮次批量保存；用户输入和待执行调用在耗时操作前先落盘。
         let mut pending_persistence: Vec<Message> = messages.last().cloned().into_iter().collect();
 
-        // 防止并发 send_message：检查与占用在同一把锁下完成，不能让第二个请求覆盖
-        // 第一个请求的取消通道。
-        let mut cancel_rx = reserve_generation(state)?;
-
         // 根据 Provider 类型创建对应的适配器
         let llm_provider = providers::create_provider(&provider_type);
         let compat = provider.compat.as_ref();
@@ -1051,6 +1116,8 @@ impl ChatEngine {
         let fixed_request_cost = estimate_tokens(providers::BUDDY_SYSTEM_PROMPT).saturating_add(
             tools.iter().fold(0u32, |total, tool| {
                 total
+                    .saturating_add(estimate_tokens(&tool.name))
+                    .saturating_add(12)
                     .saturating_add(estimate_tokens(&tool.description))
                     .saturating_add(estimate_tokens(&tool.parameters.to_string()))
             }),
@@ -1087,6 +1154,11 @@ impl ChatEngine {
                         flush_pending_messages(self.data_dir.clone(), pending_persistence)
                             .await
                             .err();
+                    if let Some(plan) = context_plan.take() {
+                        if let Err(error) = self.context.finish(plan, "failed").await {
+                            warn!("保存上下文索引失败: {error}");
+                        }
+                    }
                     release_generation(state);
                     approval
                         .approve_all_for_turn
@@ -1161,13 +1233,37 @@ impl ChatEngine {
             }
 
             // 滑动窗口(每轮都算)
-            let budget = ((model.context_window as f64) * 0.7_f64) as u32;
-            let start_idx =
-                compute_window_start(&conv_messages, budget.saturating_sub(fixed_request_cost));
+            let budget = ((model.context_window as f64) * 0.5_f64) as u32;
+            if let Some(plan) = &mut context_plan {
+                if let Err(error) = self
+                    .context
+                    .compact(
+                        plan,
+                        &mut conv_messages,
+                        fixed_request_cost,
+                        budget,
+                        cancel_rx.clone(),
+                    )
+                    .await
+                {
+                    if providers::cancellation_requested(&cancel_rx) {
+                        break Ok(cancelled_stream_outcome());
+                    }
+                    break Err(crate::providers::ApiError::NetworkError(error));
+                }
+            }
+            let context_prompt = context_plan.as_ref().and_then(crate::context::Plan::prompt);
+            let request_fixed_cost = fixed_request_cost
+                .saturating_add(context_prompt.as_deref().map_or(0, estimate_tokens));
+            let start_idx = if context_plan.is_some() {
+                0
+            } else {
+                bounded_window_start(&conv_messages, budget.saturating_sub(request_fixed_cost))
+            };
             let windowed = &conv_messages[start_idx..];
             // 整轮工具消息不可拆开；过大的当前轮次应明确报错，不能继续发出超限请求。
-            let request_cost = estimate_total_tokens(windowed).saturating_add(fixed_request_cost);
-            if request_cost > budget {
+            let request_cost = estimate_total_tokens(windowed).saturating_add(request_fixed_cost);
+            if request_cost > budget || windowed.len() > crate::context::MAX_MESSAGES {
                 break Err(crate::providers::ApiError::NetworkError(
                     "当前提问或工具结果超过模型上下文预算，请缩短输入、减少文件内容或切换更大上下文的模型。".into(),
                 ));
@@ -1176,7 +1272,7 @@ impl ChatEngine {
             api_requests += 1;
             let api_started = Instant::now();
             let outcome = llm_provider
-                .stream_chat(
+                .stream_chat_with_options(
                     &provider.base_url,
                     &provider.api_key,
                     provider_model_id,
@@ -1186,6 +1282,11 @@ impl ChatEngine {
                     cancel_rx.clone(),
                     compat,
                     &tools,
+                    providers::ChatOptions {
+                        context: context_prompt.as_deref(),
+                        question_id: &question_log_id,
+                        ..providers::ChatOptions::default()
+                    },
                 )
                 .await;
             // 普通 Chat Completions/Anthropic 请求均无状态。下一请求仅保留附件引用，
@@ -1642,6 +1743,11 @@ impl ChatEngine {
         {
             terminal_event = terminal_event.persistence_failure(persistence_error);
         }
+        if let Some(plan) = context_plan.take() {
+            if let Err(error) = self.context.finish(plan, final_status).await {
+                terminal_event = terminal_event.persistence_failure(error);
+            }
+        }
         release_generation(state);
         approval
             .approve_all_for_turn
@@ -1895,9 +2001,15 @@ impl ChatEngine {
     }
 
     /// 在后台读取本机全部历史，按用户提问匹配关键词。
-    pub async fn search_history(&self, query: String) -> Result<Vec<storage::HistoryMatch>, String> {
+    pub async fn search_history(
+        &self,
+        query: String,
+    ) -> Result<Vec<storage::HistoryMatch>, String> {
         let data_dir = self.data_dir.clone();
-        run_blocking("搜索历史", move || storage::search_history(&data_dir, &query)).await
+        run_blocking("搜索历史", move || {
+            storage::search_history(&data_dir, &query)
+        })
+        .await
     }
 
     /// 返回本地历史消息总数，供前端计算分页起点。
@@ -2278,17 +2390,16 @@ mod tests {
     #[test]
     fn test_window_all_fit() {
         let msgs = vec![make_msg("hi"), make_msg("hello"), make_msg("hey")];
-        // 3 messages × ~1 token each → well within 100 budget
-        assert_eq!(compute_window_start(&msgs, 100), 0);
+        // Include per-user runtime metadata in the budget.
+        assert_eq!(compute_window_start(&msgs, estimate_total_tokens(&msgs)), 0);
     }
 
     #[test]
     fn test_window_trims_from_front() {
         let msgs: Vec<Message> = (0..12).map(|i| make_msg(&format!("msg{}", i))).collect();
-        // 每条正文约 1 token，另有 6 token 消息开销；预算保留最近 5 条。
-        let start = compute_window_start(&msgs, 35);
-        assert!(start > 0, "should have dropped some messages");
-        assert!(start <= 7, "should keep at least 5 messages");
+        // 正文、角色及固定时间元数据全部计费；预算恰好保留最近 5 条。
+        let start = compute_window_start(&msgs, estimate_total_tokens(&msgs[7..]));
+        assert_eq!(start, 7);
         // Verify last message is always included
         assert!(start < msgs.len());
     }

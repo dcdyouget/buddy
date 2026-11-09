@@ -36,6 +36,7 @@
 // v1 未按 `missing_docs` 要求书写，逐项补文档不属于移植范围。
 #[allow(missing_docs)]
 pub mod chat;
+mod context;
 #[allow(missing_docs)]
 pub mod mcp;
 #[allow(missing_docs)]
@@ -48,4 +49,3 @@ pub mod storage;
 pub mod streaming;
 #[allow(missing_docs)]
 pub mod tools;
-

@@ -10,7 +10,10 @@ use buddy_ui::gpui_platform::application;
 use buddy_ui::shell::{self, config::ShellConfig};
 
 fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("warn,buddy_engine::providers::usage=info"),
+    )
+    .init();
     install_exit_trace();
     if std::env::args().any(|argument| argument == "--selfcheck-window") {
         // 诊断隔离于真实用户数据和唯一产品实例；内部关闭临时窗口并清理后返回。

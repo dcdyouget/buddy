@@ -63,7 +63,12 @@ impl AnthropicProvider {
     ///
     /// 入参 `messages: &[Message]` 是 `&[Message]`：不可变借用 Message 切片
     /// ≈ Java 的 `List<Message>` 不可变视图
+    #[cfg(test)]
     fn convert_messages(messages: &[Message]) -> Vec<Value> {
+        Self::convert_with_options(messages, super::ChatOptions::default())
+    }
+
+    fn convert_with_options(messages: &[Message], options: super::ChatOptions<'_>) -> Vec<Value> {
         // 收集所有 assistant 消息中有效的 tool_use id
         // (此函数只负责 messages 数组；系统提示通过请求体顶层 `system` 字段注入,见 stream_chat)
         // 只有参数完整、且存在对应 tool_result 的调用才允许进入下一次请求。
@@ -105,8 +110,9 @@ impl AnthropicProvider {
                     MessageRole::User => {
                         if m.images.is_empty() {
                             let context = super::runtime_time_context_for_message(m.created_at);
-                            let content =
-                                super::append_runtime_time_context(&m.content, &context);
+                            let content = if options.runtime_context {
+                                super::append_runtime_time_context(&m.content, &context)
+                            } else { m.content.clone() };
                             json!({ "role": "user", "content": content })
                         } else {
                             let mut content = m
@@ -130,11 +136,10 @@ impl AnthropicProvider {
                                     "text": m.content,
                                 }));
                             }
-                            let context = super::runtime_time_context_for_message(m.created_at);
-                            content.push(json!({
-                                "type": "text",
-                                "text": context,
-                            }));
+                            if options.runtime_context {
+                                let context = super::runtime_time_context_for_message(m.created_at);
+                                content.push(json!({"type":"text", "text":context}));
+                            }
                             json!({ "role": "user", "content": content })
                         }
                     }
@@ -248,7 +253,7 @@ impl AnthropicProvider {
 // 在块内必须实现 trait 中声明的所有方法。
 // ============================================================================
 impl LlmProvider for AnthropicProvider {
-    fn stream_chat<'a>(
+    fn stream_chat_with_options<'a>(
         &'a self,
         base_url: &'a str,
         api_key: &'a str,
@@ -259,6 +264,7 @@ impl LlmProvider for AnthropicProvider {
         mut cancel_rx: watch::Receiver<bool>,
         compat: Option<&'a CompatConfig>,
         tools: &'a [ToolDefinition],
+        options: super::ChatOptions<'a>,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<StreamOutcome, ApiError>> + Send + 'a>>
     {
         // Box::pin(async move { ... })：
@@ -269,6 +275,7 @@ impl LlmProvider for AnthropicProvider {
         //   - Box::pin 把 Future 装箱到堆并 Pin 住（自引用安全）
         //     ≈ Java 的 CompletableFuture.supplyAsync(...).get() 返回的对象
         Box::pin(async move {
+            let mut usage_log = super::usage::UsageLog::new(request_id, model, options);
             // 解析 compat 配置
             // Option<&T>::map(...)   = Option 上挂的链式方法
             //   Some(x) → Some(f(x))
@@ -291,7 +298,7 @@ impl LlmProvider for AnthropicProvider {
             let client = super::shared_http_client().map_err(ApiError::NetworkError)?;
 
             // ── 2. 转换消息格式 ──
-            let anthropic_messages = Self::convert_messages(messages);
+            let anthropic_messages = Self::convert_with_options(messages, options);
 
             // ── 3. 构造请求体 JSON ──
             // serde_json::json!({...}) 宏：写起来像 JSON，编译后是 Value
@@ -302,15 +309,28 @@ impl LlmProvider for AnthropicProvider {
             // Anthropic 要求 max_tokens 不能超过模型的 context_window；
             // 固定 4096 在小窗口模型上会被 API 拒绝。取 min(4096, context_window 的一半)，
             // 大窗口模型保持 4096 不变。
-            let max_tokens =
-                std::cmp::min(4096u32, get_context_window(model).saturating_div(2).max(1));
+            let max_tokens = std::cmp::min(
+                options.max_output_tokens.unwrap_or(4096),
+                get_context_window(model).saturating_div(2).max(1),
+            );
+            // Stable instructions have their own breakpoint; automatic caching moves
+            // the message breakpoint without making one-off background input a write.
+            let mut system = vec![json!({"type":"text", "text":options.system_prompt,
+                "cache_control":{"type":"ephemeral"}})];
+            if let Some(context) = options.context {
+                system.push(json!({"type":"text", "text":context,
+                    "cache_control":{"type":"ephemeral"}}));
+            }
             let mut body = serde_json::json!({
                 "model": model,
                 "max_tokens": max_tokens,
-                "system": super::BUDDY_SYSTEM_PROMPT,
+                "system": system,
                 "messages": anthropic_messages,
                 "stream": true,
             });
+            if options.stage == "main" {
+                body["cache_control"] = json!({"type":"ephemeral"});
+            }
             if !tools.is_empty() {
                 let anthropic_tools: Vec<Value> = tools
                     .iter()
@@ -341,7 +361,7 @@ impl LlmProvider for AnthropicProvider {
                 model,
                 url,
                 request_bytes,
-                super::BUDDY_SYSTEM_PROMPT.len(),
+                options.system_prompt.len() + options.context.map_or(0, str::len),
                 messages
                     .iter()
                     .filter(|message| message.role == MessageRole::User)
@@ -610,6 +630,12 @@ impl LlmProvider for AnthropicProvider {
                                                 // 按事件类型分派处理
                                                 match event_type {
                                                     "message_start" => {
+                                                        usage_log.anthropic(
+                                                            json.get("message")
+                                                                .and_then(|m| m.get("usage"))
+                                                                .or_else(|| json.get("usage"))
+                                                                .unwrap_or(&Value::Null),
+                                                        );
                                                         _has_started = true;
                                                         // 提取 input_tokens
                                                         // .as_object()    Option<&Map>
@@ -772,6 +798,7 @@ impl LlmProvider for AnthropicProvider {
                                                         content_index = index + 1;
                                                     }
                                                     "message_delta" => {
+                                                        usage_log.anthropic(&json["usage"]);
                                                         // 消息级增量（含 stop_reason）
                                                         let delta = &json["delta"];
                                                         let stop_reason = delta["stop_reason"]
@@ -837,6 +864,7 @@ impl LlmProvider for AnthropicProvider {
                                                             usage_summary,
                                                         );
                                                         // done 事件由编排层 chat.rs 在整轮 tool 循环结束时统一发射
+                                                        usage_log.complete();
                                                         return Ok(StreamOutcome::completed(
                                                             full_response,
                                                             thinking_response,
