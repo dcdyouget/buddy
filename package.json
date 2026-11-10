@@ -5,5 +5,5 @@
   "devDependencies": {
     "@tauri-apps/cli": "2.11.3"
   },
-  "version": "0.1.22"
+  "version": "0.1.23"
 }
