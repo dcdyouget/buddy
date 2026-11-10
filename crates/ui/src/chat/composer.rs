@@ -311,7 +311,6 @@ impl Render for Composer {
                         // 有文字时给清除按钮留位（v1 paddingRight 28px）
                         .pr(px(if has_text { 28.0 } else { m::SPACE_2 }))
                         .rounded(px(m::RADIUS_MD))
-                        .when(self.focused && !standalone, |d| d.bg(c.field_surface))
                         .child(self.text.clone()),
                 )
                 .when(has_text, |d| {
