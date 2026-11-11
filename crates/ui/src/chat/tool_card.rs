@@ -49,6 +49,8 @@ pub fn status_meta(status: ToolStatus, awaiting_answer: bool) -> (&'static str, 
 /// v1 `getToolMeta`
 pub fn tool_meta(name: &str) -> (&'static str, IconName) {
     match name {
+        "view_image" => ("查看图片", IconName::Image),
+        // 保留旧工具名称，供历史记录展示。
         "read_file" => ("读取文件", IconName::FileText),
         "list_directory" => ("浏览目录", IconName::FolderTree),
         "search_files" => ("搜索文件", IconName::Search),

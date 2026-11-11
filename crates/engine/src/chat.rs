@@ -501,7 +501,7 @@ fn append_image_references(message: &mut Message) {
     message
         .content
         .push_str(&serde_json::to_string(&references).expect("attachment references serialize"));
-    message.content.push_str("\nUse read_file(path) when you need to inspect an image that is not included in this request.\n</buddy_attachments>");
+    message.content.push_str("\nUse view_image(attachment_id) when you need to inspect an image that is not included in this request.\n</buddy_attachments>");
 }
 
 fn prepare_images_for_provider(
@@ -509,7 +509,8 @@ fn prepare_images_for_provider(
     messages: &mut [Message],
     max_image_bytes: usize,
     supports_vision: bool,
-) -> Result<(), String> {
+) -> Result<Vec<ImageAttachment>, String> {
+    let mut attachments = Vec::new();
     let current_user_index = messages
         .iter()
         .rposition(|message| message.role == MessageRole::User);
@@ -540,6 +541,11 @@ fn prepare_images_for_provider(
                 }
             }
         }
+        attachments.extend(message.images.iter().map(|image| {
+            let mut image = image.clone();
+            image.data_url.clear();
+            image
+        }));
         append_image_references(message);
         if supports_vision && Some(index) == current_user_index {
             for image in &mut message.images {
@@ -549,7 +555,7 @@ fn prepare_images_for_provider(
             message.images.clear();
         }
     }
-    Ok(())
+    Ok(attachments)
 }
 
 /// 将工具读取或生成的图片持久化为本地附件，已有附件直接复用。
@@ -573,7 +579,7 @@ async fn persist_tool_images(
             let source = tokio::fs::canonicalize(&image.path).await;
             if let (Some(root), Ok(source)) = (&attachment_root, source) {
                 if source.starts_with(root) {
-                    // read_file 回读已有附件时复用文件，不反复保存同一张图片。
+                    // view_image 回读已有附件时复用文件，不反复保存同一张图片。
                     image.path = source.to_string_lossy().into_owned();
                     image.data_url.clear();
                     stored.push(image);
@@ -707,7 +713,7 @@ fn compute_window_start(messages: &[Message], token_budget: u32) -> usize {
         return 0;
     }
 
-    // 以用户提问为边界保留整轮，避免裁剪出孤立 tool result；read_file 的临时
+    // 以用户提问为边界保留整轮，避免裁剪出孤立 tool result；view_image 的临时
     // visual 消息属于原有工具轮次，不是新的用户提问。
     let starts: Vec<usize> = std::iter::once(0)
         .chain(messages.iter().enumerate().filter_map(|(index, message)| {
@@ -1100,6 +1106,12 @@ impl ChatEngine {
 
         // ── P4: 构造 ToolRegistry(只包含内置 tool,MCP tool 由 P7 注入) ──
         let mut builtin_tools = crate::tools::builtin::builtin_tools(&config);
+        let view_image_tool = Arc::new(crate::tools::view_image::ViewImageTool::new(
+            self.data_dir.clone(),
+        ));
+        if model.supports_vision {
+            builtin_tools.push(view_image_tool.clone());
+        }
         if provider_type == ProviderType::OpenAICompatible && model.supports_image_generation {
             if let Some(tool) = crate::tools::image_generation::GenerateImageTool::for_provider(
                 provider.base_url.clone(),
@@ -1137,17 +1149,20 @@ impl ChatEngine {
             // 丢失用户消息，且前端收不到任何流事件提示。
             let storage_dir = self.data_dir.clone();
             conv_messages = match run_blocking("读取聊天图片", move || {
-                prepare_images_for_provider(
+                let attachments = prepare_images_for_provider(
                     &storage_dir,
                     &mut conv_messages,
                     max_image_bytes,
                     true,
                 )?;
-                Ok(conv_messages)
+                Ok((conv_messages, attachments))
             })
             .await
             {
-                Ok(messages) => messages,
+                Ok((messages, attachments)) => {
+                    view_image_tool.remember_images(&attachments);
+                    messages
+                }
                 Err(error) => {
                     warn!("[send_message] 图片预处理失败: {}", error);
                     let persistence_error =
@@ -1290,7 +1305,7 @@ impl ChatEngine {
                 )
                 .await;
             // 普通 Chat Completions/Anthropic 请求均无状态。下一请求仅保留附件引用，
-            // 需要再次看图时由 read_file 显式载入，避免工具循环自动重传所有像素。
+            // 需要再次看图时由 view_image 显式载入，避免工具循环自动重传所有像素。
             for message in &mut conv_messages {
                 message.images.clear();
             }
@@ -1652,7 +1667,7 @@ impl ChatEngine {
                         if let Ok(output) = &result {
                             for (index, visual) in output.model_images.iter().enumerate() {
                                 let mut visual = visual.clone();
-                                // read_file 的视觉副本绑定到已保存的附件，后续引用可再次读取。
+                                // view_image 的视觉副本绑定到已保存的附件，后续引用可再次读取。
                                 if let Some(stored) = images.get(index) {
                                     visual.id = stored.id.clone();
                                     visual.path = stored.path.clone();
@@ -1662,6 +1677,7 @@ impl ChatEngine {
                         }
                     }
                 }
+                view_image_tool.remember_images(&images);
                 emitter.tool_result(&call.id, &call.name, &content, images.clone(), is_error);
                 info!(
                     "[send_message] turn {} tool '{}' tool_result 事件已发射 (id={})",
@@ -1680,7 +1696,7 @@ impl ChatEngine {
                 let mut visual_input = Message {
                     id: unique_message_id("visual", turn),
                     role: MessageRole::User,
-                    content: "Images returned by read_file:".to_string(),
+                    content: "Images returned by view_image:".to_string(),
                     images: next_request_images,
                     blocks: None,
                     model_id: None,
@@ -2085,7 +2101,7 @@ mod tests {
         let mut messages = vec![tool, make_msg("请检查生成结果")];
         prepare_images_for_provider(directory.path(), &mut messages, 1, false).unwrap();
         assert!(messages[0].images.is_empty());
-        assert!(messages[0].content.contains("read_file(path)"));
+        assert!(messages[0].content.contains("view_image(attachment_id)"));
         assert!(!messages[0].content.contains("base64"));
     }
 
@@ -2103,7 +2119,7 @@ mod tests {
             .split("<buddy_attachments>\n")
             .nth(1)
             .unwrap()
-            .split("\nUse read_file")
+            .split("\nUse view_image")
             .next()
             .unwrap();
         let references: serde_json::Value = serde_json::from_str(references).unwrap();
@@ -2279,7 +2295,7 @@ mod tests {
         let user = make_msg("current");
         let call = ToolCall {
             id: "call".into(),
-            name: "read_file".into(),
+            name: "view_image".into(),
             arguments: "{}".into(),
         };
         let mut assistant = make_msg("");
@@ -2296,7 +2312,7 @@ mod tests {
     fn interrupted_history_completes_missing_calls_and_drops_orphans() {
         let first = ToolCall {
             id: "first".into(),
-            name: "read_file".into(),
+            name: "view_image".into(),
             arguments: "{}".into(),
         };
         let second = ToolCall {

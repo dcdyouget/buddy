@@ -3,7 +3,7 @@
 macOS / Windows 上的 AI 对话小工具：按全局快捷键（Mac 默认 ⌘J，Windows 默认 Ctrl+J）呼出一个无边框的轻量窗口，与 AI 对话，点外部或按 Esc 收起。
 
 - 纯 Rust，界面基于 zed 的 [GPUI](https://github.com/zed-industries/zed)
-- 支持 Anthropic 与 OpenAI 兼容接口的多家模型服务商、图片输入与生成、联网搜索、本地文件工具
+- 支持 Anthropic 与 OpenAI 兼容接口的多家模型服务商、图片输入与生成、对话图片查看、联网搜索
 - 在对话状态按 Mac `⌘F` / Windows `Ctrl+F`，或通过输入框右侧「⋯ → 搜索历史」按提问关键词查找本地历史；点击回答摘录可定位并高亮对应问答
 - 应用内自动更新
 

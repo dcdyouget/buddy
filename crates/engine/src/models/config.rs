@@ -42,8 +42,7 @@ pub struct AppConfig {
     #[serde(default)]
     pub websearch_backend: WebSearchBackend,
     // 缺省时使用 vec![] —— 老 config.json 无这些字段也能正常加载
-    /// write 类 tool 允许写入的路径前缀列表（白名单）
-    /// 空数组 = 不限制（向后兼容）
+    /// 旧版文件工具配置，仅保留以兼容已有配置；不再提供通用文件读写工具。
     #[serde(default)]
     pub allowed_paths: Vec<String>,
     /// MCP server 配置列表

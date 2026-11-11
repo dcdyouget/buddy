@@ -26,5 +26,4 @@ parking_lot.workspace = true
 dirs.workspace = true
 
 [dev-dependencies]
-# tools/file_tools/tests.rs 使用
 tempfile.workspace = true

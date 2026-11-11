@@ -162,139 +162,63 @@ async fn plain_reply_emits_done_and_persists_user_and_assistant() {
 }
 
 #[tokio::test]
-async fn write_tool_approved_executes_then_continues_to_final_answer() {
+async fn file_tools_are_neither_advertised_nor_executed() {
     let tmp = TempDir::new().unwrap();
-    let out = tmp.path().join("out");
-    std::fs::create_dir(&out).unwrap();
-    let target = out.join("a.txt");
+    let target = tmp.path().join("private.txt");
+    let new_file = tmp.path().join("new.txt");
+    std::fs::write(&target, "private content").unwrap();
+    let names = [
+        "read_file",
+        "list_directory",
+        "search_files",
+        "create_file",
+        "overwrite_file",
+        "append_file",
+        "edit_file",
+    ];
+    let calls: Vec<_> = names.iter().map(|name| (*name, *name, json!({
+        "path": if *name == "create_file" { &new_file } else { &target },
+        "content": "changed", "old_text": "private", "new_text": "changed", "query": "private"
+    }))).collect();
     let (url, server) = serve_sse_sequence(
         vec![
-            openai_tool_calls_script(&[(
-                "call_1",
-                "create_file",
-                json!({"path": target, "content": "hi"}),
-            )]),
-            openai_script(&["已创建"], Duration::ZERO),
-        ],
-        IDLE,
-    )
-    .await;
-    write_config(tmp.path(), &url, vec![out.to_string_lossy().into()]);
-    let engine = ChatEngine::new(tmp.path().to_path_buf());
-
-    let r = run(&engine, server, Respond::Approve(true, false)).await;
-    assert!(r.result.is_ok());
-    assert_eq!(std::fs::read_to_string(&target).unwrap(), "hi");
-    assert_eq!(
-        count(&r.events, |e| matches!(
-            e,
-            StreamEvent::ToolApprovalRequired { .. }
-        )),
-        1
-    );
-    assert_eq!(
-        count(&r.events, |e| matches!(
-            e,
-            StreamEvent::ToolExecuting { .. }
-        )),
-        1
-    );
-    assert_eq!(
-        count(&r.events, |e| matches!(
-            e,
-            StreamEvent::ToolResult {
-                is_error: false,
-                ..
-            }
-        )),
-        1
-    );
-    assert!(
-        matches!(terminal(&r.events), StreamEvent::Done { full_text, .. } if full_text == "已创建")
-    );
-    // 第二轮请求把 tool 结果回传给模型
-    assert_eq!(r.requests.len(), 2);
-    assert!(
-        r.requests[1].body.contains("\"role\":\"tool\""),
-        "{}",
-        r.requests[1].body
-    );
-    assert!(r.requests[1].body.contains("call_1"));
-    // 持久化：user → assistant(tool_calls) → tool → assistant
-    assert_eq!(
-        roles(&persisted(&engine).await),
-        vec![
-            MessageRole::User,
-            MessageRole::Assistant,
-            MessageRole::Tool,
-            MessageRole::Assistant
-        ]
-    );
-}
-
-#[tokio::test]
-async fn write_tool_rejected_is_not_executed_and_model_is_told() {
-    let tmp = TempDir::new().unwrap();
-    let target = tmp.path().join("b.txt");
-    let (url, server) = serve_sse_sequence(
-        vec![
-            openai_tool_calls_script(&[(
-                "call_1",
-                "create_file",
-                json!({"path": target, "content": "x"}),
-            )]),
-            openai_script(&["好的，不创建"], Duration::ZERO),
+            openai_tool_calls_script(&calls),
+            openai_script(&["请把需要讨论的内容粘贴到聊天中"], Duration::ZERO),
         ],
         IDLE,
     )
     .await;
     write_config(tmp.path(), &url, vec![]);
     let engine = ChatEngine::new(tmp.path().to_path_buf());
-
-    let r = run(&engine, server, Respond::Approve(false, false)).await;
-    assert!(!target.exists(), "拒绝后不得执行写操作");
+    let r = run(&engine, server, Respond::Approve(true, true)).await;
+    assert!(r.result.is_ok());
+    assert!(matches!(terminal(&r.events), StreamEvent::Done { .. }));
+    assert_eq!(r.requests.len(), 2);
+    let request: serde_json::Value = serde_json::from_str(&r.requests[0].body).unwrap();
+    for tool in request["tools"].as_array().unwrap() {
+        assert!(!names.contains(&tool["function"]["name"].as_str().unwrap()));
+    }
     assert_eq!(
-        count(&r.events, |e| matches!(
-            e,
-            StreamEvent::ToolExecuting { .. }
+        count(&r.events, |event| matches!(
+            event,
+            StreamEvent::ToolApprovalRequired { .. } | StreamEvent::ToolExecuting { .. }
         )),
         0
     );
-    assert!(r.events.iter().any(
-        |e| matches!(e, StreamEvent::ToolResult { is_error: true, content, .. } if content == "用户拒绝执行")
-    ));
-    assert!(r.requests[1].body.contains("用户拒绝执行"));
-    assert!(matches!(terminal(&r.events), StreamEvent::Done { .. }));
-}
-
-#[tokio::test]
-async fn approve_all_skips_approval_for_rest_of_turn() {
-    let tmp = TempDir::new().unwrap();
-    let (a, b) = (tmp.path().join("a.txt"), tmp.path().join("b.txt"));
-    let (url, server) = serve_sse_sequence(
-        vec![
-            openai_tool_calls_script(&[
-                ("call_1", "create_file", json!({"path": a, "content": "1"})),
-                ("call_2", "create_file", json!({"path": b, "content": "2"})),
-            ]),
-            openai_script(&["都建好了"], Duration::ZERO),
-        ],
-        IDLE,
-    )
-    .await;
-    write_config(tmp.path(), &url, vec![]);
-    let engine = ChatEngine::new(tmp.path().to_path_buf());
-
-    let r = run(&engine, server, Respond::Approve(true, true)).await;
     assert_eq!(
-        count(&r.events, |e| matches!(
-            e,
-            StreamEvent::ToolApprovalRequired { .. }
+        count(&r.events, |event| matches!(
+            event,
+            StreamEvent::ToolResult { is_error: true, .. }
         )),
-        1
+        names.len()
     );
-    assert!(a.exists() && b.exists());
-    assert!(matches!(terminal(&r.events), StreamEvent::Done { .. }));
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "private content");
+    assert!(!new_file.exists());
+    assert!(!r.requests[1].body.contains("private content"));
+    assert_eq!(
+        roles(&persisted(&engine).await).last(),
+        Some(&MessageRole::Assistant)
+    );
 }
 
 #[tokio::test]
@@ -328,15 +252,14 @@ async fn ask_user_answer_round_trips_to_model() {
 }
 
 #[tokio::test]
-async fn stop_while_waiting_approval_aborts_without_executing() {
+async fn stop_while_waiting_for_answer_aborts_without_continuing() {
     let tmp = TempDir::new().unwrap();
-    let target = tmp.path().join("c.txt");
     let (url, server) = serve_sse_sequence(
         vec![
             openai_tool_calls_script(&[(
                 "call_1",
-                "create_file",
-                json!({"path": target, "content": "x"}),
+                "ask_user",
+                json!({"question": "选择哪个方向？", "header": "方向", "options": [{"label": "A"}, {"label": "B"}]}),
             )]),
             openai_script(&["不应到达"], Duration::ZERO),
         ],
@@ -347,7 +270,6 @@ async fn stop_while_waiting_approval_aborts_without_executing() {
     let engine = ChatEngine::new(tmp.path().to_path_buf());
 
     let r = run(&engine, server, Respond::Stop).await;
-    assert!(!target.exists());
     assert_eq!(r.requests.len(), 1, "取消后不得发起下一轮请求");
     assert!(matches!(
         terminal(&r.events),
@@ -356,8 +278,12 @@ async fn stop_while_waiting_approval_aborts_without_executing() {
             ..
         }
     ));
-    // 等待槽位已被清理：迟到的审批返回 Err，而不是推进已结束的对话
-    assert!(engine.approve_tool_call("call_1", true, false).is_err());
+    // 等待槽位已被清理：迟到的回答返回 Err，而不是推进已结束的对话
+    assert!(
+        engine
+            .answer_tool_question("call_1", vec![0], None, None)
+            .is_err()
+    );
     // 生成占用已释放：可以立即开始下一次对话
     let (url2, server2) =
         serve_sse_sequence(vec![openai_script(&["再来"], Duration::ZERO)], IDLE).await;

@@ -1,7 +1,7 @@
 //! 端到端图片上下文测试。
 //!
 //! 这些用例从 ChatEngine 入口验证图片附件的生命周期：新图只在首个请求
-//! 发送像素，历史图片只发送引用；read_file 读图后像素只注入紧邻的下一轮。
+//! 发送像素，历史图片只发送引用；view_image 读图后像素只注入紧邻的下一轮。
 
 mod common;
 
@@ -221,7 +221,7 @@ fn attachment_paths(body: &str) -> Vec<String> {
                 return Vec::new();
             };
             let references: serde_json::Value =
-                serde_json::from_str(references.split("\nUse read_file").next().unwrap()).unwrap();
+                serde_json::from_str(references.split("\nUse view_image").next().unwrap()).unwrap();
             references
                 .as_array()
                 .unwrap()
@@ -237,8 +237,9 @@ fn attachment_paths(body: &str) -> Vec<String> {
 fn attachment_paths_decode_windows_paths_from_nested_json() {
     let path = r"\\?\C:\Users\Buddy\attachments\image.png";
     let references = json!([{"path":path}]);
-    let content =
-        format!("<buddy_attachments>\n{references}\nUse read_file(path)\n</buddy_attachments>");
+    let content = format!(
+        "<buddy_attachments>\n{references}\nUse view_image(attachment_id)\n</buddy_attachments>"
+    );
     for content in [json!(content), json!([{"type":"text","text":content}])] {
         let body = json!({"messages":[{"content":content}]}).to_string();
         assert_eq!(attachment_paths(&body), vec![path]);
@@ -283,11 +284,13 @@ async fn new_image_is_sent_once_and_history_images_are_json_references() {
     ];
     storage::append_messages(tmp.path(), &history).unwrap();
 
-    let note_path = tmp.path().join("note.txt");
-    std::fs::write(&note_path, "文本读取正常").unwrap();
     let (url, server) = serve_sse_sequence(
         vec![
-            openai_tool_calls_script(&[("call-text", "read_file", json!({"path": note_path}))]),
+            openai_tool_calls_script(&[(
+                "call-missing",
+                "view_image",
+                json!({"attachment_id": "missing"}),
+            )]),
             openai_script(&["收到"], Duration::ZERO),
         ],
         IDLE,
@@ -336,7 +339,7 @@ async fn new_image_is_sent_once_and_history_images_are_json_references() {
             .body
             .contains(&image_body_marker("image/png"))
     );
-    assert!(run.requests[1].body.contains("文本读取正常"));
+    assert!(run.requests[1].body.contains("找不到此图片附件"));
     // 历史与当前消息都只保存 path；写盘 JSON 不应携带任何 base64 像素。
     let raw = std::fs::read_to_string(tmp.path().join("chunk_001.json")).unwrap();
     assert!(
@@ -354,25 +357,31 @@ async fn new_image_is_sent_once_and_history_images_are_json_references() {
 }
 
 #[tokio::test]
-async fn read_file_image_is_visible_for_one_follow_up_then_becomes_reference() {
+async fn view_image_is_visible_for_one_follow_up_then_becomes_reference() {
     let tmp = TempDir::new().unwrap();
     let stored = storage::store_image_bytes(
         tmp.path(),
         "picture.png",
         "image/png",
         &png_bytes(),
-        "read-file",
+        "uploaded",
     )
     .unwrap();
     let attachments_before = attachment_count(tmp.path());
-    let text_path = tmp.path().join("note.txt");
-    std::fs::write(&text_path, "纯文本文件").unwrap();
 
     let (url, server) = serve_sse_sequence(
         vec![
-            openai_tool_calls_script(&[("call-image", "read_file", json!({"path": stored.path}))]),
-            openai_tool_calls_script(&[("call-text", "read_file", json!({"path": text_path}))]),
-            openai_script(&["图片和文本都已读取"], Duration::ZERO),
+            openai_tool_calls_script(&[(
+                "call-image",
+                "view_image",
+                json!({"attachment_id": stored.id}),
+            )]),
+            openai_tool_calls_script(&[(
+                "call-missing",
+                "view_image",
+                json!({"attachment_id": "missing"}),
+            )]),
+            openai_script(&["图片已查看"], Duration::ZERO),
         ],
         IDLE,
     )
@@ -381,7 +390,10 @@ async fn read_file_image_is_visible_for_one_follow_up_then_becomes_reference() {
     let engine = ChatEngine::new(tmp.path().to_path_buf());
     let run = run(
         &engine,
-        vec![user("current", "请读取图片和文本", Vec::new())],
+        vec![
+            user("old-image", "这张图", vec![stored.clone()]),
+            user("current", "请查看之前的图片", Vec::new()),
+        ],
         server,
     )
     .await;
@@ -399,7 +411,7 @@ async fn read_file_image_is_visible_for_one_follow_up_then_becomes_reference() {
     assert_eq!(run.requests[1].body.matches(&image_marker).count(), 1);
     assert!(run.requests[1].body.contains("call-image"));
     assert!(run.requests[1].body.contains("\"role\":\"tool\""));
-    assert!(run.requests[2].body.contains("call-text"));
+    assert!(run.requests[2].body.contains("call-missing"));
     assert!(!run.requests[2].body.contains(&image_marker));
     let managed_attachments = std::fs::canonicalize(tmp.path().join("attachments")).unwrap();
     let paths = attachment_paths(&run.requests[2].body);
@@ -409,7 +421,7 @@ async fn read_file_image_is_visible_for_one_follow_up_then_becomes_reference() {
             .any(|path| Path::new(path).starts_with(&managed_attachments)),
         "请求应保留可回读的附件路径：{paths:?}"
     );
-    for marker in ["read-image", "image/png"] {
+    for marker in [stored.id.as_str(), "image/png"] {
         assert!(
             run.requests[2].body.contains(marker),
             "缺少图片引用 {marker}: {}",
@@ -442,17 +454,24 @@ async fn read_file_image_is_visible_for_one_follow_up_then_becomes_reference() {
 }
 
 #[tokio::test]
-async fn anthropic_read_file_image_is_injected_once_then_referenced() {
+async fn anthropic_view_image_is_injected_once_then_referenced() {
     let tmp = TempDir::new().unwrap();
-    let source = tmp.path().join("picture.png");
-    std::fs::write(&source, png_bytes()).unwrap();
-    let text_path = tmp.path().join("note.txt");
-    std::fs::write(&text_path, "Anthropic 文本读取正常").unwrap();
+    let stored =
+        storage::store_image_bytes(tmp.path(), "picture.png", "image/png", &png_bytes(), "test")
+            .unwrap();
 
     let (url, server) = serve_sse_sequence(
         vec![
-            anthropic_tool_call_script("anthropic-image", "read_file", &json!({"path": source})),
-            anthropic_tool_call_script("anthropic-text", "read_file", &json!({"path": text_path})),
+            anthropic_tool_call_script(
+                "anthropic-image",
+                "view_image",
+                &json!({"attachment_id": stored.id}),
+            ),
+            anthropic_tool_call_script(
+                "anthropic-missing",
+                "view_image",
+                &json!({"attachment_id": "missing"}),
+            ),
             anthropic_script(&["已读取"], Duration::ZERO),
         ],
         IDLE,
@@ -462,7 +481,10 @@ async fn anthropic_read_file_image_is_injected_once_then_referenced() {
     let engine = ChatEngine::new(tmp.path().to_path_buf());
     let run = run(
         &engine,
-        vec![user("current", "请读取图片和文本", Vec::new())],
+        vec![
+            user("old-image", "这张图", vec![stored.clone()]),
+            user("current", "请查看之前的图片", Vec::new()),
+        ],
         server,
     )
     .await;
@@ -481,13 +503,13 @@ async fn anthropic_read_file_image_is_injected_once_then_referenced() {
     assert!(run.requests[1].body.contains("\"type\":\"image\""));
     assert!(run.requests[1].body.contains(&image_data));
     assert!(run.requests[1].body.contains("anthropic-image"));
-    assert!(run.requests[2].body.contains("anthropic-text"));
+    assert!(run.requests[2].body.contains("anthropic-missing"));
     assert!(!run.requests[2].body.contains(&image_data));
     assert!(run.requests[2].body.contains("image/png"));
 }
 
 #[tokio::test]
-async fn read_file_recognizes_supported_image_signatures() {
+async fn view_image_recognizes_supported_image_signatures() {
     for (extension, media_type) in [
         ("png", "image/png"),
         ("jpg", "image/jpeg"),
@@ -495,12 +517,22 @@ async fn read_file_recognizes_supported_image_signatures() {
         ("webp", "image/webp"),
     ] {
         let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join(format!("fixture.{extension}"));
         let bytes = image_fixture(media_type);
-        std::fs::write(&path, &bytes).unwrap();
+        let stored = storage::store_image_bytes(
+            tmp.path(),
+            &format!("fixture.{extension}"),
+            media_type,
+            &bytes,
+            "test",
+        )
+        .unwrap();
         let (url, server) = serve_sse_sequence(
             vec![
-                openai_tool_calls_script(&[("call-image", "read_file", json!({"path": path}))]),
+                openai_tool_calls_script(&[(
+                    "call-image",
+                    "view_image",
+                    json!({"attachment_id": stored.id}),
+                )]),
                 openai_script(&["已读取"], Duration::ZERO),
             ],
             IDLE,
@@ -510,7 +542,10 @@ async fn read_file_recognizes_supported_image_signatures() {
         let engine = ChatEngine::new(tmp.path().to_path_buf());
         let run = run(
             &engine,
-            vec![user("current", "读取图片", Vec::new())],
+            vec![
+                user("old-image", "这张图", vec![stored.clone()]),
+                user("current", "查看图片", Vec::new()),
+            ],
             server,
         )
         .await;
@@ -553,7 +588,7 @@ async fn read_file_recognizes_supported_image_signatures() {
 }
 
 #[tokio::test]
-async fn image_read_reports_error_when_model_has_no_vision_support() {
+async fn image_tool_is_unavailable_when_model_has_no_vision_support() {
     let tmp = TempDir::new().unwrap();
     let stored = storage::store_image_bytes(
         tmp.path(),
@@ -567,8 +602,8 @@ async fn image_read_reports_error_when_model_has_no_vision_support() {
         vec![
             openai_tool_calls_script(&[(
                 "call-no-vision",
-                "read_file",
-                json!({"path": stored.path}),
+                "view_image",
+                json!({"attachment_id": stored.id}),
             )]),
             openai_script(&["当前模型不能读取图片"], Duration::ZERO),
         ],
@@ -600,22 +635,35 @@ async fn image_read_reports_error_when_model_has_no_vision_support() {
         })
         .expect("无视觉能力时图片工具应返回错误");
     assert!(
-        error.contains("图片") || error.contains("视觉"),
-        "错误应说明视觉能力限制: {error}"
+        error.contains("未在 ToolRegistry 中注册"),
+        "无视觉模型不提供查看工具: {error}"
+    );
+    let request: serde_json::Value = serde_json::from_str(&run.requests[0].body).unwrap();
+    assert!(
+        !request["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["function"]["name"] == "view_image")
     );
     assert!(!run.requests[1].body.contains("data:image/png;base64,"));
 }
 
 #[tokio::test]
-async fn read_file_rejects_images_over_provider_limit() {
+async fn view_image_rejects_images_over_provider_limit() {
     let tmp = TempDir::new().unwrap();
-    let path = tmp.path().join("too-large.png");
     let mut bytes = vec![0_u8; buddy_engine::models::DEFAULT_IMAGE_BYTES + 1];
     bytes[..8].copy_from_slice(&png_bytes()[..8]);
-    std::fs::write(&path, bytes).unwrap();
+    let stored =
+        storage::store_image_bytes(tmp.path(), "too-large.png", "image/png", &bytes, "test")
+            .unwrap();
     let (url, server) = serve_sse_sequence(
         vec![
-            openai_tool_calls_script(&[("call-too-large", "read_file", json!({"path": path}))]),
+            openai_tool_calls_script(&[(
+                "call-too-large",
+                "view_image",
+                json!({"attachment_id": stored.id}),
+            )]),
             openai_script(&["图片过大"], Duration::ZERO),
         ],
         IDLE,
@@ -625,7 +673,10 @@ async fn read_file_rejects_images_over_provider_limit() {
     let engine = ChatEngine::new(tmp.path().to_path_buf());
     let run = run(
         &engine,
-        vec![user("current", "请读取大图片", Vec::new())],
+        vec![
+            user("old-image", "大图", vec![stored.clone()]),
+            user("current", "请查看大图片", Vec::new()),
+        ],
         server,
     )
     .await;
@@ -649,4 +700,60 @@ async fn read_file_rejects_images_over_provider_limit() {
         "错误应说明图片大小限制: {error}"
     );
     assert!(!run.requests[1].body.contains("data:image/png;base64,"));
+}
+
+#[tokio::test]
+async fn generated_image_from_legacy_history_can_be_viewed_by_id() {
+    let tmp = TempDir::new().unwrap();
+    let generated = ImageAttachment {
+        id: "generated-in-history".into(),
+        name: "generated.png".into(),
+        media_type: "image/png".into(),
+        path: String::new(),
+        data_url: image_body_marker("image/png"),
+    };
+    let (url, server) = serve_sse_sequence(
+        vec![
+            openai_tool_calls_script(&[(
+                "inspect-generated",
+                "view_image",
+                json!({"attachment_id": generated.id}),
+            )]),
+            openai_script(&["已查看之前生成的图片"], Duration::ZERO),
+        ],
+        IDLE,
+    )
+    .await;
+    write_config(tmp.path(), &url, true);
+    let engine = ChatEngine::new(tmp.path().to_path_buf());
+    let run = run(
+        &engine,
+        vec![
+            user("old-user", "生成一张图片", Vec::new()),
+            assistant_with_call("old-assistant", "generate", "generate_image"),
+            tool_result(
+                "generated-tool",
+                "generate",
+                "generate_image",
+                "已生成",
+                vec![generated],
+            ),
+            user("current", "查看刚才生成的图片", Vec::new()),
+        ],
+        server,
+    )
+    .await;
+    assert_done(&run.events);
+    assert_eq!(run.requests.len(), 2);
+    assert!(!run.requests[0].body.contains(PNG_1X1_BASE64));
+    assert_eq!(run.requests[1].body.matches(PNG_1X1_BASE64).count(), 1);
+    let saved = engine.load_messages(0, 100).await.unwrap();
+    let viewed = saved
+        .iter()
+        .find(|message| message.tool_call_id.as_deref() == Some("inspect-generated"))
+        .unwrap();
+    assert_eq!(viewed.images[0].id, "generated-in-history");
+    assert!(Path::new(&viewed.images[0].path).is_file());
+    assert!(viewed.images[0].data_url.is_empty());
+    assert_eq!(attachment_count(tmp.path()), 1);
 }

@@ -21,8 +21,8 @@ use std::sync::Arc;
 use crate::models::{DEFAULT_IMAGE_BYTES, ImageAttachment};
 
 pub mod builtin;
-pub mod file_tools;
 pub mod image_generation;
+pub(crate) mod view_image;
 pub mod websearch;
 #[allow(unused_imports)]
 pub use builtin::*;
