@@ -17,7 +17,23 @@ const GUARD_STR: &str = "\u{200B}";
 
 /// 统一执行结构修复与加粗规范化（v1 `normalizeMarkdown`）
 pub fn normalize_markdown(markdown: &str) -> String {
-    normalize_emphasis(&repair_fences(markdown))
+    let repaired = repair_fences(markdown);
+    if !repaired.contains('$') && !repaired.contains(r"\(") && !repaired.contains(r"\[") {
+        return normalize_emphasis(&repaired);
+    }
+    // TeX owns its contents: Markdown emphasis guards must never enter a formula.
+    let normalized = zed_markdown::math::normalize_delimiters(&repaired);
+    let mut out = String::with_capacity(repaired.len());
+    let mut cursor = 0;
+    for (event, range) in pulldown_cmark::Parser::new_ext(&normalized, zed_markdown::parser::PARSE_OPTIONS).into_offset_iter() {
+        if matches!(event, pulldown_cmark::Event::InlineMath(_) | pulldown_cmark::Event::DisplayMath(_)) {
+            out.push_str(&normalize_emphasis(&repaired[cursor..range.start]));
+            out.push_str(&repaired[range.clone()]);
+            cursor = range.end;
+        }
+    }
+    out.push_str(&normalize_emphasis(&repaired[cursor..]));
+    out
 }
 
 fn is_escaped(s: &[u8], index: usize) -> bool {

@@ -54,6 +54,9 @@ raw-window-handle.workspace = true
 windows-sys.workspace = true
 
 [dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+gpui_platform = { workspace = true, features = ["test-support"] }
+buddy-markdown = { workspace = true, features = ["test-support"] }
 
 [lints.rust]
 # objc 0.2 的 `msg_send!` 宏展开含 `cfg(feature = "cargo-clippy")`（accessibility.rs）；

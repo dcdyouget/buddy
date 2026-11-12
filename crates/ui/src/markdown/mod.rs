@@ -24,6 +24,8 @@ pub mod reveal;
 pub mod copy;
 pub mod gfm;
 pub use zed_markdown;
+#[cfg(test)]
+mod math_tests;
 
 use crate::theme_system::{BuddyTheme, TextScale, Theme, fonts, tokens::metrics};
 use gpui::{App, FontStyle, FontWeight, HighlightStyle, Hsla, Refineable, StyleRefinement, TextStyleRefinement, Window, px, relative};

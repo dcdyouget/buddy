@@ -1,6 +1,6 @@
-diff --color -ruN md-orig/html/html_rendering.rs md-ours/html/html_rendering.rs
---- md-orig/html/html_rendering.rs	2026-10-06 23:05:43
-+++ md-ours/html/html_rendering.rs	2026-10-06 23:05:43
+diff -ruN md-orig/html/html_rendering.rs md-ours/html/html_rendering.rs
+--- md-orig/html/html_rendering.rs	2026-09-10 18:39:31
++++ md-ours/html/html_rendering.rs	2026-10-06 17:40:47
 @@ -103,6 +103,7 @@
                      &heading.source_range,
                      markdown_end,
@@ -17,9 +17,9 @@ diff --color -ruN md-orig/html/html_rendering.rs md-ours/html/html_rendering.rs
                  );
                  self.render_html_elements(
                      &block_quote.children,
-diff --color -ruN md-orig/language_stub.rs md-ours/language_stub.rs
+diff -ruN md-orig/language_stub.rs md-ours/language_stub.rs
 --- md-orig/language_stub.rs	1970-01-01 08:00:00
-+++ md-ours/language_stub.rs	2026-10-06 23:05:43
++++ md-ours/language_stub.rs	2026-10-06 21:08:08
 @@ -0,0 +1,315 @@
 +//! Buddy 编写：替代 zed 的 `language` 模块。
 +//!
@@ -336,11 +336,12 @@ diff --color -ruN md-orig/language_stub.rs md-ours/language_stub.rs
 +        self.scope
 +    }
 +}
-diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
---- md-orig/markdown.rs	2026-10-06 23:05:43
-+++ md-ours/markdown.rs	2026-10-06 23:05:43
-@@ -1,5 +1,34 @@
+diff -ruN md-orig/markdown.rs md-ours/markdown.rs
+--- md-orig/markdown.rs	2026-09-10 18:39:31
++++ md-ours/markdown.rs	2026-11-12 09:59:51
+@@ -1,5 +1,35 @@
  pub mod html;
++pub mod math;
  mod mermaid;
 +mod theme_settings_shim;
 +
@@ -374,7 +375,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  pub mod parser;
  mod path_range;
  mod selection;
-@@ -8,16 +37,22 @@
+@@ -8,16 +38,22 @@
  use gpui::EdgesRefinement;
  use gpui::HitboxBehavior;
  use gpui::UnderlineStyle;
@@ -400,7 +401,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  use util::maybe;
  
  use std::borrow::Cow;
-@@ -40,7 +75,7 @@
+@@ -40,7 +76,7 @@
      TextStyle, TextStyleRefinement, WrappedLineLayout, actions, canvas, img, point, quad, relative,
      size,
  };
@@ -409,7 +410,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  use parser::CodeBlockMetadata;
  use parser::{
      MarkdownEvent, MarkdownTag, MarkdownTagEnd, ParsedMetadataBlock, parse_links_only,
-@@ -93,7 +128,91 @@
+@@ -93,7 +129,91 @@
      }
  }
  
@@ -501,7 +502,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  pub struct HeadingLevelStyles {
      pub h1: Option<TextStyleRefinement>,
      pub h2: Option<TextStyleRefinement>,
-@@ -131,6 +250,8 @@
+@@ -131,6 +251,8 @@
      pub prevent_mouse_interaction: bool,
      pub table_columns_min_size: bool,
      pub soft_break_as_hard_break: bool,
@@ -510,7 +511,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  }
  
  impl Default for MarkdownStyle {
-@@ -160,6 +281,7 @@
+@@ -160,6 +282,7 @@
              prevent_mouse_interaction: false,
              table_columns_min_size: false,
              soft_break_as_hard_break: false,
@@ -518,7 +519,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
          }
      }
  }
-@@ -1128,11 +1250,21 @@
+@@ -1128,11 +1251,21 @@
          self.active_search_highlight
      }
  
@@ -542,7 +543,66 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
          cx.write_to_clipboard(ClipboardItem::new_string(text));
      }
  
-@@ -1718,8 +1850,10 @@
+@@ -1227,6 +1360,7 @@
+         let should_parse_metadata_blocks = self.options.render_metadata_blocks;
+         let language_registry = self.language_registry.clone();
+         let fallback = self.fallback_code_block_language.clone();
++        let previous_math = self.parsed_markdown.math_formulas.clone();
+ 
+         let parsed = cx.background_spawn(async move {
+             if should_parse_links_only {
+@@ -1245,6 +1379,7 @@
+                         link_definition_spans: Arc::default(),
+                         fallback_code_block_language: None,
+                         code_block_highlights: Arc::default(),
++                        math_formulas: HashMap::default(),
+                     },
+                     Default::default(),
+                 );
+@@ -1257,6 +1392,17 @@
+                 should_parse_metadata_blocks,
+             );
+             let events = parsed.events;
++            let mut math_formulas = HashMap::default();
++            for (_, event) in &events {
++                if let MarkdownEvent::Math { latex, display } = event {
++                    let key = (latex.clone(), *display);
++                    math_formulas.entry(key.clone()).or_insert_with(|| {
++                        previous_math.get(&key).cloned().unwrap_or_else(|| {
++                            math::MathFormula::parse(latex, *display).map(Arc::new)
++                        })
++                    });
++                }
++            }
+             let language_names = parsed.language_names;
+             let paths = parsed.language_paths;
+             let root_block_starts = parsed.root_block_starts;
+@@ -1336,6 +1482,7 @@
+                 link_definition_spans: Arc::from(link_definition_spans),
+                 fallback_code_block_language,
+                 code_block_highlights: Arc::default(),
++                math_formulas,
+             };
+             parsed.code_block_highlights = Arc::new(compute_code_block_highlights(&parsed));
+             (parsed, images_by_source_offset)
+@@ -1485,6 +1632,8 @@
+     pub(crate) link_definition_spans: Arc<[Range<usize>]>,
+     pub(crate) fallback_code_block_language: Option<Arc<Language>>,
+     pub(crate) code_block_highlights: Arc<CodeBlockHighlights>,
++    // Scoped to this document revision, including failures; streaming reuses completed formulas.
++    math_formulas: HashMap<(SharedString, bool), Option<Arc<math::MathFormula>>>,
+ }
+ 
+ pub(crate) type CodeBlockHighlights = HashMap<usize, ResolvedHighlights>;
+@@ -1534,6 +1683,7 @@
+                 MarkdownEvent::Text
+                 | MarkdownEvent::SubstitutedText(_)
+                 | MarkdownEvent::Code
++                | MarkdownEvent::Math { .. }
+                 | MarkdownEvent::SubstitutedCode(_) => {
+                     let Some((link_range, cursor)) = active_link.as_mut() else {
+                         continue;
+@@ -1718,8 +1868,10 @@
      code_span_link: Option<CodeSpanLinkCallback>,
      on_source_click: Option<SourceClickCallback>,
      on_checkbox_toggle: Option<CheckboxToggleCallback>,
@@ -553,7 +613,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
      show_root_block_markers: bool,
      autoscroll: AutoscrollBehavior,
      /// Test-only hook to observe the laid-out text when this element is
-@@ -1744,8 +1878,10 @@
+@@ -1744,8 +1896,10 @@
              code_span_link: None,
              on_source_click: None,
              on_checkbox_toggle: None,
@@ -564,7 +624,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
              show_root_block_markers: false,
              autoscroll: AutoscrollBehavior::Propagate,
              #[cfg(test)]
-@@ -1827,6 +1963,19 @@
+@@ -1827,6 +1981,19 @@
          self
      }
  
@@ -584,7 +644,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
      /// Registers a callback invoked when a mermaid diagram's zoom level changes.
      /// Consumers that scroll the markdown can use this to keep the diagram's
      /// position anchored while it grows or shrinks.
-@@ -1843,6 +1992,19 @@
+@@ -1843,6 +2010,19 @@
          self
      }
  
@@ -604,7 +664,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
      pub fn show_root_block_markers(mut self) -> Self {
          self.show_root_block_markers = true;
          self
-@@ -1915,27 +2077,35 @@
+@@ -1915,27 +2095,35 @@
  
          let image_element = {
              let wrapper = div().id(("markdown-image-link", range.start)).min_w_0();
@@ -652,7 +712,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                      .on_click(move |_, window, cx| {
                          if let Some(ref on_url_click) = url_click {
                              on_url_click(click_url.clone(), window, cx);
-@@ -1951,9 +2121,11 @@
+@@ -1951,9 +2139,11 @@
                          }
                      })
              } else {
@@ -666,7 +726,62 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                  img(source)
                      .id(("markdown-image", range.start))
                      .min_w_0()
-@@ -2014,6 +2186,7 @@
+@@ -1976,6 +2166,54 @@
+         builder.push_image_child(image_element);
+     }
+ 
++    fn push_markdown_math(
++        &self,
++        builder: &mut MarkdownElementBuilder,
++        formula: Arc<math::MathFormula>,
++        source: SharedString,
++        range: Range<usize>,
++        display: bool,
++        window: &Window,
++    ) {
++        builder.flush_text();
++        let style = builder.text_style();
++        let font_size = style.font_size.to_pixels(window.rem_size());
++        let width = font_size * formula.width();
++        let height = font_size * formula.height();
++        let bounds_cell = Rc::new(Cell::new(None));
++        builder.rendered_math.push(RenderedMath {
++            source_range: range.clone(),
++            source: source.clone(),
++            bounds: bounds_cell.clone(),
++        });
++        let highlights = builder.highlights.highlights_for_line(range.clone());
++        // SVG paths contain font outlines, painted with the current semantic text color.
++        // Geometry is measured in ems and resolved again for every font-size change.
++        let svg_key = formula.cache_key.clone();
++        let element = canvas(
++            move |bounds, _, _| bounds_cell.set(Some(bounds)),
++            move |bounds, _, window, cx| {
++                window.paint_svg(bounds, svg_key.clone(), Some(formula.svg().as_bytes()),
++                    gpui::TransformationMatrix::default(), style.color, cx).log_err();
++                for (_, color) in &highlights {
++                    window.paint_quad(gpui::fill(bounds, *color));
++                }
++            },
++        ).w(width).h(height).flex_shrink_0();
++        let container = div().id(("markdown-math", range.start))
++            .debug_selector(|| "markdown-math".into())
++            .role(gpui::Role::Math).aria_label(source);
++        if display {
++            builder.append_child(container
++                .w_full().min_w_0().overflow_x_scroll().py(self.style.paragraph_spacing)
++                .child(element).into_any_element());
++        } else {
++            builder.append_child(container
++                .flex_shrink_0().min_w_0().max_w_full().overflow_x_scroll()
++                .py_0p5().child(element).into_any_element());
++        }
++    }
++
+     fn push_markdown_paragraph(
+         &self,
+         builder: &mut MarkdownElementBuilder,
+@@ -2014,6 +2252,7 @@
          range: &Range<usize>,
          markdown_end: usize,
          text_align_override: Option<TextAlign>,
@@ -674,7 +789,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
      ) {
          let align = text_align_override.unwrap_or(self.style.base_text_style.text_align);
          let mut heading = div().mt_4().mb_2();
-@@ -2033,6 +2206,9 @@
+@@ -2033,6 +2272,9 @@
          let mut heading_style = self.style.heading.clone();
          let mut heading_text_style = heading_style.text_style().clone();
          heading.style().refine(&heading_style);
@@ -684,7 +799,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  
          if let Some(level_style) =
              heading_level_style(level, self.style.heading_level_styles.as_ref())
-@@ -2058,6 +2234,7 @@
+@@ -2058,6 +2300,7 @@
          kind: Option<pulldown_cmark::BlockQuoteKind>,
          range: &Range<usize>,
          markdown_end: usize,
@@ -692,7 +807,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
      ) {
          let border_color = self
              .style
-@@ -2098,6 +2275,10 @@
+@@ -2098,6 +2341,10 @@
              Some(header) => block_div.child(header),
              None => block_div,
          };
@@ -703,7 +818,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  
          builder.push_text_style(self.style.block_quote.clone());
          builder.push_div(block_div, range, markdown_end);
-@@ -2280,6 +2461,7 @@
+@@ -2280,6 +2527,7 @@
          let on_open_url = self.on_url_click.take();
          let on_url_hover = self.on_url_hover.take();
          let on_source_click = self.on_source_click.take();
@@ -711,7 +826,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  
          self.on_mouse_event(window, cx, {
              let hitbox = hitbox.clone();
-@@ -2304,10 +2486,43 @@
+@@ -2304,10 +2552,43 @@
              let hitbox = hitbox.clone();
              move |markdown, event: &MouseDownEvent, phase, window, cx| {
                  if hitbox.is_hovered(window) {
@@ -755,7 +870,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                          if let Ok(source_index) = position_result {
                              if let Some(footnote_ref) =
                                  rendered_text.footnote_ref_for_source_index(source_index)
-@@ -2320,13 +2535,16 @@
+@@ -2320,13 +2601,16 @@
                              }
                          }
  
@@ -776,7 +891,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                                  let blocked = handler(source_index, event.click_count, window, cx);
                                  if blocked {
                                      markdown.selection = Selection::default();
-@@ -2454,6 +2672,7 @@
+@@ -2454,6 +2738,7 @@
                              cx.notify();
                          }
                      } else if let Some(pressed_link) = markdown.pressed_link.take()
@@ -784,7 +899,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                          && source_index.and_then(|ix| rendered_text.link_for_source_index(ix))
                              == Some(&pressed_link)
                      {
-@@ -2549,7 +2768,7 @@
+@@ -2549,7 +2834,7 @@
  
  impl Element for MarkdownElement {
      type RequestLayoutState = RenderedMarkdown;
@@ -793,7 +908,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  
      fn id(&self) -> Option<ElementId> {
          None
-@@ -2602,6 +2821,7 @@
+@@ -2602,6 +2887,7 @@
              highlights,
              parsed_markdown.code_block_highlights.clone(),
          );
@@ -801,7 +916,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
          let markdown_end = if let Some(last) = parsed_markdown.events.last() {
              last.0.end
          } else {
-@@ -2612,6 +2832,8 @@
+@@ -2612,6 +2898,8 @@
          let mut current_img_block_range: Option<Range<usize>> = None;
          let mut handled_html_block = false;
          let mut rendered_mermaid_block = false;
@@ -810,7 +925,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
          let mut rendered_metadata_block = false;
          for (index, (range, event)) in parsed_markdown.events.iter().enumerate() {
              // Skip alt text for images that rendered
-@@ -2716,6 +2938,7 @@
+@@ -2716,6 +3004,7 @@
                                  range,
                                  markdown_end,
                                  text_align_override,
@@ -818,7 +933,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                              );
                          }
                          MarkdownTag::BlockQuote(kind) => {
-@@ -2724,9 +2947,10 @@
+@@ -2724,9 +3013,10 @@
                                  *kind,
                                  range,
                                  markdown_end,
@@ -830,7 +945,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                              if render_mermaid_diagrams
                                  && let Some(mermaid_diagram) =
                                      parsed_markdown.mermaid_diagrams.get(&range.start)
-@@ -2780,7 +3004,7 @@
+@@ -2780,7 +3070,7 @@
                              }
  
                              match (&self.code_block_renderer, is_indented) {
@@ -839,7 +954,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                                      // This is a parent container that we can position the copy button inside.
                                      let parent_container =
                                          div().group("code_block").relative().w_full();
-@@ -2836,7 +3060,40 @@
+@@ -2836,7 +3126,40 @@
                                      builder.push_code_block(language);
                                      builder.push_div(code_block, range, markdown_end);
                                  }
@@ -881,7 +996,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                              }
                          }
                          MarkdownTag::HtmlBlock => {
-@@ -2849,16 +3106,29 @@
+@@ -2849,16 +3172,29 @@
                          MarkdownTag::List(bullet_index) => {
                              builder.push_list(*bullet_index);
                              let is_top_level = builder.list_stack.len() == 1;
@@ -919,7 +1034,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                                  task_list_marker_for_item(&parsed_markdown.events, index)
                              {
                                  let source = &parsed_markdown.source()[range.clone()];
-@@ -2894,20 +3164,26 @@
+@@ -2894,20 +3230,26 @@
                              font_style: Some(FontStyle::Italic),
                              ..Default::default()
                          }),
@@ -960,7 +1075,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                          MarkdownTag::Link { dest_url, .. } => {
                              if builder.code_block_stack.is_empty() {
                                  builder.link_depth += 1;
-@@ -2970,22 +3246,26 @@
+@@ -2970,22 +3312,26 @@
  
                              let column_count = alignments.len();
                              builder.push_div(div().flex(), range, markdown_end);
@@ -1000,7 +1115,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                                      .restrict_scroll_to_axis()
                                      .custom_scrollbars(
                                          Scrollbars::new(ScrollAxes::Horizontal)
-@@ -3000,10 +3280,14 @@
+@@ -3000,10 +3346,14 @@
                          }
                          MarkdownTag::TableHead => {
                              builder.table.start_head();
@@ -1019,7 +1134,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                          }
                          MarkdownTag::TableRow => {
                              builder.table.start_row();
-@@ -3038,6 +3322,17 @@
+@@ -3038,6 +3388,17 @@
                                  Some(Alignment::Right) => cell_div.items_end(),
                                  _ => cell_div,
                              };
@@ -1037,7 +1152,24 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  
                              builder.push_text_style(TextStyleRefinement {
                                  text_align: Some(text_align),
-@@ -3110,6 +3405,9 @@
+@@ -3058,6 +3419,16 @@
+                         }
+                         _ => log::debug!("unsupported markdown tag {:?}", tag),
+                     }
++                    if matches!(tag, MarkdownTag::Paragraph | MarkdownTag::Heading { .. } | MarkdownTag::Item | MarkdownTag::TableCell)
++                        && parsed_markdown.events[index + 1..].iter()
++                            .take_while(|(child, _)| child.start < range.end)
++                            .any(|(_, event)| matches!(event, MarkdownEvent::Math { .. }))
++                    {
++                        builder.modify_current_div(|el| el.flex().flex_row().flex_wrap().items_center().min_w_0());
++                        let entry = builder.div_stack.last_mut().unwrap();
++                        entry.line_break_mode = LineBreakMode::FlexWrap;
++                        entry.math_flow = true;
++                    }
+                 }
+                 MarkdownEvent::End(tag) => match tag {
+                     MarkdownTagEnd::Image => {
+@@ -3110,6 +3481,9 @@
  
                                  let button_row = h_flex()
                                      .gap_0p5()
@@ -1047,7 +1179,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                                      .absolute()
                                      .bg(cx.theme().colors().editor_background)
                                      .when_else(
-@@ -3149,6 +3447,18 @@
+@@ -3149,6 +3523,18 @@
                              });
                          }
  
@@ -1066,9 +1198,19 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                          // Pop the parent container.
                          builder.pop_div();
                      }
-@@ -3196,7 +3506,11 @@
+@@ -3195,8 +3581,21 @@
+                     MarkdownTagEnd::MetadataBlock(_) => {}
                      _ => log::debug!("unsupported markdown tag end: {:?}", tag),
                  },
++                MarkdownEvent::Math { latex, display } => {
++                    if let Some(Some(formula)) = parsed_markdown.math_formulas.get(&(latex.clone(), *display)) {
++                        self.push_markdown_math(&mut builder, formula.clone(),
++                            parsed_markdown.source[range.clone()].to_owned().into(),
++                            range.clone(), *display, window);
++                    } else {
++                        builder.push_text(&parsed_markdown.source[range.clone()], range.clone());
++                    }
++                }
                  MarkdownEvent::Text => {
 -                    builder.push_text(&parsed_markdown.source[range.clone()], range.clone());
 +                    builder.push_text_with_scales(
@@ -1079,7 +1221,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                  }
                  MarkdownEvent::SubstitutedText(text) => {
                      builder.push_text(text, range.clone());
-@@ -3251,6 +3565,11 @@
+@@ -3251,6 +3650,11 @@
                      }
                      builder.push_text(&parsed_markdown.source[range.clone()], range.clone());
                  }
@@ -1091,7 +1233,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                  MarkdownEvent::Rule => {
                      builder.push_div(
                          div()
-@@ -3314,7 +3633,21 @@
+@@ -3314,7 +3718,21 @@
          let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
          rendered_markdown.element.prepaint(window, cx);
          self.autoscroll(&rendered_markdown.text, window, cx);
@@ -1114,7 +1256,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
      }
  
      fn paint(
-@@ -3323,7 +3656,7 @@
+@@ -3323,7 +3741,7 @@
          _inspector_id: Option<&gpui::InspectorElementId>,
          _bounds: Bounds<Pixels>,
          rendered_markdown: &mut Self::RequestLayoutState,
@@ -1123,7 +1265,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
          window: &mut Window,
          cx: &mut App,
      ) {
-@@ -3333,10 +3666,13 @@
+@@ -3333,10 +3751,13 @@
          window.on_action(std::any::TypeId::of::<crate::Copy>(), {
              let entity = self.markdown.clone();
              let text = rendered_markdown.text.clone();
@@ -1138,7 +1280,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                  }
              }
          });
-@@ -3351,6 +3687,9 @@
+@@ -3351,6 +3772,9 @@
  
          self.paint_mouse_listeners(hitbox, &rendered_markdown.text, window, cx);
          rendered_markdown.element.paint(window, cx);
@@ -1148,7 +1290,11 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
      }
  }
  
-@@ -3663,6 +4002,7 @@
+@@ -3660,9 +4084,11 @@
+ struct MarkdownElementBuilder {
+     div_stack: Vec<DivStackEntry>,
+     rendered_lines: Vec<Rc<RenderedLine>>,
++    rendered_math: Vec<RenderedMath>,
      pending_line: PendingLine,
      rendered_links: Vec<RenderedLink>,
      rendered_image_links: Vec<RenderedImageLink>,
@@ -1156,7 +1302,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
      rendered_footnote_refs: Vec<RenderedFootnoteRef>,
      current_source_index: usize,
      html_comment: bool,
-@@ -3676,6 +4016,8 @@
+@@ -3676,6 +4102,8 @@
      table: TableState,
      syntax_theme: Arc<SyntaxTheme>,
      highlights: MarkdownHighlights,
@@ -1165,7 +1311,23 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  }
  
  struct MarkdownHighlights {
-@@ -3760,8 +4102,15 @@
+@@ -3735,6 +4163,7 @@
+ struct DivStackEntry {
+     div: AnyDiv,
+     line_break_mode: LineBreakMode,
++    math_flow: bool,
+ }
+ 
+ #[derive(Clone, Copy, Eq, PartialEq)]
+@@ -3748,6 +4177,7 @@
+         Self {
+             div: div.into(),
+             line_break_mode: LineBreakMode::TextLayout,
++            math_flow: false,
+         }
+     }
+ }
+@@ -3760,8 +4190,15 @@
      /// Rendered (not source) indices, so chips hug the glyphs and ignore
      /// unrendered characters like the surrounding backticks
      code_chips: Vec<(Range<usize>, Hsla)>,
@@ -1181,7 +1343,11 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  struct ListStackEntry {
      bullet_index: Option<u64>,
  }
-@@ -3784,6 +4133,7 @@
+@@ -3781,9 +4218,11 @@
+                 DivStackEntry::new(base_div.debug_selector(|| "inner".into()))
+             }],
+             rendered_lines: Vec::new(),
++            rendered_math: Vec::new(),
              pending_line: PendingLine::default(),
              rendered_links: Vec::new(),
              rendered_image_links: Vec::new(),
@@ -1189,7 +1355,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
              rendered_footnote_refs: Vec::new(),
              current_source_index: 0,
              html_comment: false,
-@@ -3797,6 +4147,7 @@
+@@ -3797,6 +4236,7 @@
              table: TableState::default(),
              syntax_theme,
              highlights,
@@ -1197,7 +1363,18 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
          }
      }
  
-@@ -4005,6 +4356,10 @@
+@@ -3892,7 +4332,9 @@
+     fn push_soft_break(&mut self, source_range: Range<usize>) {
+         // A soft break right after an item in flex wrap container would otherwise
+         // render as a stray leading space before the next wrapped item.
+-        if self.uses_flex_line_breaks() && self.pending_line.text.is_empty() {
++        if self.uses_flex_line_breaks()
++            && !self.div_stack.last().is_some_and(|entry| entry.math_flow)
++            && self.pending_line.text.is_empty() {
+             return;
+         }
+         self.push_text(" ", source_range);
+@@ -4005,6 +4447,10 @@
          });
      }
  
@@ -1208,7 +1385,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
      fn push_footnote_ref(&mut self, label: SharedString, source_range: Range<usize>) {
          self.rendered_footnote_refs.push(RenderedFootnoteRef {
              source_range,
-@@ -4013,8 +4368,18 @@
+@@ -4013,8 +4459,38 @@
      }
  
      fn push_text(&mut self, text: &str, source_range: Range<usize>) {
@@ -1221,6 +1398,26 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
 +        source_range: Range<usize>,
 +        scales: &[MarkdownGlyphScale],
 +    ) {
++        if self.div_stack.last().is_some_and(|entry| entry.math_flow) && text.len() == source_range.len() {
++            // GPUI text has no inline replaced elements. Word-boundary fragments let
++            // native flex wrapping place formulas among prose, including CJK words.
++            use unicode_segmentation::UnicodeSegmentation;
++            for (offset, fragment) in text.split_word_bound_indices() {
++                let start = source_range.start + offset;
++                self.push_text_fragment(fragment, start..start + fragment.len(), scales);
++                self.flush_text();
++            }
++        } else {
++            self.push_text_fragment(text, source_range, scales);
++        }
++    }
++
++    fn push_text_fragment(
++        &mut self,
++        text: &str,
++        source_range: Range<usize>,
++        scales: &[MarkdownGlyphScale],
++    ) {
 +        let rendered_start = self.pending_line.text.len();
          self.pending_line.source_mappings.push(SourceMapping {
 -            rendered_index: self.pending_line.text.len(),
@@ -1228,7 +1425,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
              source_index: source_range.start,
          });
          self.pending_line.text.push_str(text);
-@@ -4058,11 +4423,85 @@
+@@ -4058,11 +4534,85 @@
                      .runs
                      .push(text_style.to_run(text.len() - offset));
              }
@@ -1314,7 +1511,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
      fn trim_trailing_newline(&mut self) {
          if self.pending_line.text.ends_with('\n') {
              self.pending_line
-@@ -4116,7 +4555,9 @@
+@@ -4116,7 +4666,9 @@
              checkbox.visualization_only(true).into_any_element()
          };
  
@@ -1325,7 +1522,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
          checkbox_container = match self.text_style().text_align {
              TextAlign::Left => checkbox_container.justify_start(),
              TextAlign::Center => checkbox_container.justify_center(),
-@@ -4185,7 +4626,10 @@
+@@ -4185,7 +4737,10 @@
              highlights,
              code_chips: line.code_chips.into_iter().collect(),
          });
@@ -1337,7 +1534,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
              self.rendered_lines.push(rendered_line);
              self.append_child(text.into_any());
          } else {
-@@ -4194,6 +4638,7 @@
+@@ -4194,6 +4749,7 @@
                  HighlightedLine {
                      text: text.into_any(),
                      line: rendered_line,
@@ -1345,15 +1542,18 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                  }
                  .into_any_element(),
              );
-@@ -4209,6 +4654,7 @@
+@@ -4207,8 +4763,10 @@
+             element: self.div_stack.pop().unwrap().div.into_any_element(),
+             text: RenderedText {
                  lines: self.rendered_lines.into(),
++                math: self.rendered_math.into(),
                  links: self.rendered_links.into(),
                  image_links: self.rendered_image_links.into(),
 +                image_bounds: self.rendered_image_bounds.into(),
                  footnote_refs: self.rendered_footnote_refs.into(),
              },
          }
-@@ -4221,6 +4667,7 @@
+@@ -4221,6 +4779,7 @@
  struct HighlightedLine {
      text: AnyElement,
      line: Rc<RenderedLine>,
@@ -1361,7 +1561,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  }
  
  impl Element for HighlightedLine {
-@@ -4269,6 +4716,7 @@
+@@ -4269,6 +4828,7 @@
      ) {
          self.line.paint_code_chips(window);
          self.text.paint(window, cx);
@@ -1369,7 +1569,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
          self.line.paint_highlights(window);
      }
  }
-@@ -4294,6 +4742,45 @@
+@@ -4294,6 +4854,45 @@
  }
  
  impl RenderedLine {
@@ -1415,15 +1615,18 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
      /// Painted before the glyphs so the text renders on top of the chips
      fn paint_code_chips(&self, window: &mut Window) {
          const CHIP_CORNER_RADIUS: Pixels = px(4.);
-@@ -4664,6 +5151,7 @@
+@@ -4662,8 +5261,10 @@
+ #[derive(Clone)]
+ struct RenderedText {
      lines: Rc<[Rc<RenderedLine>]>,
++    math: Rc<[RenderedMath]>,
      links: Rc<[RenderedLink]>,
      image_links: Rc<[RenderedImageLink]>,
 +    image_bounds: Rc<[RenderedImageBounds]>,
      footnote_refs: Rc<[RenderedFootnoteRef]>,
  }
  
-@@ -4688,6 +5176,11 @@
+@@ -4688,6 +5289,17 @@
      destination_url: SharedString,
  }
  
@@ -1432,48 +1635,149 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
 +    bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
 +}
 +
++struct RenderedMath {
++    source_range: Range<usize>,
++    source: SharedString,
++    bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
++}
++
  #[derive(Debug, Clone, Eq, PartialEq)]
  struct RenderedFootnoteRef {
      source_range: Range<usize>,
-@@ -4828,6 +5321,37 @@
+@@ -4720,6 +5332,27 @@
+     }
+ 
+     fn source_index_for_position(&self, position: Point<Pixels>) -> Result<usize, usize> {
++        let mut closest_on_row: Option<(Pixels, usize)> = None;
++        let mut consider_edge = |bounds: Bounds<Pixels>, start, end| {
++            if bounds.top() <= position.y && position.y <= bounds.bottom() {
++                let (distance, index) = if position.x < bounds.left() {
++                    (bounds.left() - position.x, start)
++                } else {
++                    (position.x - bounds.right(), end)
++                };
++                if closest_on_row.is_none_or(|(previous, _)| distance < previous) {
++                    closest_on_row = Some((distance, index));
++                }
++            }
++        };
++        for formula in self.math.iter() {
++            if let Some(bounds) = formula.bounds.get() {
++                if bounds.contains(&position) {
++                    return Ok(if position.x < bounds.center().x { formula.source_range.start } else { formula.source_range.end });
++                }
++                consider_edge(bounds, formula.source_range.start, formula.source_range.end);
++            }
++        }
+         let mut lines = self.lines.iter().peekable();
+         let mut fallback_line: Option<&Rc<RenderedLine>> = None;
+ 
+@@ -4730,6 +5363,7 @@
+             if line_bounds.contains(&position) {
+                 return line.source_index_for_position(position);
+             }
++            consider_edge(line_bounds, line.source_mappings.first().unwrap().source_index, line.source_end);
+ 
+             // Track fallback for Y-coordinate based matching
+             if position.y <= line_bounds.bottom() && fallback_line.is_none() {
+@@ -4746,6 +5380,9 @@
+             }
+         }
+ 
++        if let Some((_, index)) = closest_on_row {
++            return Err(index);
++        }
+         // Fall back to Y-coordinate matched line
+         if let Some(line) = fallback_line {
+             return line.source_index_for_position(position);
+@@ -4755,6 +5392,12 @@
+     }
+ 
+     fn position_for_source_index(&self, source_index: usize) -> Option<(Point<Pixels>, Pixels)> {
++        for formula in self.math.iter() {
++            if formula.source_range.start <= source_index && source_index <= formula.source_range.end {
++                let bounds = formula.bounds.get()?;
++                return Some((point(bounds.right(), bounds.top()), bounds.size.height));
++            }
++        }
+         for line in self.lines.iter() {
+             if source_index > line.source_end {
+                 continue;
+@@ -4770,6 +5413,9 @@
+     }
+ 
+     fn surrounding_word_range(&self, source_index: usize) -> Range<usize> {
++        if let Some(formula) = self.math.iter().find(|formula| formula.source_range.start <= source_index && source_index <= formula.source_range.end) {
++            return formula.source_range.clone();
++        }
+         for line in self.lines.iter() {
+             if source_index > line.source_end {
+                 continue;
+@@ -4817,6 +5463,9 @@
+     }
+ 
+     fn surrounding_line_range(&self, source_index: usize) -> Range<usize> {
++        if let Some(formula) = self.math.iter().find(|formula| formula.source_range.start <= source_index && source_index <= formula.source_range.end) {
++            return formula.source_range.clone();
++        }
+         for line in self.lines.iter() {
+             if source_index > line.source_end {
+                 continue;
+@@ -4828,9 +5477,9 @@
          source_index..source_index
      }
  
+-    fn text_for_range(&self, range: Range<usize>) -> String {
+-        let mut accumulator = String::new();
+-
 +    /// Buddy patch: the pieces [`Self::text_for_range`] joins, with the source range of each
 +    fn lines_for_range(&self, range: Range<usize>) -> Vec<(String, Range<usize>)> {
 +        let mut out = Vec::new();
-+        for line in self.lines.iter() {
-+            if range.start > line.source_end {
-+                continue;
-+            }
-+            let line_source_start = line.source_mappings.first().unwrap().source_index;
-+            if range.end < line_source_start {
-+                break;
-+            }
-+            let text = line.layout.text();
-+            let start = if range.start < line_source_start {
-+                0
-+            } else {
-+                line.rendered_index_for_source_index(range.start)
-+            };
-+            let end = if range.end > line.source_end {
-+                line.rendered_index_for_source_index(line.source_end)
-+            } else {
-+                line.rendered_index_for_source_index(range.end)
-+            }
-+            .min(text.len());
+         for line in self.lines.iter() {
+             if range.start > line.source_end {
+                 continue;
+@@ -4839,9 +5488,7 @@
+             if range.end < line_source_start {
+                 break;
+             }
+-
+             let text = line.layout.text();
+-
+             let start = if range.start < line_source_start {
+                 0
+             } else {
+@@ -4853,15 +5500,24 @@
+                 line.rendered_index_for_source_index(range.end)
+             }
+             .min(text.len());
+-
+-            accumulator.push_str(&text[start..end]);
+-            accumulator.push('\n');
 +            out.push((
 +                text[start..end].to_string(),
 +                line_source_start.max(range.start)..line.source_end.min(range.end),
 +            ));
+         }
+-        // Remove trailing newline
+-        accumulator.pop();
+-        accumulator
++        for formula in self.math.iter() {
++            if range.start < formula.source_range.end && range.end > formula.source_range.start {
++                out.push((formula.source.to_string(), formula.source_range.clone()));
++            }
 +        }
++        out.sort_by_key(|(_, range)| range.start);
 +        out
+     }
+ 
++    fn text_for_range(&self, range: Range<usize>) -> String {
++        self.lines_for_range(range).into_iter().map(|(text, _)| text).collect::<Vec<_>>().join("\n")
 +    }
 +
-     fn text_for_range(&self, range: Range<usize>) -> String {
-         let mut accumulator = String::new();
- 
-@@ -4877,6 +5401,15 @@
+     fn link_for_source_index(&self, source_index: usize) -> Option<&RenderedLink> {
+         self.links
+             .iter()
+@@ -4877,6 +5533,15 @@
          })
      }
  
@@ -1489,7 +1793,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
      fn footnote_ref_for_source_index(&self, source_index: usize) -> Option<&RenderedFootnoteRef> {
          self.footnote_refs
              .iter()
-@@ -4949,7 +5482,7 @@
+@@ -4949,7 +5614,7 @@
  
      impl Element for CapturingMarkdownElement {
          type RequestLayoutState = RenderedMarkdown;
@@ -1498,7 +1802,7 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
  
          fn id(&self) -> Option<ElementId> {
              self.markdown_element.id()
-@@ -7294,9 +7827,9 @@
+@@ -7294,9 +7959,9 @@
                          size(
                              px(bounds.size.width.as_f32() / scale_factor),
                              px(bounds.size.height.as_f32() / scale_factor),
@@ -1511,9 +1815,193 @@ diff --color -ruN md-orig/markdown.rs md-ours/markdown.rs
                  let quads = window
                      .painted_quads()
                      .into_iter()
-diff --color -ruN md-orig/mermaid.rs md-ours/mermaid.rs
---- md-orig/mermaid.rs	2026-10-06 23:05:43
-+++ md-ours/mermaid.rs	2026-10-06 23:05:43
+diff -ruN md-orig/math.rs md-ours/math.rs
+--- md-orig/math.rs	1970-01-01 08:00:00
++++ md-ours/math.rs	2026-11-12 10:00:25
+@@ -0,0 +1,180 @@
++//! Native math typesetting. All parsing/layout runs on the Markdown background task;
++//! the resulting font-outline SVG is independent of theme, font size and display scale.
++
++use latex_rust::{Dim, MathFont, MathStyle, SvgOptions, layout, parse, render_svg};
++use pulldown_cmark::{Event, Options, Parser, Tag};
++use std::{
++    borrow::Cow,
++    hash::{Hash, Hasher},
++    sync::LazyLock,
++};
++
++/// A typeset formula, measured in ems, with bundled STIX Two Math outlines.
++#[derive(Debug)]
++pub struct MathFormula {
++    svg: String,
++    width: f32,
++    height: f32,
++    pub(crate) cache_key: gpui::SharedString,
++}
++
++impl MathFormula {
++    /// Returns `None` for incomplete, unsupported, or excessively large input.
++    /// Callers must preserve the original source when typesetting fails.
++    pub fn parse(source: &str, display: bool) -> Option<Self> {
++        // Bound recursive parser/layout work on model-generated input.
++        if source.len() > 4096
++            || source.bytes().filter(|&b| b == b'\\').count() > 128
++            || source.trim().is_empty()
++        {
++            return None;
++        }
++        let mut depth = 0usize;
++        for ch in source.chars() {
++            match ch {
++                '{' => {
++                    depth += 1;
++                    if depth > 32 {
++                        return None;
++                    }
++                }
++                '}' => depth = depth.saturating_sub(1),
++                _ => {}
++            }
++        }
++        static FONT: LazyLock<Option<MathFont>> = LazyLock::new(|| MathFont::stix_two_math().ok());
++        let font = FONT.as_ref()?;
++        let ast = parse(source).ok()?;
++        let tree = layout(
++            &ast,
++            font,
++            if display {
++                MathStyle::Display
++            } else {
++                MathStyle::Text
++            },
++        )
++        .ok()?;
++        let width = f32::from_bits(tree.width.to_ieee32_bits());
++        let height = f32::from_bits((&tree.height + &tree.depth).to_ieee32_bits());
++        if !width.is_finite()
++            || !height.is_finite()
++            || width <= 0.
++            || height <= 0.
++            || width > 256.
++            || height > 64.
++        {
++            return None;
++        }
++        let options = SvgOptions {
++            font_size_pt: Dim::one(),
++            display,
++            ..SvgOptions::default()
++        };
++        let svg = render_svg(&tree, font, &options).ok()?;
++        let mut hasher = std::collections::hash_map::DefaultHasher::new();
++        svg.hash(&mut hasher);
++        let cache_key = format!("buddy-math-{}", hasher.finish()).into();
++        Some(Self {
++            svg,
++            width,
++            height,
++            cache_key,
++        })
++    }
++
++    pub fn svg(&self) -> &str {
++        &self.svg
++    }
++    pub fn width(&self) -> f32 {
++        self.width
++    }
++    pub fn height(&self) -> f32 {
++        self.height
++    }
++}
++
++/// Prepare TeX delimiters without changing byte offsets. Dollar signs in inline
++/// code are masked so a preceding price cannot consume the code's opening `$`.
++/// The Markdown renderer always reads code from the original source.
++pub fn normalize_delimiters(source: &str) -> Cow<'_, str> {
++    if !source.contains('$') && !source.contains(r"\(") && !source.contains(r"\[") {
++        return Cow::Borrowed(source);
++    }
++    let mut out = None;
++    let mut protected: Vec<_> = Parser::new_ext(source, Options::empty())
++        .into_offset_iter()
++        .filter_map(|(event, range)| {
++            if matches!(event, Event::Code(_)) && source[range.clone()].contains('$') {
++                let bytes = out.get_or_insert_with(|| source.as_bytes().to_vec());
++                for byte in &mut bytes[range.clone()] {
++                    if *byte == b'$' {
++                        *byte = b' ';
++                    }
++                }
++            }
++            matches!(
++                event,
++                Event::Code(_)
++                    | Event::Html(_)
++                    | Event::InlineHtml(_)
++                    | Event::Start(Tag::CodeBlock(_) | Tag::HtmlBlock)
++            )
++            .then_some(range)
++        })
++        .collect();
++    protected.extend(
++        Parser::new_ext(source, Options::ENABLE_MATH)
++            .into_offset_iter()
++            .filter_map(|(event, range)| {
++                matches!(event, Event::InlineMath(_) | Event::DisplayMath(_)).then_some(range)
++            }),
++    );
++    let bytes = source.as_bytes();
++    let escaped = |at: usize| {
++        bytes[..at]
++            .iter()
++            .rev()
++            .take_while(|&&b| b == b'\\')
++            .count()
++            % 2
++            == 1
++    };
++    let mut cursor = 0;
++    while cursor + 1 < bytes.len() {
++        if bytes[cursor] != b'\\'
++            || escaped(cursor)
++            || !matches!(bytes[cursor + 1], b'(' | b'[')
++            || protected.iter().any(|range| range.contains(&cursor))
++        {
++            cursor += 1;
++            continue;
++        }
++        let display = bytes[cursor + 1] == b'[';
++        let close = if display { r"\]" } else { r"\)" };
++        let end = source[cursor + 2..]
++            .match_indices(close)
++            .map(|(at, _)| cursor + 2 + at)
++            .find(|&at| !escaped(at));
++        let Some(end) = end else {
++            cursor += 2;
++            continue;
++        };
++        if protected
++            .iter()
++            .any(|range| range.start < end + 2 && range.end > cursor)
++            || (!display && source[cursor..end].contains("\n\n"))
++        {
++            cursor += 2;
++            continue;
++        }
++        let out = out.get_or_insert_with(|| bytes.to_vec());
++        // A harmless TeX group keeps inline delimiters two bytes wide without
++        // introducing whitespace (which would make `$ ... $` ordinary prose).
++        out[cursor..cursor + 2].copy_from_slice(if display { b"$$" } else { b"${" });
++        out[end..end + 2].copy_from_slice(if display { b"$$" } else { b"}$" });
++        cursor = end + 2;
++    }
++    out.map(|bytes| Cow::Owned(String::from_utf8(bytes).expect("only ASCII delimiters replaced")))
++        .unwrap_or(Cow::Borrowed(source))
++}
+diff -ruN md-orig/mermaid.rs md-ours/mermaid.rs
+--- md-orig/mermaid.rs	2026-09-10 18:39:31
++++ md-ours/mermaid.rs	2026-10-06 17:40:47
 @@ -1,1836 +1,100 @@
 -use collections::HashMap;
 -use gpui::{
@@ -3413,9 +3901,91 @@ diff --color -ruN md-orig/mermaid.rs md-ours/mermaid.rs
 +    // 且所有入口都先检查该标志。
 +    unreachable!("mermaid 已被裁掉，不应渲染 mermaid 图表")
  }
-diff --color -ruN md-orig/theme_settings_shim.rs md-ours/theme_settings_shim.rs
+diff -ruN md-orig/parser.rs md-ours/parser.rs
+--- md-orig/parser.rs	2026-09-10 18:39:31
++++ md-ours/parser.rs	2026-11-12 09:53:48
+@@ -20,7 +20,8 @@
+     .union(Options::ENABLE_OLD_FOOTNOTES)
+     .union(Options::ENABLE_GFM)
+     .union(Options::ENABLE_SUPERSCRIPT)
+-    .union(Options::ENABLE_SUBSCRIPT);
++    .union(Options::ENABLE_SUBSCRIPT)
++    .union(Options::ENABLE_MATH);
+ 
+ #[derive(Default)]
+ struct ParseState {
+@@ -80,7 +81,7 @@
+                     }
+                 }
+             }
+-            MarkdownEvent::Rule => {
++            MarkdownEvent::Rule | MarkdownEvent::Math { display: true, .. } => {
+                 if self.depth == 0 && !range.is_empty() {
+                     self.root_block_starts.push(range.start);
+                     let root_block_index = self.root_block_starts.len() - 1;
+@@ -255,7 +256,8 @@
+     } else {
+         PARSE_OPTIONS
+     };
+-    let parser = Parser::new_ext(text, parse_options);
++    let normalized = crate::math::normalize_delimiters(text);
++    let parser = Parser::new_ext(&normalized, parse_options);
+     let mut link_definition_spans = parser
+         .reference_definitions()
+         .iter()
+@@ -644,7 +646,9 @@
+                     content_range.start + range.start..content_range.end + range.start;
+                 let source = &text[content_range.clone()];
+                 let event = if within_table && source.contains(r"\|") {
+-                    MarkdownEvent::SubstitutedCode(parsed.to_string())
++                    MarkdownEvent::SubstitutedCode(if normalized[content_range.clone()] != *source {
++                        source.replace(r"\|", "|")
++                    } else { parsed.to_string() })
+                 } else {
+                     MarkdownEvent::Code
+                 };
+@@ -668,7 +672,18 @@
+             pulldown_cmark::Event::TaskListMarker(checked) => {
+                 state.push_event(range, MarkdownEvent::TaskListMarker(checked))
+             }
+-            pulldown_cmark::Event::InlineMath(_) | pulldown_cmark::Event::DisplayMath(_) => {}
++            pulldown_cmark::Event::InlineMath(latex) => {
++                state.push_event(range, MarkdownEvent::Math { latex: latex.trim().to_owned().into(), display: false });
++            }
++            pulldown_cmark::Event::DisplayMath(latex) => {
++                // pulldown-cmark also emits an unclosed display block while streaming.
++                let raw = &normalized[range.clone()];
++                if raw.trim_end().ends_with("$$") && raw.trim().len() >= 4 {
++                    state.push_event(range, MarkdownEvent::Math { latex: latex.trim().to_owned().into(), display: true });
++                } else {
++                    state.push_event(range, MarkdownEvent::Text);
++                }
++            }
+         }
+     }
+ 
+@@ -775,6 +790,8 @@
+     Code,
+     /// An inline code node that differs from the markdown source due to escape decoding.
+     SubstitutedCode(String),
++    /// LaTeX source without delimiters; the event range retains both delimiters.
++    Math { latex: SharedString, display: bool },
+     /// An HTML node.
+     Html,
+     /// An inline HTML node.
+@@ -982,8 +999,7 @@
+     use super::*;
+ 
+     const CONDITIONAL_OPTIONS: Options = Options::ENABLE_YAML_STYLE_METADATA_BLOCKS;
+-    const UNWANTED_OPTIONS: Options = Options::ENABLE_MATH
+-        .union(Options::ENABLE_DEFINITION_LIST)
++    const UNWANTED_OPTIONS: Options = Options::ENABLE_DEFINITION_LIST
+         .union(Options::ENABLE_WIKILINKS);
+ 
+     #[test]
+diff -ruN md-orig/theme_settings_shim.rs md-ours/theme_settings_shim.rs
 --- md-orig/theme_settings_shim.rs	1970-01-01 08:00:00
-+++ md-ours/theme_settings_shim.rs	2026-10-06 23:05:43
++++ md-ours/theme_settings_shim.rs	2026-10-06 21:08:08
 @@ -0,0 +1,147 @@
 +//! Buddy 修改：`ThemeSettings` **shim**
 +//!

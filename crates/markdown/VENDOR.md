@@ -19,10 +19,11 @@
 | `markdown.rs` | `MarkdownDecorations::veil`（`MarkdownVeil`：按源字节位置给非代码文本逐字混合起始色 / 不透明度，`push_text` 中拆分文本运行）与 `overlay`（`MarkdownOverlay`：在某源位置的光标处布局一个元素，prepaint 中布局、paint 中绘制；`PrepaintState` 改为 `(Hitbox, Option<AnyElement>)`，测试包装元素同步） | 流式渐显（v1 `.streaming-char-settle`）与行内星标（v1 `.streaming-next-star`）；只改颜色、星标不参与布局，不改变排版 |
 | `markdown.rs` | 在链接上按下也开始选区（`on_source_click` 仍只对非链接位置调用）；松开时仅当选区为空（未拖动）才打开链接 | 上游按在链接上不开始选区，整段是链接的文字（如网络搜索结果标题）无法拖选复制；单击打开链接的行为不变 |
 | `markdown.rs` | 新增 `MarkdownDecorations::glyph_scales`。正文先按最终字号排版，再在排好的字格中心按比例绘制新字，复用原生字形和折行坐标。 | 实现对话逐字放大的入场效果，保留选区、链接和代码的排版。 |
+| `parser.rs` / `markdown.rs` / `math.rs` | 启用数学事件；识别 `$…$`、`$$…$$`、`\(…\)`、`\[…\]`，以 `latex-rust` 和内嵌 STIX Two Math 字体在后台排版为 SVG，按文档复用结果。GPUI 按正文颜色和字号绘制，长公式横向滚动，行内公式参与折行；选区复制保留 LaTeX。代码、未闭合及不支持的公式保留原文。 | 修复模型回答中公式源码直接显示；不依赖 WebView、JavaScript 或外部排版程序。 |
 | `theme_settings_shim.rs` | **新增**（Buddy 编写） | 提供与 `theme_settings::ThemeSettings` 同名同 API 的替代；字体 / 字号由 buddy-ui 按 Buddy 令牌传入 |
 | `language_stub.rs` | **新增**（Buddy 编写） | 替代 `language`：经 `buddy-syntax` 高亮（Python / Shell / SQL 用 tree-sitter 语法，其余带标签的代码块用通用词法高亮，纯文本 / 日志类标签不着色）；类别归并为 9 类（`SYNTAX_CATEGORIES`） |
 | `mermaid.rs` | **整体替换为 stub**（原 1836 行 → 100 行） | 原实现依赖 node / wasm；Buddy 无 mermaid 功能 |
-| `parser.rs` / `selection.rs` / `path_range.rs` / `html.rs` / `html/*` | **未改动**（与上游逐字节一致） | — |
+| `selection.rs` / `path_range.rs` / `html.rs` / `html/*` | 其他修改见 patch | — |
 
 ## 依赖层面的修改（`Cargo.toml`，不在 `src/` patch 内）
 
@@ -31,6 +32,7 @@
 | `language` / `settings` / `theme_settings` / `mermaid_render` | 移除 | 由 `src/` 内 shim / stub 替代（见上表） |
 | `util`（zed） | 改为本地 [`util-shim/`](./util-shim)（包名 `buddy-md-util`，**lib 名仍为 `util`**，Apache-2.0） | 源码中 `use util::…` 无需改动；zed `util` 只被本 crate 使用却拖入约 21 个包。替身重导出 `gpui_util`（zed `util` 本就从它重导出 `maybe!` / `ResultExt`），并逐字复制 `generate_heading_slug` |
 | — | 新增 `buddy-syntax` | 语法高亮 |
+| — | 新增 `latex-rust`、`unicode-segmentation` | 数学排版与行内公式两侧文本的字词边界；字体及颜色表声明随 `THIRD_PARTY_NOTICES.md` 分发 |
 
 ## 复核方法
 
@@ -51,3 +53,7 @@ mkdir /tmp/mdp && cp -R $Z/src /tmp/mdp/md-orig && cp -R <本目录>/src /tmp/md
 
 - **不改 vendored 原文**来消除 warning 或适配风格（`dead_code` 在 `Cargo.toml` `[lints]` 放行；上游单元测试 `test = false`）。
 - 上游单元测试依赖 zed 测试设施与真实 `language`，不编译；Buddy 的 markdown 测试写在 `crates/ui`。
+
+数学回归：`cargo test -p buddy-ui --lib markdown::`；原生预览：
+`cargo run -p buddy-ui --example markdown_math -- dark narrow`。
+macOS 离屏渲染可追加 `--snapshot=/tmp/buddy-math.png`，覆盖真实 GPUI 排版与 Metal 绘制。

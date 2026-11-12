@@ -20,7 +20,8 @@ pub const PARSE_OPTIONS: Options = Options::ENABLE_TABLES
     .union(Options::ENABLE_OLD_FOOTNOTES)
     .union(Options::ENABLE_GFM)
     .union(Options::ENABLE_SUPERSCRIPT)
-    .union(Options::ENABLE_SUBSCRIPT);
+    .union(Options::ENABLE_SUBSCRIPT)
+    .union(Options::ENABLE_MATH);
 
 #[derive(Default)]
 struct ParseState {
@@ -80,7 +81,7 @@ impl ParseState {
                     }
                 }
             }
-            MarkdownEvent::Rule => {
+            MarkdownEvent::Rule | MarkdownEvent::Math { display: true, .. } => {
                 if self.depth == 0 && !range.is_empty() {
                     self.root_block_starts.push(range.start);
                     let root_block_index = self.root_block_starts.len() - 1;
@@ -255,7 +256,8 @@ pub(crate) fn parse_markdown_with_options(
     } else {
         PARSE_OPTIONS
     };
-    let parser = Parser::new_ext(text, parse_options);
+    let normalized = crate::math::normalize_delimiters(text);
+    let parser = Parser::new_ext(&normalized, parse_options);
     let mut link_definition_spans = parser
         .reference_definitions()
         .iter()
@@ -644,7 +646,9 @@ pub(crate) fn parse_markdown_with_options(
                     content_range.start + range.start..content_range.end + range.start;
                 let source = &text[content_range.clone()];
                 let event = if within_table && source.contains(r"\|") {
-                    MarkdownEvent::SubstitutedCode(parsed.to_string())
+                    MarkdownEvent::SubstitutedCode(if normalized[content_range.clone()] != *source {
+                        source.replace(r"\|", "|")
+                    } else { parsed.to_string() })
                 } else {
                     MarkdownEvent::Code
                 };
@@ -668,7 +672,18 @@ pub(crate) fn parse_markdown_with_options(
             pulldown_cmark::Event::TaskListMarker(checked) => {
                 state.push_event(range, MarkdownEvent::TaskListMarker(checked))
             }
-            pulldown_cmark::Event::InlineMath(_) | pulldown_cmark::Event::DisplayMath(_) => {}
+            pulldown_cmark::Event::InlineMath(latex) => {
+                state.push_event(range, MarkdownEvent::Math { latex: latex.trim().to_owned().into(), display: false });
+            }
+            pulldown_cmark::Event::DisplayMath(latex) => {
+                // pulldown-cmark also emits an unclosed display block while streaming.
+                let raw = &normalized[range.clone()];
+                if raw.trim_end().ends_with("$$") && raw.trim().len() >= 4 {
+                    state.push_event(range, MarkdownEvent::Math { latex: latex.trim().to_owned().into(), display: true });
+                } else {
+                    state.push_event(range, MarkdownEvent::Text);
+                }
+            }
         }
     }
 
@@ -775,6 +790,8 @@ pub enum MarkdownEvent {
     Code,
     /// An inline code node that differs from the markdown source due to escape decoding.
     SubstitutedCode(String),
+    /// LaTeX source without delimiters; the event range retains both delimiters.
+    Math { latex: SharedString, display: bool },
     /// An HTML node.
     Html,
     /// An inline HTML node.
@@ -982,8 +999,7 @@ mod tests {
     use super::*;
 
     const CONDITIONAL_OPTIONS: Options = Options::ENABLE_YAML_STYLE_METADATA_BLOCKS;
-    const UNWANTED_OPTIONS: Options = Options::ENABLE_MATH
-        .union(Options::ENABLE_DEFINITION_LIST)
+    const UNWANTED_OPTIONS: Options = Options::ENABLE_DEFINITION_LIST
         .union(Options::ENABLE_WIKILINKS);
 
     #[test]

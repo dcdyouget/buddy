@@ -1,4 +1,5 @@
 pub mod html;
+pub mod math;
 mod mermaid;
 mod theme_settings_shim;
 
@@ -1359,6 +1360,7 @@ impl Markdown {
         let should_parse_metadata_blocks = self.options.render_metadata_blocks;
         let language_registry = self.language_registry.clone();
         let fallback = self.fallback_code_block_language.clone();
+        let previous_math = self.parsed_markdown.math_formulas.clone();
 
         let parsed = cx.background_spawn(async move {
             if should_parse_links_only {
@@ -1377,6 +1379,7 @@ impl Markdown {
                         link_definition_spans: Arc::default(),
                         fallback_code_block_language: None,
                         code_block_highlights: Arc::default(),
+                        math_formulas: HashMap::default(),
                     },
                     Default::default(),
                 );
@@ -1389,6 +1392,17 @@ impl Markdown {
                 should_parse_metadata_blocks,
             );
             let events = parsed.events;
+            let mut math_formulas = HashMap::default();
+            for (_, event) in &events {
+                if let MarkdownEvent::Math { latex, display } = event {
+                    let key = (latex.clone(), *display);
+                    math_formulas.entry(key.clone()).or_insert_with(|| {
+                        previous_math.get(&key).cloned().unwrap_or_else(|| {
+                            math::MathFormula::parse(latex, *display).map(Arc::new)
+                        })
+                    });
+                }
+            }
             let language_names = parsed.language_names;
             let paths = parsed.language_paths;
             let root_block_starts = parsed.root_block_starts;
@@ -1468,6 +1482,7 @@ impl Markdown {
                 link_definition_spans: Arc::from(link_definition_spans),
                 fallback_code_block_language,
                 code_block_highlights: Arc::default(),
+                math_formulas,
             };
             parsed.code_block_highlights = Arc::new(compute_code_block_highlights(&parsed));
             (parsed, images_by_source_offset)
@@ -1617,6 +1632,8 @@ pub struct ParsedMarkdown {
     pub(crate) link_definition_spans: Arc<[Range<usize>]>,
     pub(crate) fallback_code_block_language: Option<Arc<Language>>,
     pub(crate) code_block_highlights: Arc<CodeBlockHighlights>,
+    // Scoped to this document revision, including failures; streaming reuses completed formulas.
+    math_formulas: HashMap<(SharedString, bool), Option<Arc<math::MathFormula>>>,
 }
 
 pub(crate) type CodeBlockHighlights = HashMap<usize, ResolvedHighlights>;
@@ -1666,6 +1683,7 @@ impl ParsedMarkdown {
                 MarkdownEvent::Text
                 | MarkdownEvent::SubstitutedText(_)
                 | MarkdownEvent::Code
+                | MarkdownEvent::Math { .. }
                 | MarkdownEvent::SubstitutedCode(_) => {
                     let Some((link_range, cursor)) = active_link.as_mut() else {
                         continue;
@@ -2146,6 +2164,54 @@ impl MarkdownElement {
         };
 
         builder.push_image_child(image_element);
+    }
+
+    fn push_markdown_math(
+        &self,
+        builder: &mut MarkdownElementBuilder,
+        formula: Arc<math::MathFormula>,
+        source: SharedString,
+        range: Range<usize>,
+        display: bool,
+        window: &Window,
+    ) {
+        builder.flush_text();
+        let style = builder.text_style();
+        let font_size = style.font_size.to_pixels(window.rem_size());
+        let width = font_size * formula.width();
+        let height = font_size * formula.height();
+        let bounds_cell = Rc::new(Cell::new(None));
+        builder.rendered_math.push(RenderedMath {
+            source_range: range.clone(),
+            source: source.clone(),
+            bounds: bounds_cell.clone(),
+        });
+        let highlights = builder.highlights.highlights_for_line(range.clone());
+        // SVG paths contain font outlines, painted with the current semantic text color.
+        // Geometry is measured in ems and resolved again for every font-size change.
+        let svg_key = formula.cache_key.clone();
+        let element = canvas(
+            move |bounds, _, _| bounds_cell.set(Some(bounds)),
+            move |bounds, _, window, cx| {
+                window.paint_svg(bounds, svg_key.clone(), Some(formula.svg().as_bytes()),
+                    gpui::TransformationMatrix::default(), style.color, cx).log_err();
+                for (_, color) in &highlights {
+                    window.paint_quad(gpui::fill(bounds, *color));
+                }
+            },
+        ).w(width).h(height).flex_shrink_0();
+        let container = div().id(("markdown-math", range.start))
+            .debug_selector(|| "markdown-math".into())
+            .role(gpui::Role::Math).aria_label(source);
+        if display {
+            builder.append_child(container
+                .w_full().min_w_0().overflow_x_scroll().py(self.style.paragraph_spacing)
+                .child(element).into_any_element());
+        } else {
+            builder.append_child(container
+                .flex_shrink_0().min_w_0().max_w_full().overflow_x_scroll()
+                .py_0p5().child(element).into_any_element());
+        }
     }
 
     fn push_markdown_paragraph(
@@ -3353,6 +3419,16 @@ impl Element for MarkdownElement {
                         }
                         _ => log::debug!("unsupported markdown tag {:?}", tag),
                     }
+                    if matches!(tag, MarkdownTag::Paragraph | MarkdownTag::Heading { .. } | MarkdownTag::Item | MarkdownTag::TableCell)
+                        && parsed_markdown.events[index + 1..].iter()
+                            .take_while(|(child, _)| child.start < range.end)
+                            .any(|(_, event)| matches!(event, MarkdownEvent::Math { .. }))
+                    {
+                        builder.modify_current_div(|el| el.flex().flex_row().flex_wrap().items_center().min_w_0());
+                        let entry = builder.div_stack.last_mut().unwrap();
+                        entry.line_break_mode = LineBreakMode::FlexWrap;
+                        entry.math_flow = true;
+                    }
                 }
                 MarkdownEvent::End(tag) => match tag {
                     MarkdownTagEnd::Image => {
@@ -3505,6 +3581,15 @@ impl Element for MarkdownElement {
                     MarkdownTagEnd::MetadataBlock(_) => {}
                     _ => log::debug!("unsupported markdown tag end: {:?}", tag),
                 },
+                MarkdownEvent::Math { latex, display } => {
+                    if let Some(Some(formula)) = parsed_markdown.math_formulas.get(&(latex.clone(), *display)) {
+                        self.push_markdown_math(&mut builder, formula.clone(),
+                            parsed_markdown.source[range.clone()].to_owned().into(),
+                            range.clone(), *display, window);
+                    } else {
+                        builder.push_text(&parsed_markdown.source[range.clone()], range.clone());
+                    }
+                }
                 MarkdownEvent::Text => {
                     builder.push_text_with_scales(
                         &parsed_markdown.source[range.clone()],
@@ -3999,6 +4084,7 @@ struct MetadataCellStyle {
 struct MarkdownElementBuilder {
     div_stack: Vec<DivStackEntry>,
     rendered_lines: Vec<Rc<RenderedLine>>,
+    rendered_math: Vec<RenderedMath>,
     pending_line: PendingLine,
     rendered_links: Vec<RenderedLink>,
     rendered_image_links: Vec<RenderedImageLink>,
@@ -4077,6 +4163,7 @@ impl MarkdownHighlights {
 struct DivStackEntry {
     div: AnyDiv,
     line_break_mode: LineBreakMode,
+    math_flow: bool,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -4090,6 +4177,7 @@ impl DivStackEntry {
         Self {
             div: div.into(),
             line_break_mode: LineBreakMode::TextLayout,
+            math_flow: false,
         }
     }
 }
@@ -4130,6 +4218,7 @@ impl MarkdownElementBuilder {
                 DivStackEntry::new(base_div.debug_selector(|| "inner".into()))
             }],
             rendered_lines: Vec::new(),
+            rendered_math: Vec::new(),
             pending_line: PendingLine::default(),
             rendered_links: Vec::new(),
             rendered_image_links: Vec::new(),
@@ -4243,7 +4332,9 @@ impl MarkdownElementBuilder {
     fn push_soft_break(&mut self, source_range: Range<usize>) {
         // A soft break right after an item in flex wrap container would otherwise
         // render as a stray leading space before the next wrapped item.
-        if self.uses_flex_line_breaks() && self.pending_line.text.is_empty() {
+        if self.uses_flex_line_breaks()
+            && !self.div_stack.last().is_some_and(|entry| entry.math_flow)
+            && self.pending_line.text.is_empty() {
             return;
         }
         self.push_text(" ", source_range);
@@ -4372,6 +4463,26 @@ impl MarkdownElementBuilder {
     }
 
     fn push_text_with_scales(
+        &mut self,
+        text: &str,
+        source_range: Range<usize>,
+        scales: &[MarkdownGlyphScale],
+    ) {
+        if self.div_stack.last().is_some_and(|entry| entry.math_flow) && text.len() == source_range.len() {
+            // GPUI text has no inline replaced elements. Word-boundary fragments let
+            // native flex wrapping place formulas among prose, including CJK words.
+            use unicode_segmentation::UnicodeSegmentation;
+            for (offset, fragment) in text.split_word_bound_indices() {
+                let start = source_range.start + offset;
+                self.push_text_fragment(fragment, start..start + fragment.len(), scales);
+                self.flush_text();
+            }
+        } else {
+            self.push_text_fragment(text, source_range, scales);
+        }
+    }
+
+    fn push_text_fragment(
         &mut self,
         text: &str,
         source_range: Range<usize>,
@@ -4652,6 +4763,7 @@ impl MarkdownElementBuilder {
             element: self.div_stack.pop().unwrap().div.into_any_element(),
             text: RenderedText {
                 lines: self.rendered_lines.into(),
+                math: self.rendered_math.into(),
                 links: self.rendered_links.into(),
                 image_links: self.rendered_image_links.into(),
                 image_bounds: self.rendered_image_bounds.into(),
@@ -5149,6 +5261,7 @@ pub struct RenderedMarkdown {
 #[derive(Clone)]
 struct RenderedText {
     lines: Rc<[Rc<RenderedLine>]>,
+    math: Rc<[RenderedMath]>,
     links: Rc<[RenderedLink]>,
     image_links: Rc<[RenderedImageLink]>,
     image_bounds: Rc<[RenderedImageBounds]>,
@@ -5178,6 +5291,12 @@ struct RenderedImageLink {
 
 #[derive(Clone)]
 struct RenderedImageBounds {
+    bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+}
+
+struct RenderedMath {
+    source_range: Range<usize>,
+    source: SharedString,
     bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 
@@ -5213,6 +5332,27 @@ impl RenderedText {
     }
 
     fn source_index_for_position(&self, position: Point<Pixels>) -> Result<usize, usize> {
+        let mut closest_on_row: Option<(Pixels, usize)> = None;
+        let mut consider_edge = |bounds: Bounds<Pixels>, start, end| {
+            if bounds.top() <= position.y && position.y <= bounds.bottom() {
+                let (distance, index) = if position.x < bounds.left() {
+                    (bounds.left() - position.x, start)
+                } else {
+                    (position.x - bounds.right(), end)
+                };
+                if closest_on_row.is_none_or(|(previous, _)| distance < previous) {
+                    closest_on_row = Some((distance, index));
+                }
+            }
+        };
+        for formula in self.math.iter() {
+            if let Some(bounds) = formula.bounds.get() {
+                if bounds.contains(&position) {
+                    return Ok(if position.x < bounds.center().x { formula.source_range.start } else { formula.source_range.end });
+                }
+                consider_edge(bounds, formula.source_range.start, formula.source_range.end);
+            }
+        }
         let mut lines = self.lines.iter().peekable();
         let mut fallback_line: Option<&Rc<RenderedLine>> = None;
 
@@ -5223,6 +5363,7 @@ impl RenderedText {
             if line_bounds.contains(&position) {
                 return line.source_index_for_position(position);
             }
+            consider_edge(line_bounds, line.source_mappings.first().unwrap().source_index, line.source_end);
 
             // Track fallback for Y-coordinate based matching
             if position.y <= line_bounds.bottom() && fallback_line.is_none() {
@@ -5239,6 +5380,9 @@ impl RenderedText {
             }
         }
 
+        if let Some((_, index)) = closest_on_row {
+            return Err(index);
+        }
         // Fall back to Y-coordinate matched line
         if let Some(line) = fallback_line {
             return line.source_index_for_position(position);
@@ -5248,6 +5392,12 @@ impl RenderedText {
     }
 
     fn position_for_source_index(&self, source_index: usize) -> Option<(Point<Pixels>, Pixels)> {
+        for formula in self.math.iter() {
+            if formula.source_range.start <= source_index && source_index <= formula.source_range.end {
+                let bounds = formula.bounds.get()?;
+                return Some((point(bounds.right(), bounds.top()), bounds.size.height));
+            }
+        }
         for line in self.lines.iter() {
             if source_index > line.source_end {
                 continue;
@@ -5263,6 +5413,9 @@ impl RenderedText {
     }
 
     fn surrounding_word_range(&self, source_index: usize) -> Range<usize> {
+        if let Some(formula) = self.math.iter().find(|formula| formula.source_range.start <= source_index && source_index <= formula.source_range.end) {
+            return formula.source_range.clone();
+        }
         for line in self.lines.iter() {
             if source_index > line.source_end {
                 continue;
@@ -5310,6 +5463,9 @@ impl RenderedText {
     }
 
     fn surrounding_line_range(&self, source_index: usize) -> Range<usize> {
+        if let Some(formula) = self.math.iter().find(|formula| formula.source_range.start <= source_index && source_index <= formula.source_range.end) {
+            return formula.source_range.clone();
+        }
         for line in self.lines.iter() {
             if source_index > line.source_end {
                 continue;
@@ -5349,41 +5505,17 @@ impl RenderedText {
                 line_source_start.max(range.start)..line.source_end.min(range.end),
             ));
         }
+        for formula in self.math.iter() {
+            if range.start < formula.source_range.end && range.end > formula.source_range.start {
+                out.push((formula.source.to_string(), formula.source_range.clone()));
+            }
+        }
+        out.sort_by_key(|(_, range)| range.start);
         out
     }
 
     fn text_for_range(&self, range: Range<usize>) -> String {
-        let mut accumulator = String::new();
-
-        for line in self.lines.iter() {
-            if range.start > line.source_end {
-                continue;
-            }
-            let line_source_start = line.source_mappings.first().unwrap().source_index;
-            if range.end < line_source_start {
-                break;
-            }
-
-            let text = line.layout.text();
-
-            let start = if range.start < line_source_start {
-                0
-            } else {
-                line.rendered_index_for_source_index(range.start)
-            };
-            let end = if range.end > line.source_end {
-                line.rendered_index_for_source_index(line.source_end)
-            } else {
-                line.rendered_index_for_source_index(range.end)
-            }
-            .min(text.len());
-
-            accumulator.push_str(&text[start..end]);
-            accumulator.push('\n');
-        }
-        // Remove trailing newline
-        accumulator.pop();
-        accumulator
+        self.lines_for_range(range).into_iter().map(|(text, _)| text).collect::<Vec<_>>().join("\n")
     }
 
     fn link_for_source_index(&self, source_index: usize) -> Option<&RenderedLink> {

@@ -216,12 +216,15 @@ pub fn tail(source: &str, streaming: bool, reveal_count: usize) -> Tail {
     // 尾段中可参与效果的字符（文档顺序）：文本节点中非空白、非代码的字符
     let mut chars: Vec<Range<usize>> = Vec::new();
     let text = &source[unstable.clone()];
-    let opts = Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH;
+    let opts = Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_MATH;
+    let normalized = zed_markdown::math::normalize_delimiters(text);
     let mut in_code_block = false;
-    for (event, range) in Parser::new_ext(text, opts).into_offset_iter() {
+    let mut last_math_end = None;
+    for (event, range) in Parser::new_ext(&normalized, opts).into_offset_iter() {
         match event {
             Event::Start(Tag::CodeBlock(_)) => in_code_block = true,
             Event::End(TagEnd::CodeBlock) => in_code_block = false,
+            Event::InlineMath(_) | Event::DisplayMath(_) => last_math_end = Some(unstable.start + range.end),
             // 只有与源文本逐字一致的文本才能按字节定位（实体 / 转义除外，渲染器同样不给它们加效果）
             Event::Text(t) if !in_code_block && *t == text[range.clone()] => {
                 for (i, ch) in t.char_indices() {
@@ -233,6 +236,9 @@ pub fn tail(source: &str, streaming: bool, reveal_count: usize) -> Tail {
             }
             _ => {}
         }
+    }
+    if let Some(end) = last_math_end && chars.last().is_none_or(|last| last.end <= end) {
+        return Tail { star: Star::After(end), ..hidden };
     }
     let Some(last) = chars.last() else {
         return Tail { star: Star::Hidden, ..hidden };

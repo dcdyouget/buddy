@@ -60,6 +60,9 @@ fn blocks(parsed: &ParsedMarkdown) -> Vec<Block> {
                 };
                 out.push(Block { range, kind });
             }
+            MarkdownEvent::Math { display: true, .. } => {
+                out.push(Block { range: range.clone(), kind: Kind::Paragraph(true) });
+            }
             _ => {}
         }
     }
@@ -89,6 +92,10 @@ pub fn copy_text(lines: &[(String, Range<usize>)], parsed: &ParsedMarkdown) -> S
         let Some((_, next_range)) = lines.get(i + 1) else { break };
         let sep = match (block_of(range), block_of(next_range)) {
             (Some((a, Kind::Cell(row_a))), Some((b, Kind::Cell(row_b)))) if row_a == row_b && a != b => "\t",
+            (Some((a, _)), Some((b, _))) if a == b => {
+                if parsed.events().iter().any(|(br, event)| matches!(event, MarkdownEvent::HardBreak)
+                    && range.end <= br.start && br.end <= next_range.start) { "\n" } else { "" }
+            }
             (Some((a, kind)), next) if next.as_ref().map(|n| &n.0) != Some(&a) && extra_newline(kind) => "\n\n",
             _ => "\n",
         };
